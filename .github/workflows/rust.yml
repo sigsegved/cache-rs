@@ -193,14 +193,14 @@ jobs:
           # Generate coverage data
           cargo llvm-cov --lcov --output-path lcov.info
           
-          # Generate JUnit XML test results for test analytics
-          cargo nextest run --profile ci --reporter junit --output-dir test-results
+          # Run tests with nextest for better test reporting (JUnit configured in nextest.toml)
+          cargo nextest run --profile ci
 
       - name: Upload coverage and test results to Codecov
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: lcov.info,test-results/junit.xml
+          files: lcov.info
           fail_ci_if_error: false
           verbose: true
 

@@ -8,6 +8,6 @@ failure-output = "immediate-final"
 
 # JUnit XML output configuration
 [profile.ci.junit]
-path = "junit.xml"
+path = "test-results/junit.xml"
 store-success-output = false
 store-failure-output = true
