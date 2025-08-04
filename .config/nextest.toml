@@ -1,0 +1,13 @@
+[profile.ci]
+# CI profile for nextest - optimized for test analytics
+retries = 0
+fail-fast = false
+slow-timeout = { period = "60s", terminate-after = 2 }
+success-output = "never"
+failure-output = "immediate-final"
+
+# JUnit XML output configuration
+[profile.ci.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
