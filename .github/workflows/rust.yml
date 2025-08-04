@@ -36,7 +36,11 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-check-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-check-stable-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-check-stable-
+            ${{ runner.os }}-cargo-stable-
+            ${{ runner.os }}-cargo-
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -71,7 +75,11 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ matrix.rust }}-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-test-${{ matrix.rust }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-${{ matrix.rust }}-
+            ${{ runner.os }}-cargo-${{ matrix.rust }}-
+            ${{ runner.os }}-cargo-
 
       - name: Build all targets
         run: cargo build --all-targets
@@ -102,6 +110,9 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-nightly-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-nightly-
+            ${{ runner.os }}-cargo-
 
       - name: Build with nightly
         run: cargo build --all-targets
@@ -125,6 +136,19 @@ jobs:
         with:
           toolchain: 1.74.0
           target: thumbv6m-none-eabi
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-no-std-1.74.0-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-no-std-1.74.0-
+            ${{ runner.os }}-cargo-1.74.0-
+            ${{ runner.os }}-cargo-
           
       - name: Build for no_std target
         run: cargo build --target thumbv6m-none-eabi --no-default-features --features hashbrown
@@ -140,6 +164,19 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-doc-stable-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-doc-stable-
+            ${{ runner.os }}-cargo-stable-
+            ${{ runner.os }}-cargo-
           
       - name: Check documentation
         env:
@@ -152,6 +189,25 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry and tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            target
+          key: ${{ runner.os }}-cargo-audit-stable-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-audit-stable-
+            ${{ runner.os }}-cargo-stable-
+            ${{ runner.os }}-cargo-
         
       - name: Install cargo-audit
         run: cargo install cargo-audit
@@ -174,14 +230,19 @@ jobs:
           toolchain: stable
           components: llvm-tools-preview
 
-      - name: Cache cargo registry
+      - name: Cache cargo registry and tools
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
+            ~/.cargo/bin
             target
-          key: ${{ runner.os }}-cargo-coverage-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-coverage-stable-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-coverage-stable-
+            ${{ runner.os }}-cargo-stable-
+            ${{ runner.os }}-cargo-
 
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov
@@ -211,6 +272,19 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-stable-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-stable-
+            ${{ runner.os }}-cargo-stable-
+            ${{ runner.os }}-cargo-
 
       - name: Build release
         run: cargo build --release
