@@ -215,9 +215,9 @@ jobs:
       - name: Run security audit
         run: cargo audit
 
-  # Coverage - only on main branch or PRs to main
+  # Coverage and Test Analytics - only on main branch or PRs to main
   coverage:
-    name: Coverage
+    name: Coverage & Test Analytics
     if: github.ref == 'refs/heads/main' || github.base_ref == 'main'
     runs-on: ubuntu-latest
     steps:
@@ -244,17 +244,24 @@ jobs:
             ${{ runner.os }}-cargo-stable-
             ${{ runner.os }}-cargo-
 
-      - name: Install cargo-llvm-cov
-        run: cargo install cargo-llvm-cov
+      - name: Install cargo-llvm-cov and cargo-nextest
+        run: |
+          cargo install cargo-llvm-cov
+          cargo install cargo-nextest
 
-      - name: Run coverage
-        run: cargo llvm-cov --lcov --output-path lcov.info
+      - name: Run coverage with test results
+        run: |
+          # Generate coverage data
+          cargo llvm-cov --lcov --output-path lcov.info
+          
+          # Run tests with nextest for better test reporting (JUnit configured in nextest.toml)
+          cargo nextest run --profile ci
 
-      - name: Upload coverage to Codecov
+      - name: Upload coverage and test results to Codecov
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          file: lcov.info
+          files: lcov.info
           fail_ci_if_error: false
           verbose: true
 
