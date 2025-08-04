@@ -1,0 +1,31 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug-LLDB",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceRoot}/target/debug/${workspaceRootFolderName}",
+            "args": [],
+            "cwd": "${workspaceRoot}",
+            "sourceMap": {
+                "/checkout/src/": "${env:HOME}/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/src/"
+            }
+        },
+        {
+            "name": "Debug-LLDB-Lib",
+            "type": "lldb",
+            "request": "launch",
+            "preLaunchTask": "rust lib debug copier",
+            "program": "${workspaceRoot}/target/debug/deps/${workspaceRootFolderName}",
+            "args": [],
+            "cwd": "${workspaceRoot}",
+            "sourceMap": {
+                "/checkout/src/": "${env:HOME}/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/src/"
+            }
+        }
+    ]
+}

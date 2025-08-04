@@ -1,0 +1,33 @@
+[package]
+name = "cache-rs"
+version = "0.1.0"
+authors = ["sigsegved"]
+categories = ["caching", "no-std"]
+description = "A high-performance, memory-efficient cache implementation supporting multiple eviction policies including LRU, LFU, LFUDA, SLRU and GDSF"
+readme = "README.md"
+repository = "https://github.com/sigsegved/cache-rs"
+homepage = "https://github.com/sigsegved/cache-rs"
+documentation = "https://docs.rs/cache-rs"
+license = "MIT"
+keywords = ["cache", "eviction", "lru", "memory", "data-structures"]
+rust-version = "1.74.0"
+exclude = ["/.github", "/.gitignore"]
+edition = "2021"
+
+[features]
+default = ["hashbrown"]
+nightly = ["hashbrown/nightly"]
+std = []
+
+[dependencies]
+hashbrown = { version = "0.13.2", optional = true }
+
+
+[dev-dependencies]
+scoped_threadpool = "0.1.*"
+stats_alloc = "0.1.*"
+criterion = "0.5.1"
+
+[[bench]]
+name = "criterion_benchmarks"
+harness = false

@@ -1,0 +1,28 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    // Based on info from https://github.com/rust-lang/cargo/issues/1924
+    // Requires "jq" to be installed
+    // Works on Linux (possibly WSL)
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "type": "shell",
+            "label": "rust lib debug copier",
+            "command": "cp",
+            "args": [
+                {
+                    "value": "$(ls -1t --indicator-style=slash $(cargo test --no-run --message-format=json | jq -r 'select(.profile.test == true) | .filenames[]') | head -n1)",
+                    "quoting": "weak"
+                },
+                "${workspaceRoot}/target/debug/deps/${workspaceRootFolderName}",
+            ],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            }
+        }
+    ]
+}
