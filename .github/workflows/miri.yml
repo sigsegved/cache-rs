@@ -1,0 +1,165 @@
+name: Miri
+
+# Run Miri tests to detect undefined behavior in unsafe code
+# Miri is an interpreter for Rust that can detect memory safety issues
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - release/*
+      - feature/*
+  pull_request:
+    branches:
+      - main
+      - develop
+      - release/*
+      - feature/*
+  schedule:
+    # Run Miri weekly on Sundays at 00:00 UTC
+    # This helps catch issues with nightly Rust changes
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+    # Allow manual triggering
+
+jobs:
+  miri:
+    name: Miri
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: nightly
+          components: miri
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-miri-nightly-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-miri-nightly-
+            ${{ runner.os }}-cargo-nightly-
+            ${{ runner.os }}-cargo-
+
+      - name: Setup Miri
+        run: cargo miri setup
+
+      - name: Run Miri tests (basic)
+        run: cargo miri test --lib
+
+      - name: Run Miri tests (with leak checking)
+        run: |
+          echo "Running tests with memory leak detection..."
+          MIRIFLAGS="-Zmiri-leak-check" cargo miri test --lib
+
+      - name: Run Miri tests (with strict provenance)
+        run: |
+          echo "Running tests with strict pointer provenance checking..."
+          MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test --lib
+
+      - name: Run Miri on no_std tests
+        run: cargo miri test --test no_std_tests
+
+  miri-features:
+    name: Miri (Feature Combinations)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - "default"
+          - "no-default-features"
+          - "std"
+          - "nightly"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: nightly
+          components: miri
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-miri-${{ matrix.features }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-miri-${{ matrix.features }}-
+            ${{ runner.os }}-cargo-miri-
+            ${{ runner.os }}-cargo-
+
+      - name: Setup Miri
+        run: cargo miri setup
+
+      - name: Run Miri with feature configuration
+        run: |
+          case "${{ matrix.features }}" in
+            "default")
+              echo "Testing with default features"
+              cargo miri test --lib
+              ;;
+            "no-default-features")
+              echo "Testing without default features"
+              cargo miri test --lib --no-default-features
+              ;;
+            "std")
+              echo "Testing with std feature"
+              cargo miri test --lib --features std
+              ;;
+            "nightly")
+              echo "Testing with nightly feature"
+              cargo miri test --lib --features nightly
+              ;;
+          esac
+
+  miri-strict:
+    name: Miri (Strict Checks)
+    runs-on: ubuntu-latest
+    continue-on-error: true  # These checks are very strict and may have false positives
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: nightly
+          components: miri
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-miri-strict-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-miri-strict-
+            ${{ runner.os }}-cargo-miri-
+            ${{ runner.os }}-cargo-
+
+      - name: Setup Miri
+        run: cargo miri setup
+
+      - name: Run Miri with all strict checks
+        run: |
+          echo "Running with strict provenance, symbolic alignment, and pointer tracking..."
+          echo "Note: This may produce false positives but helps identify potential issues"
+          MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-symbolic-alignment-check -Zmiri-track-raw-pointers" \
+            cargo miri test --lib
