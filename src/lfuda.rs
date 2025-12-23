@@ -796,4 +796,38 @@ mod tests {
         // This demonstrates that aging helps newer items compete
         assert!(cache.len() <= cache.cap().get());
     }
+
+    /// Test to validate the fix for Stacked Borrows violations detected by Miri.
+    /// 
+    /// The original code had an aliasing issue where a borrowed key reference from a node
+    /// was passed to update_priority, which then tried to mutably access the HashMap.
+    /// This violated Miri's Stacked Borrows rules.
+    /// 
+    /// The fix passes the node pointer directly and clones the key internally,
+    /// breaking the aliasing chain.
+    #[test]
+    fn test_miri_stacked_borrows_fix() {
+        let mut cache = LfudaCache::new(NonZeroUsize::new(10).unwrap());
+        
+        // Insert some items
+        cache.put("a", 1);
+        cache.put("b", 2);
+        cache.put("c", 3);
+        
+        // Access items multiple times to trigger priority updates
+        // This would fail under Miri with the original buggy code
+        for _ in 0..3 {
+            assert_eq!(cache.get(&"a"), Some(&1));
+            assert_eq!(cache.get(&"b"), Some(&2));
+            assert_eq!(cache.get(&"c"), Some(&3));
+        }
+        
+        assert_eq!(cache.len(), 3);
+        
+        // Test with get_mut as well
+        if let Some(val) = cache.get_mut(&"a") {
+            *val += 10;
+        }
+        assert_eq!(cache.get(&"a"), Some(&11));
+    }
 }
