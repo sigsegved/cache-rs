@@ -205,11 +205,17 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfCache<K, V, S> {
     }
 
     /// Updates the priority of an item and moves it to the appropriate priority list.
-    unsafe fn update_priority(&mut self, key: &K) -> *mut Entry<(K, V)>
+    /// Updates the priority of an item and moves it to the appropriate priority list.
+    /// Takes the node pointer directly to avoid aliasing issues.
+    unsafe fn update_priority_by_node(&mut self, node: *mut Entry<(K, V)>) -> *mut Entry<(K, V)>
     where
-        K: Clone,
+        K: Clone + Hash + Eq,
     {
-        let metadata = self.map.get_mut(key).unwrap();
+        // Get the key from the node to look up metadata
+        let (key_ref, _) = (*node).get_value();
+        let key_cloned = key_ref.clone();
+        
+        let metadata = self.map.get_mut(&key_cloned).unwrap();
         let old_priority = metadata.priority;
         let size = metadata.size;
 
@@ -309,7 +315,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfCache<K, V, S> {
                     metadata.priority,
                 );
 
-                let new_node = self.update_priority(key_ref);
+                let new_node = self.update_priority_by_node(node);
                 let (_, value) = (*new_node).get_value();
                 Some(value.clone())
             }
@@ -347,7 +353,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfCache<K, V, S> {
                     metadata.priority,
                 );
 
-                let new_node = self.update_priority(key_ref);
+                let new_node = self.update_priority_by_node(node);
                 let (_, value) = (*new_node).get_value_mut();
                 Some(value)
             }

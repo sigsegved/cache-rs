@@ -132,9 +132,14 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
     }
 
     /// Updates the frequency of an item and moves it to the appropriate frequency list.
-    unsafe fn update_frequency(&mut self, key: &K, old_frequency: usize) -> *mut Entry<(K, V)>
+    /// Takes the node pointer directly to avoid aliasing issues.
+    unsafe fn update_frequency_by_node(
+        &mut self,
+        node: *mut Entry<(K, V)>,
+        old_frequency: usize,
+    ) -> *mut Entry<(K, V)>
     where
-        K: Clone,
+        K: Clone + Hash + Eq,
     {
         let new_frequency = old_frequency + 1;
 
@@ -142,8 +147,12 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
         self.metrics
             .record_frequency_increment(old_frequency, new_frequency);
 
+        // Get the key from the node to look up in the map
+        let (key_ref, _) = (*node).get_value();
+        let key_cloned = key_ref.clone();
+
         // Get the current node from the old frequency list
-        let (_, node) = self.map.get(key).unwrap();
+        let (_, node) = self.map.get(&key_cloned).unwrap();
 
         // Remove from old frequency list
         let boxed_entry = self
@@ -177,8 +186,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
             .attach_from_other_list(entry_ptr);
 
         // Update the map
-        self.map.get_mut(key).unwrap().0 = new_frequency;
-        self.map.get_mut(key).unwrap().1 = entry_ptr;
+        self.map.get_mut(&key_cloned).unwrap().0 = new_frequency;
+        self.map.get_mut(&key_cloned).unwrap().1 = entry_ptr;
 
         // Update metrics with new frequency levels
         self.metrics.update_frequency_levels(&self.frequency_lists);
@@ -208,7 +217,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
                 let object_size = self.estimate_object_size(key_ref, value);
                 self.metrics.record_frequency_hit(object_size, frequency);
 
-                let new_node = self.update_frequency(key_ref, frequency);
+                let new_node = self.update_frequency_by_node(node, frequency);
                 let (_, value) = (*new_node).get_value();
                 Some(value)
             }
@@ -241,7 +250,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
                 let object_size = self.estimate_object_size(key_ref, value);
                 self.metrics.record_frequency_hit(object_size, frequency);
 
-                let new_node = self.update_frequency(key_ref, frequency);
+                let new_node = self.update_frequency_by_node(node, frequency);
                 let (_, value) = (*new_node).get_value_mut();
                 Some(value)
             }

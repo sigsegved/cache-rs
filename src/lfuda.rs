@@ -200,11 +200,16 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
     }
 
     /// Updates the priority of an item and moves it to the appropriate priority list.
-    unsafe fn update_priority(&mut self, key: &K) -> *mut Entry<(K, V)>
+    /// Takes the node pointer directly to avoid aliasing issues.
+    unsafe fn update_priority_by_node(&mut self, node: *mut Entry<(K, V)>) -> *mut Entry<(K, V)>
     where
-        K: Clone,
+        K: Clone + Hash + Eq,
     {
-        let metadata = self.map.get_mut(key).unwrap();
+        // Get the key from the node to look up metadata
+        let (key_ref, _) = (*node).get_value();
+        let key_cloned = key_ref.clone();
+        
+        let metadata = self.map.get_mut(&key_cloned).unwrap();
         let old_priority = metadata.frequency + metadata.age_at_insertion;
 
         // Increment frequency
@@ -284,7 +289,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
 
                 // Record frequency change
                 let _old_frequency = metadata.frequency;
-                let new_node = self.update_priority(key_ref);
+                let new_node = self.update_priority_by_node(node);
                 let (_, value) = (*new_node).get_value();
                 Some(value)
             }
@@ -321,7 +326,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
                 let new_priority = (old_frequency + 1) + metadata.age_at_insertion;
                 self.metrics.record_frequency_increment(new_priority as u64);
 
-                let new_node = self.update_priority(key_ref);
+                let new_node = self.update_priority_by_node(node);
                 let (_, value) = (*new_node).get_value_mut();
                 Some(value)
             }
