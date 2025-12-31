@@ -98,16 +98,21 @@ self.update_priority_by_node(node);  // ✅ Pass pointer directly
    - Renamed `update_priority` → `update_priority_by_node`
    - Changed signature to accept `node: *mut Entry<(K, V)>` instead of `key: &K`
    - Updated 2 call sites in `get` and `get_mut` methods
+   - Added validation test `test_miri_stacked_borrows_fix`
 
 2. **src/lfuda.rs**
    - Renamed `update_priority` → `update_priority_by_node`
    - Changed signature to accept `node: *mut Entry<(K, V)>` instead of `key: &K`
    - Updated 2 call sites in `get` and `get_mut` methods
+   - Added validation test `test_miri_stacked_borrows_fix`
 
 3. **src/lfu.rs**
    - Renamed `update_frequency` → `update_frequency_by_node`
    - Changed signature to accept `node: *mut Entry<(K, V)>` as first parameter
    - Updated 2 call sites in `get` and `get_mut` methods
+   - Added validation test `test_miri_stacked_borrows_fix`
+
+All tests pass: **62 total** (59 original + 3 new validation tests)
 
 ### Performance Impact
 

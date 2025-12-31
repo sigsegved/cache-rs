@@ -201,10 +201,16 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
 
     /// Updates the priority of an item and moves it to the appropriate priority list.
     /// Takes the node pointer directly to avoid aliasing issues.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `node` is a valid pointer to an Entry that exists
+    /// in this cache's priority lists and has not been freed.
     unsafe fn update_priority_by_node(&mut self, node: *mut Entry<(K, V)>) -> *mut Entry<(K, V)>
     where
         K: Clone + Hash + Eq,
     {
+        // SAFETY: node is guaranteed to be valid by the caller's contract
         // Get the key from the node to look up metadata
         let (key_ref, _) = (*node).get_value();
         let key_cloned = key_ref.clone();

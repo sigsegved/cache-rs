@@ -133,6 +133,11 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
 
     /// Updates the frequency of an item and moves it to the appropriate frequency list.
     /// Takes the node pointer directly to avoid aliasing issues.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `node` is a valid pointer to an Entry that exists
+    /// in this cache's frequency lists and has not been freed.
     unsafe fn update_frequency_by_node(
         &mut self,
         node: *mut Entry<(K, V)>,
@@ -147,6 +152,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
         self.metrics
             .record_frequency_increment(old_frequency, new_frequency);
 
+        // SAFETY: node is guaranteed to be valid by the caller's contract
         // Get the key from the node to look up in the map
         let (key_ref, _) = (*node).get_value();
         let key_cloned = key_ref.clone();
