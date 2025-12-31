@@ -698,6 +698,9 @@ mod tests {
         // String slice lookup should work too
         assert_eq!(cache.get("apple"), Some(&1));
         assert_eq!(cache.get("banana"), Some(&2));
+        
+        // Explicitly drop the cache to ensure cleanup
+        drop(cache);
     }
 
     #[derive(Debug, Clone, Eq, PartialEq)]
