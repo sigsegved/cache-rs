@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Automated detection of undefined behavior in unsafe code
   - Enhanced test coverage with Miri sanitizer checks
   - Ensures memory safety across all platforms and architectures
+- **Dependencies**: Updated `hashbrown` from 0.13.2 to 0.14.5
+  - Optimized insertion to perform only a single lookup
+  - Improved performance of table resizing
+  - Added ARM NEON optimizations for better performance on ARM platforms
+  - Fixed custom allocator memory leaks
+  - Maintained MSRV compatibility (1.74.0)
 
 ### 📝 Documentation
 

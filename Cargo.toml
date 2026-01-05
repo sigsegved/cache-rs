@@ -20,7 +20,7 @@ nightly = ["hashbrown/nightly"]
 std = []
 
 [dependencies]
-hashbrown = { version = "0.13.2", optional = true }
+hashbrown = { version = "0.14.5", optional = true }
 
 
 [dev-dependencies]
