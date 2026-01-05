@@ -231,7 +231,12 @@ cargo clippy --all-targets -- -D warnings
 
 # Test no_std compatibility
 cargo build --target thumbv6m-none-eabi --no-default-features --features hashbrown
+
+# Run Miri for unsafe code validation (detects undefined behavior)
+MIRIFLAGS="-Zmiri-ignore-leaks" cargo +nightly miri test --lib
 ```
+
+See [MIRI_ANALYSIS.md](MIRI_ANALYSIS.md) for a detailed Miri usage guide and analysis of findings.
 
 ## 📄 License
 

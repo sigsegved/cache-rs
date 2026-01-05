@@ -748,6 +748,12 @@ mod tests {
         // attach should NOT increment length - it's for moving existing nodes
         assert_eq!(list.len(), 0, "attach should not increment length");
 
+        // Clean up the first node manually since it's not tracked in length
+        unsafe {
+            list._detach(node);
+            drop(Box::from_raw(node));
+        }
+
         // Now test that attach_from_other_list DOES increment length
         let node2 = Box::into_raw(Box::new(Entry::new(20)));
         unsafe {
@@ -759,7 +765,7 @@ mod tests {
             "attach_from_other_list should increment length"
         );
 
-        // Clean up by removing the nodes
+        // Clean up by removing the nodes - this will properly clean node2
         list.clear();
         assert_eq!(list.len(), 0);
     }

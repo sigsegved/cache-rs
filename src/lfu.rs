@@ -132,9 +132,19 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
     }
 
     /// Updates the frequency of an item and moves it to the appropriate frequency list.
-    unsafe fn update_frequency(&mut self, key: &K, old_frequency: usize) -> *mut Entry<(K, V)>
+    /// Takes the node pointer directly to avoid aliasing issues.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `node` is a valid pointer to an Entry that exists
+    /// in this cache's frequency lists and has not been freed.
+    unsafe fn update_frequency_by_node(
+        &mut self,
+        node: *mut Entry<(K, V)>,
+        old_frequency: usize,
+    ) -> *mut Entry<(K, V)>
     where
-        K: Clone,
+        K: Clone + Hash + Eq,
     {
         let new_frequency = old_frequency + 1;
 
@@ -142,8 +152,13 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
         self.metrics
             .record_frequency_increment(old_frequency, new_frequency);
 
+        // SAFETY: node is guaranteed to be valid by the caller's contract
+        // Get the key from the node to look up in the map
+        let (key_ref, _) = (*node).get_value();
+        let key_cloned = key_ref.clone();
+
         // Get the current node from the old frequency list
-        let (_, node) = self.map.get(key).unwrap();
+        let (_, node) = self.map.get(&key_cloned).unwrap();
 
         // Remove from old frequency list
         let boxed_entry = self
@@ -177,8 +192,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
             .attach_from_other_list(entry_ptr);
 
         // Update the map
-        self.map.get_mut(key).unwrap().0 = new_frequency;
-        self.map.get_mut(key).unwrap().1 = entry_ptr;
+        self.map.get_mut(&key_cloned).unwrap().0 = new_frequency;
+        self.map.get_mut(&key_cloned).unwrap().1 = entry_ptr;
 
         // Update metrics with new frequency levels
         self.metrics.update_frequency_levels(&self.frequency_lists);
@@ -208,7 +223,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
                 let object_size = self.estimate_object_size(key_ref, value);
                 self.metrics.record_frequency_hit(object_size, frequency);
 
-                let new_node = self.update_frequency(key_ref, frequency);
+                let new_node = self.update_frequency_by_node(node, frequency);
                 let (_, value) = (*new_node).get_value();
                 Some(value)
             }
@@ -241,7 +256,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
                 let object_size = self.estimate_object_size(key_ref, value);
                 self.metrics.record_frequency_hit(object_size, frequency);
 
-                let new_node = self.update_frequency(key_ref, frequency);
+                let new_node = self.update_frequency_by_node(node, frequency);
                 let (_, value) = (*new_node).get_value_mut();
                 Some(value)
             }
@@ -589,5 +604,39 @@ mod tests {
         let a = cache.get(&"a").unwrap();
         assert_eq!(a.id, 100);
         assert_eq!(a.data, "a-modified");
+    }
+
+    /// Test to validate the fix for Stacked Borrows violations detected by Miri.
+    ///
+    /// The original code had an aliasing issue where a borrowed key reference from a node
+    /// was passed to update_frequency, which then tried to mutably access the HashMap.
+    /// This violated Miri's Stacked Borrows rules.
+    ///
+    /// The fix passes the node pointer directly and clones the key internally,
+    /// breaking the aliasing chain.
+    #[test]
+    fn test_miri_stacked_borrows_fix() {
+        let mut cache = LfuCache::new(NonZeroUsize::new(10).unwrap());
+
+        // Insert some items
+        cache.put("a", 1);
+        cache.put("b", 2);
+        cache.put("c", 3);
+
+        // Access items multiple times to trigger frequency updates
+        // This would fail under Miri with the original buggy code
+        for _ in 0..3 {
+            assert_eq!(cache.get(&"a"), Some(&1));
+            assert_eq!(cache.get(&"b"), Some(&2));
+            assert_eq!(cache.get(&"c"), Some(&3));
+        }
+
+        assert_eq!(cache.len(), 3);
+
+        // Test with get_mut as well
+        if let Some(val) = cache.get_mut(&"a") {
+            *val += 10;
+        }
+        assert_eq!(cache.get(&"a"), Some(&11));
     }
 }

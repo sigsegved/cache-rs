@@ -200,11 +200,22 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
     }
 
     /// Updates the priority of an item and moves it to the appropriate priority list.
-    unsafe fn update_priority(&mut self, key: &K) -> *mut Entry<(K, V)>
+    /// Takes the node pointer directly to avoid aliasing issues.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `node` is a valid pointer to an Entry that exists
+    /// in this cache's priority lists and has not been freed.
+    unsafe fn update_priority_by_node(&mut self, node: *mut Entry<(K, V)>) -> *mut Entry<(K, V)>
     where
-        K: Clone,
+        K: Clone + Hash + Eq,
     {
-        let metadata = self.map.get_mut(key).unwrap();
+        // SAFETY: node is guaranteed to be valid by the caller's contract
+        // Get the key from the node to look up metadata
+        let (key_ref, _) = (*node).get_value();
+        let key_cloned = key_ref.clone();
+
+        let metadata = self.map.get_mut(&key_cloned).unwrap();
         let old_priority = metadata.frequency + metadata.age_at_insertion;
 
         // Increment frequency
@@ -284,7 +295,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
 
                 // Record frequency change
                 let _old_frequency = metadata.frequency;
-                let new_node = self.update_priority(key_ref);
+                let new_node = self.update_priority_by_node(node);
                 let (_, value) = (*new_node).get_value();
                 Some(value)
             }
@@ -321,7 +332,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
                 let new_priority = (old_frequency + 1) + metadata.age_at_insertion;
                 self.metrics.record_frequency_increment(new_priority as u64);
 
-                let new_node = self.update_priority(key_ref);
+                let new_node = self.update_priority_by_node(node);
                 let (_, value) = (*new_node).get_value_mut();
                 Some(value)
             }
@@ -790,5 +801,39 @@ mod tests {
         // The newer item should be able to compete despite the old item's high frequency
         // This demonstrates that aging helps newer items compete
         assert!(cache.len() <= cache.cap().get());
+    }
+
+    /// Test to validate the fix for Stacked Borrows violations detected by Miri.
+    ///
+    /// The original code had an aliasing issue where a borrowed key reference from a node
+    /// was passed to update_priority, which then tried to mutably access the HashMap.
+    /// This violated Miri's Stacked Borrows rules.
+    ///
+    /// The fix passes the node pointer directly and clones the key internally,
+    /// breaking the aliasing chain.
+    #[test]
+    fn test_miri_stacked_borrows_fix() {
+        let mut cache = LfudaCache::new(NonZeroUsize::new(10).unwrap());
+
+        // Insert some items
+        cache.put("a", 1);
+        cache.put("b", 2);
+        cache.put("c", 3);
+
+        // Access items multiple times to trigger priority updates
+        // This would fail under Miri with the original buggy code
+        for _ in 0..3 {
+            assert_eq!(cache.get(&"a"), Some(&1));
+            assert_eq!(cache.get(&"b"), Some(&2));
+            assert_eq!(cache.get(&"c"), Some(&3));
+        }
+
+        assert_eq!(cache.len(), 3);
+
+        // Test with get_mut as well
+        if let Some(val) = cache.get_mut(&"a") {
+            *val += 10;
+        }
+        assert_eq!(cache.get(&"a"), Some(&11));
     }
 }

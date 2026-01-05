@@ -1,0 +1,26 @@
+name: Miri
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  miri:
+    name: Miri
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust nightly
+        uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c # v1
+        with:
+          toolchain: nightly
+          components: miri
+      
+      - name: Setup Miri
+        run: cargo miri setup
+      
+      - name: Run Miri tests (ignoring test-only memory leaks)
+        run: MIRIFLAGS="-Zmiri-ignore-leaks" cargo miri test --lib
