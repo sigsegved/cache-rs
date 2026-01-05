@@ -1,6 +1,6 @@
 [package]
 name = "cache-rs"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["sigsegved"]
 categories = ["caching", "no-std"]
 description = "A high-performance, memory-efficient cache implementation supporting multiple eviction policies including LRU, LFU, LFUDA, SLRU and GDSF"
@@ -20,7 +20,7 @@ nightly = ["hashbrown/nightly"]
 std = []
 
 [dependencies]
-hashbrown = { version = "0.13.2", optional = true }
+hashbrown = { version = "0.14.5", optional = true }
 
 
 [dev-dependencies]
