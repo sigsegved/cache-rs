@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-01-05
+
+### 🐛 Fixed
+
+- **Unsafe Code Safety**: Fixed Stacked Borrows violations in unsafe code blocks
+  - Resolved undefined behavior detected by Miri in pointer operations
+  - Improved safety guarantees across all cache implementations
+  - All unsafe code now passes Miri's strict memory model checks
+
+### 🔧 Changed
+
+- **CI/CD Improvements**: Added Miri integration to continuous integration
+  - Automated detection of undefined behavior in unsafe code
+  - Enhanced test coverage with Miri sanitizer checks
+  - Ensures memory safety across all platforms and architectures
+
+### 📝 Documentation
+
+- Added comprehensive Miri analysis documentation (MIRI_ANALYSIS.md)
+- Enhanced safety documentation for unsafe code patterns
+
+---
+
+**Full Changelog**: https://github.com/sigsegved/cache-rs/compare/v0.1.0...v0.1.1
+
 ## [0.1.0] - 2025-08-04
 
 ### ✨ Added
