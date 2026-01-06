@@ -299,8 +299,8 @@ jobs:
       - name: Publish to crates.io
         run: |
           # Attempt to publish the crate
-          # This will fail gracefully if the version is already published
-          cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }} || echo "Warning: Publication failed (possibly already published)"
+          # Note: This will fail if the version is already published or if there are authentication/network issues
+          cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }} || echo "Warning: Publication to crates.io failed - check logs for details"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

@@ -74,7 +74,7 @@ Rust CI workflow defined in [`rust.yml`](.github/workflows/rust.yml:1) automates
   - **Checkout code**
   - **Install Rust toolchain (stable)**
   - **Build release:** Runs `cargo build --release`.
-  - **Publish to crates.io:** Publishes the crate to crates.io registry (gracefully handles already-published versions).
+  - **Publish to crates.io:** Publishes the crate to crates.io registry (continues even if publication fails).
   - **Create GitHub Release:** Publishes binaries as a GitHub release.
 
 **Purpose:** Automates release creation and artifact publishing.
