@@ -297,10 +297,12 @@ jobs:
         run: cargo build --release
 
       - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           # Attempt to publish the crate
           # Note: This will fail if the version is already published or if there are authentication/network issues
-          cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }} || echo "Warning: Publication to crates.io failed - check logs for details"
+          cargo publish || echo "Warning: Publication to crates.io failed - check logs for details"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
