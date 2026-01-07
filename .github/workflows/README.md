@@ -7,7 +7,7 @@ Rust CI workflow defined in [`rust.yml`](.github/workflows/rust.yml:1) automates
 ## Workflow Triggers
 
 - **Push & Pull Requests:** Runs on pushes and PRs to `main`, `develop`, `release/*`, and `feature/*` branches.
-- **Release Automation:** The release job runs only on `main` when the commit message starts with `release:`.
+- **Release Automation:** The release job runs only on `main` when the commit message starts with `release:` or `Release v`.
 
 ---
 
@@ -69,12 +69,12 @@ Rust CI workflow defined in [`rust.yml`](.github/workflows/rust.yml:1) automates
 
 ### 5. Release [`release`](.github/workflows/rust.yml:127)
 
-- **Runs on:** Ubuntu-latest, only on `main` branch with commit message starting `release:`.
+- **Runs on:** Ubuntu-latest, only on `main` branch with commit message starting with `release:` or `Release v`.
 - **Steps:**
   - **Checkout code**
   - **Install Rust toolchain (stable)**
   - **Build release:** Runs `cargo build --release`.
-  - **Create release artifact:** Uploads binaries.
+  - **Publish to crates.io:** Publishes the crate to crates.io registry (continues even if publication fails).
   - **Create GitHub Release:** Publishes binaries as a GitHub release.
 
 **Purpose:** Automates release creation and artifact publishing.
@@ -95,7 +95,7 @@ Rust CI workflow defined in [`rust.yml`](.github/workflows/rust.yml:1) automates
 ## Usage
 
 - **CI runs automatically** on pushes and PRs to supported branches.
-- **Release job** triggers only on main with a commit message starting with `release:`.
+- **Release job** triggers only on main with a commit message starting with `release:` or `Release v`.
 - **Artifacts** can be downloaded from the Actions tab for test results, coverage, and releases.
 
 ---
