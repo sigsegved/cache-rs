@@ -40,45 +40,20 @@ enum Location {
     Protected,
 }
 
-/// An implementation of a Segmented Least Recently Used (SLRU) cache.
+/// Internal SLRU segment containing the actual cache algorithm.
 ///
-/// The cache is divided into two segments:
-/// - Probationary segment: Where new entries are initially placed
-/// - Protected segment: Where frequently accessed entries are promoted to
+/// This is shared between `SlruCache` (single-threaded) and
+/// `ConcurrentSlruCache` (multi-threaded). All algorithm logic is
+/// implemented here to avoid code duplication.
 ///
-/// When the cache reaches capacity, the least recently used entry from the
-/// probationary segment is evicted. If the probationary segment is empty,
-/// entries from the protected segment may be demoted back to probationary.
+/// # Safety
 ///
-/// # Examples
-///
-/// ```
-/// use cache_rs::slru::SlruCache;
-/// use core::num::NonZeroUsize;
-///
-/// // Create an SLRU cache with a total capacity of 4,
-/// // with a protected capacity of 2 (half protected, half probationary)
-/// let mut cache = SlruCache::new(
-///     NonZeroUsize::new(4).unwrap(),
-///     NonZeroUsize::new(2).unwrap()
-/// );
-///
-/// // Add some items
-/// cache.put("a", 1);
-/// cache.put("b", 2);
-/// cache.put("c", 3);
-/// cache.put("d", 4);
-///
-/// // Access "a" to promote it to the protected segment
-/// assert_eq!(cache.get(&"a"), Some(&1));
-///
-/// // Add a new item, which will evict the least recently used item
-/// // from the probationary segment (likely "b")
-/// cache.put("e", 5);
-/// assert_eq!(cache.get(&"b"), None);
-/// ```
-#[derive(Debug)]
-pub struct SlruCache<K, V, S = DefaultHashBuilder> {
+/// This struct contains raw pointers in the `map` field. These pointers
+/// are always valid as long as:
+/// - The pointer was obtained from `probationary.add()` or `protected.add()`
+/// - The node has not been removed from the list
+/// - The segment has not been dropped
+pub(crate) struct SlruSegment<K, V, S = DefaultHashBuilder> {
     /// Configuration for the SLRU cache
     config: SlruCacheConfig,
 
@@ -96,20 +71,17 @@ pub struct SlruCache<K, V, S = DefaultHashBuilder> {
     metrics: SlruCacheMetrics,
 }
 
-impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruCache<K, V, S> {
-    /// Creates a new SLRU cache with the specified capacity and hash builder.
-    ///
-    /// # Parameters
-    ///
-    /// - `total_cap`: The total capacity of the cache. Must be a non-zero value.
-    /// - `protected_cap`: The maximum capacity of the protected segment.
-    ///   Must be a non-zero value and less than or equal to `total_cap`.
-    /// - `hash_builder`: The hash builder to use for the underlying hash map.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `protected_cap` is greater than `total_cap`.
-    pub fn with_hasher(
+// SAFETY: SlruSegment owns all data and raw pointers point only to nodes owned by
+// `probationary` or `protected` lists. Concurrent access is safe when wrapped in
+// proper synchronization primitives.
+unsafe impl<K: Send, V: Send, S: Send> Send for SlruSegment<K, V, S> {}
+
+// SAFETY: All mutation requires &mut self; shared references cannot cause data races.
+unsafe impl<K: Send, V: Send, S: Sync> Sync for SlruSegment<K, V, S> {}
+
+impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruSegment<K, V, S> {
+    /// Creates a new SLRU segment with the specified capacity and hash builder.
+    pub(crate) fn with_hasher(
         total_cap: NonZeroUsize,
         protected_cap: NonZeroUsize,
         hash_builder: S,
@@ -119,9 +91,9 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruCache<K, V, S> {
         let probationary_max_size =
             NonZeroUsize::new(config.capacity().get() - config.protected_capacity().get()).unwrap();
 
-        let max_cache_size_bytes = config.capacity().get() as u64 * 128; // Estimate based on capacity
+        let max_cache_size_bytes = config.capacity().get() as u64 * 128;
 
-        SlruCache {
+        SlruSegment {
             config,
             probationary: List::new(probationary_max_size),
             protected: List::new(config.protected_capacity()),
@@ -136,30 +108,39 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruCache<K, V, S> {
         }
     }
 
-    /// Returns the maximum number of key-value pairs the cache can hold.
-    pub fn cap(&self) -> NonZeroUsize {
+    /// Returns the maximum number of key-value pairs the segment can hold.
+    #[inline]
+    pub(crate) fn cap(&self) -> NonZeroUsize {
         self.config.capacity()
     }
 
     /// Returns the maximum size of the protected segment.
-    pub fn protected_max_size(&self) -> NonZeroUsize {
+    #[inline]
+    pub(crate) fn protected_max_size(&self) -> NonZeroUsize {
         self.config.protected_capacity()
     }
 
-    /// Returns the current number of key-value pairs in the cache.
-    pub fn len(&self) -> usize {
+    /// Returns the current number of key-value pairs in the segment.
+    #[inline]
+    pub(crate) fn len(&self) -> usize {
         self.map.len()
     }
 
-    /// Returns `true` if the cache contains no key-value pairs.
-    pub fn is_empty(&self) -> bool {
+    /// Returns `true` if the segment contains no key-value pairs.
+    #[inline]
+    pub(crate) fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
 
     /// Estimates the size of a key-value pair in bytes for metrics tracking
     fn estimate_object_size(&self, _key: &K, _value: &V) -> u64 {
-        // Simple estimation: key size + value size + overhead for pointers and metadata
         mem::size_of::<K>() as u64 + mem::size_of::<V>() as u64 + 64
+    }
+
+    /// Returns a reference to the metrics for this segment.
+    #[inline]
+    pub(crate) fn metrics(&self) -> &SlruCacheMetrics {
+        &self.metrics
     }
 
     /// Moves an entry from the probationary segment to the protected segment.
@@ -167,7 +148,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruCache<K, V, S> {
     ///
     /// Returns a raw pointer to the entry in its new location.
     unsafe fn promote_to_protected(&mut self, node: *mut Entry<(K, V)>) -> *mut Entry<(K, V)> {
-        // Remove from probationary list - this removes the node and returns it as a Box
+        // Remove from probationary list
         let boxed_entry = self
             .probationary
             .remove(node)
@@ -188,7 +169,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruCache<K, V, S> {
             self.demote_lru_protected();
         }
 
-        // Get the raw pointer from the box - this should be the same as the original node pointer
+        // Get the raw pointer from the box
         let entry_ptr = Box::into_raw(boxed_entry);
 
         // Get the key from the entry for updating the map
@@ -229,14 +210,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruCache<K, V, S> {
     }
 
     /// Returns a reference to the value corresponding to the key.
-    ///
-    /// The key may be any borrowed form of the cache's key type, but
-    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for
-    /// the key type.
-    ///
-    /// If a value is returned from the probationary segment, it is promoted
-    /// to the protected segment.
-    pub fn get<Q>(&mut self, key: &Q) -> Option<&V>
+    pub(crate) fn get<Q>(&mut self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
@@ -262,8 +236,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruCache<K, V, S> {
                     self.protected.len() as u64,
                 );
 
-                // SAFETY: entry_ptr is the return value from promote_to_protected, which ensures
-                // it points to a valid entry in the protected list
+                // SAFETY: entry_ptr is the return value from promote_to_protected
                 let (_, v) = (*entry_ptr).get_value();
                 Some(v)
             },
@@ -282,14 +255,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruCache<K, V, S> {
     }
 
     /// Returns a mutable reference to the value corresponding to the key.
-    ///
-    /// The key may be any borrowed form of the cache's key type, but
-    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for
-    /// the key type.
-    ///
-    /// If a value is returned from the probationary segment, it is promoted
-    /// to the protected segment.
-    pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
+    pub(crate) fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
@@ -315,8 +281,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruCache<K, V, S> {
                     self.protected.len() as u64,
                 );
 
-                // SAFETY: entry_ptr is the return value from promote_to_protected, which ensures
-                // it points to a valid entry in the protected list
+                // SAFETY: entry_ptr is the return value from promote_to_protected
                 let (_, v) = (*entry_ptr).get_value_mut();
                 Some(v)
             },
@@ -335,18 +300,18 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruCache<K, V, S> {
         }
     }
 
-    /// Inserts a key-value pair into the cache.
-    ///
-    /// If the cache already contained this key, the old value is replaced and returned.
-    /// Otherwise, if the cache is at capacity, the least recently used item from the
-    /// probationary segment will be evicted. If the probationary segment is empty,
-    /// the least recently used item from the protected segment will be demoted to
-    /// the probationary segment.
-    ///
-    /// The inserted key-value pair is always placed in the probationary segment.
-    pub fn put(&mut self, key: K, value: V) -> Option<(K, V)>
+    /// Records a cache miss for metrics tracking
+    #[inline]
+    pub(crate) fn record_miss(&mut self, object_size: u64) {
+        self.metrics.core.record_miss(object_size);
+    }
+}
+
+impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruSegment<K, V, S> {
+    /// Inserts a key-value pair into the segment.
+    pub(crate) fn put(&mut self, key: K, value: V) -> Option<(K, V)>
     where
-        K: Clone,
+        V: Clone,
     {
         let object_size = self.estimate_object_size(&key, &value);
 
@@ -354,23 +319,17 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruCache<K, V, S> {
         if let Some(&(node, location)) = self.map.get(&key) {
             match location {
                 Location::Probationary => unsafe {
-                    // SAFETY: node comes from our map, so it's a valid pointer to an entry in our probationary list
+                    // SAFETY: node comes from our map
                     self.probationary.move_to_front(node);
                     let old_entry = self.probationary.update(node, (key.clone(), value), true);
-
-                    // Record insertion (update)
                     self.metrics.core.record_insertion(object_size);
-
                     return old_entry.0;
                 },
                 Location::Protected => unsafe {
-                    // SAFETY: node comes from our map, so it's a valid pointer to an entry in our protected list
+                    // SAFETY: node comes from our map
                     self.protected.move_to_front(node);
                     let old_entry = self.protected.update(node, (key.clone(), value), true);
-
-                    // Record insertion (update)
                     self.metrics.core.record_insertion(object_size);
-
                     return old_entry.0;
                 },
             }
@@ -384,20 +343,12 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruCache<K, V, S> {
             if !self.probationary.is_empty() {
                 if let Some(old_entry) = self.probationary.remove_last() {
                     unsafe {
-                        // SAFETY: old_entry comes from probationary.remove_last(), so it's a valid Box
-                        // that we own. Converting to raw pointer is safe for temporary access.
                         let entry_ptr = Box::into_raw(old_entry);
                         let (old_key, old_value) = (*entry_ptr).get_value().clone();
-
-                        // Record probationary eviction
                         let evicted_size = self.estimate_object_size(&old_key, &old_value);
                         self.metrics.record_probationary_eviction(evicted_size);
-
-                        // Remove from map
                         self.map.remove(&old_key);
                         evicted = Some((old_key, old_value));
-
-                        // SAFETY: Reconstructing Box from the same raw pointer to properly free memory
                         let _ = Box::from_raw(entry_ptr);
                     }
                 }
@@ -405,20 +356,12 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruCache<K, V, S> {
                 // If probationary is empty, evict from protected
                 if let Some(old_entry) = self.protected.remove_last() {
                     unsafe {
-                        // SAFETY: old_entry comes from protected.remove_last(), so it's a valid Box
-                        // that we own. Converting to raw pointer is safe for temporary access.
                         let entry_ptr = Box::into_raw(old_entry);
                         let (old_key, old_value) = (*entry_ptr).get_value().clone();
-
-                        // Record protected eviction
                         let evicted_size = self.estimate_object_size(&old_key, &old_value);
                         self.metrics.record_protected_eviction(evicted_size);
-
-                        // Remove from map
                         self.map.remove(&old_key);
                         evicted = Some((old_key, old_value));
-
-                        // SAFETY: Reconstructing Box from the same raw pointer to properly free memory
                         let _ = Box::from_raw(entry_ptr);
                     }
                 }
@@ -438,20 +381,12 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruCache<K, V, S> {
                 // Probationary is at capacity, need to make space
                 if let Some(old_entry) = self.probationary.remove_last() {
                     unsafe {
-                        // SAFETY: old_entry comes from probationary.remove_last(), so it's a valid Box
-                        // that we own. Converting to raw pointer is safe for temporary access.
                         let entry_ptr = Box::into_raw(old_entry);
                         let (old_key, old_value) = (*entry_ptr).get_value().clone();
-
-                        // Record probationary eviction
                         let evicted_size = self.estimate_object_size(&old_key, &old_value);
                         self.metrics.record_probationary_eviction(evicted_size);
-
-                        // Remove from map
                         self.map.remove(&old_key);
                         evicted = Some((old_key, old_value));
-
-                        // SAFETY: Reconstructing Box from the same raw pointer to properly free memory
                         let _ = Box::from_raw(entry_ptr);
                     }
                 }
@@ -471,12 +406,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruCache<K, V, S> {
         evicted
     }
 
-    /// Removes a key from the cache, returning the value at the key if the key was previously in the cache.
-    ///
-    /// The key may be any borrowed form of the cache's key type, but
-    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for
-    /// the key type.
-    pub fn remove<Q>(&mut self, key: &Q) -> Option<V>
+    /// Removes a key from the segment, returning the value if the key was present.
+    pub(crate) fn remove<Q>(&mut self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
@@ -486,38 +417,210 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruCache<K, V, S> {
 
         match location {
             Location::Probationary => unsafe {
-                // SAFETY: node comes from our map and was just removed, so probationary.remove is safe
+                // SAFETY: node comes from our map and was just removed
                 let boxed_entry = self.probationary.remove(node)?;
-                // SAFETY: boxed_entry is a valid Box we own, converting to raw pointer for temporary access
                 let entry_ptr = Box::into_raw(boxed_entry);
                 let value = (*entry_ptr).get_value().1.clone();
-                // SAFETY: Reconstructing Box from the same raw pointer to properly free memory
                 let _ = Box::from_raw(entry_ptr);
                 Some(value)
             },
             Location::Protected => unsafe {
-                // SAFETY: node comes from our map and was just removed, so protected.remove is safe
+                // SAFETY: node comes from our map and was just removed
                 let boxed_entry = self.protected.remove(node)?;
-                // SAFETY: boxed_entry is a valid Box we own, converting to raw pointer for temporary access
                 let entry_ptr = Box::into_raw(boxed_entry);
                 let value = (*entry_ptr).get_value().1.clone();
-                // SAFETY: Reconstructing Box from the same raw pointer to properly free memory
                 let _ = Box::from_raw(entry_ptr);
                 Some(value)
             },
         }
     }
 
-    /// Clears the cache, removing all key-value pairs.
-    pub fn clear(&mut self) {
+    /// Clears the segment, removing all key-value pairs.
+    pub(crate) fn clear(&mut self) {
         self.map.clear();
         self.probationary.clear();
         self.protected.clear();
     }
+}
+
+// Implement Debug for SlruSegment manually since it contains raw pointers
+impl<K, V, S> core::fmt::Debug for SlruSegment<K, V, S> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SlruSegment")
+            .field("capacity", &self.config.capacity())
+            .field("protected_capacity", &self.config.protected_capacity())
+            .field("len", &self.map.len())
+            .finish()
+    }
+}
+
+/// An implementation of a Segmented Least Recently Used (SLRU) cache.
+///
+/// The cache is divided into two segments:
+/// - Probationary segment: Where new entries are initially placed
+/// - Protected segment: Where frequently accessed entries are promoted to
+///
+/// When the cache reaches capacity, the least recently used entry from the
+/// probationary segment is evicted. If the probationary segment is empty,
+/// entries from the protected segment may be demoted back to probationary.
+///
+/// # Examples
+///
+/// ```
+/// use cache_rs::slru::SlruCache;
+/// use core::num::NonZeroUsize;
+///
+/// // Create an SLRU cache with a total capacity of 4,
+/// // with a protected capacity of 2 (half protected, half probationary)
+/// let mut cache = SlruCache::new(
+///     NonZeroUsize::new(4).unwrap(),
+///     NonZeroUsize::new(2).unwrap()
+/// );
+///
+/// // Add some items
+/// cache.put("a", 1);
+/// cache.put("b", 2);
+/// cache.put("c", 3);
+/// cache.put("d", 4);
+///
+/// // Access "a" to promote it to the protected segment
+/// assert_eq!(cache.get(&"a"), Some(&1));
+///
+/// // Add a new item, which will evict the least recently used item
+/// // from the probationary segment (likely "b")
+/// cache.put("e", 5);
+/// assert_eq!(cache.get(&"b"), None);
+/// ```
+#[derive(Debug)]
+pub struct SlruCache<K, V, S = DefaultHashBuilder> {
+    segment: SlruSegment<K, V, S>,
+}
+
+impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruCache<K, V, S> {
+    /// Creates a new SLRU cache with the specified capacity and hash builder.
+    ///
+    /// # Parameters
+    ///
+    /// - `total_cap`: The total capacity of the cache. Must be a non-zero value.
+    /// - `protected_cap`: The maximum capacity of the protected segment.
+    ///   Must be a non-zero value and less than or equal to `total_cap`.
+    /// - `hash_builder`: The hash builder to use for the underlying hash map.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `protected_cap` is greater than `total_cap`.
+    pub fn with_hasher(
+        total_cap: NonZeroUsize,
+        protected_cap: NonZeroUsize,
+        hash_builder: S,
+    ) -> Self {
+        Self {
+            segment: SlruSegment::with_hasher(total_cap, protected_cap, hash_builder),
+        }
+    }
+
+    /// Returns the maximum number of key-value pairs the cache can hold.
+    #[inline]
+    pub fn cap(&self) -> NonZeroUsize {
+        self.segment.cap()
+    }
+
+    /// Returns the maximum size of the protected segment.
+    #[inline]
+    pub fn protected_max_size(&self) -> NonZeroUsize {
+        self.segment.protected_max_size()
+    }
+
+    /// Returns the current number of key-value pairs in the cache.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.segment.len()
+    }
+
+    /// Returns `true` if the cache contains no key-value pairs.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.segment.is_empty()
+    }
+
+    /// Returns a reference to the value corresponding to the key.
+    ///
+    /// The key may be any borrowed form of the cache's key type, but
+    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for
+    /// the key type.
+    ///
+    /// If a value is returned from the probationary segment, it is promoted
+    /// to the protected segment.
+    #[inline]
+    pub fn get<Q>(&mut self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Hash + Eq,
+    {
+        self.segment.get(key)
+    }
+
+    /// Returns a mutable reference to the value corresponding to the key.
+    ///
+    /// The key may be any borrowed form of the cache's key type, but
+    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for
+    /// the key type.
+    ///
+    /// If a value is returned from the probationary segment, it is promoted
+    /// to the protected segment.
+    #[inline]
+    pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Hash + Eq,
+    {
+        self.segment.get_mut(key)
+    }
 
     /// Records a cache miss for metrics tracking (to be called by simulation system)
+    #[inline]
     pub fn record_miss(&mut self, object_size: u64) {
-        self.metrics.core.record_miss(object_size);
+        self.segment.record_miss(object_size);
+    }
+}
+
+impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruCache<K, V, S> {
+    /// Inserts a key-value pair into the cache.
+    ///
+    /// If the cache already contained this key, the old value is replaced and returned.
+    /// Otherwise, if the cache is at capacity, the least recently used item from the
+    /// probationary segment will be evicted. If the probationary segment is empty,
+    /// the least recently used item from the protected segment will be demoted to
+    /// the probationary segment.
+    ///
+    /// The inserted key-value pair is always placed in the probationary segment.
+    #[inline]
+    pub fn put(&mut self, key: K, value: V) -> Option<(K, V)>
+    where
+        V: Clone,
+    {
+        self.segment.put(key, value)
+    }
+
+    /// Removes a key from the cache, returning the value at the key if the key was previously in the cache.
+    ///
+    /// The key may be any borrowed form of the cache's key type, but
+    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for
+    /// the key type.
+    #[inline]
+    pub fn remove<Q>(&mut self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Hash + Eq,
+        V: Clone,
+    {
+        self.segment.remove(key)
+    }
+
+    /// Clears the cache, removing all key-value pairs.
+    #[inline]
+    pub fn clear(&mut self) {
+        self.segment.clear()
     }
 }
 
@@ -545,13 +648,13 @@ where
     }
 }
 
-impl<K: Hash + Eq, V, S: BuildHasher> CacheMetrics for SlruCache<K, V, S> {
+impl<K: Hash + Eq, V: Clone, S: BuildHasher> CacheMetrics for SlruCache<K, V, S> {
     fn metrics(&self) -> BTreeMap<String, f64> {
-        self.metrics.metrics()
+        self.segment.metrics().metrics()
     }
 
     fn algorithm_name(&self) -> &'static str {
-        self.metrics.algorithm_name()
+        self.segment.metrics().algorithm_name()
     }
 }
 
@@ -745,5 +848,64 @@ mod tests {
 
         // Check that protected items remain
         assert_eq!(cache.get(&"a"), Some(&1));
+    }
+
+    // Test that SlruSegment works correctly (internal tests)
+    #[test]
+    fn test_slru_segment_directly() {
+        let mut segment: SlruSegment<&str, i32, DefaultHashBuilder> = SlruSegment::with_hasher(
+            NonZeroUsize::new(4).unwrap(),
+            NonZeroUsize::new(2).unwrap(),
+            DefaultHashBuilder::default(),
+        );
+
+        assert_eq!(segment.len(), 0);
+        assert!(segment.is_empty());
+        assert_eq!(segment.cap().get(), 4);
+        assert_eq!(segment.protected_max_size().get(), 2);
+
+        segment.put("a", 1);
+        segment.put("b", 2);
+        assert_eq!(segment.len(), 2);
+
+        // Access to promote
+        assert_eq!(segment.get(&"a"), Some(&1));
+        assert_eq!(segment.get(&"b"), Some(&2));
+    }
+
+    #[test]
+    fn test_slru_concurrent_access() {
+        extern crate std;
+        use std::sync::{Arc, Mutex};
+        use std::thread;
+        use std::vec::Vec;
+
+        let cache = Arc::new(Mutex::new(SlruCache::new(
+            NonZeroUsize::new(100).unwrap(),
+            NonZeroUsize::new(50).unwrap(),
+        )));
+        let num_threads = 4;
+        let ops_per_thread = 100;
+
+        let mut handles: Vec<std::thread::JoinHandle<()>> = Vec::new();
+
+        for t in 0..num_threads {
+            let cache = Arc::clone(&cache);
+            handles.push(thread::spawn(move || {
+                for i in 0..ops_per_thread {
+                    let key = std::format!("key_{}_{}", t, i);
+                    let mut guard = cache.lock().unwrap();
+                    guard.put(key.clone(), i);
+                    let _ = guard.get(&key);
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let guard = cache.lock().unwrap();
+        assert!(guard.len() <= 100);
     }
 }
