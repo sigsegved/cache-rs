@@ -594,9 +594,10 @@ mod tests {
             handle.join().unwrap();
         }
 
-        let guard = cache.lock().unwrap();
+        let mut guard = cache.lock().unwrap();
         assert!(guard.len() <= 100);
         assert!(!guard.is_empty());
+        guard.clear(); // Clean up for MIRI
     }
 
     #[test]
@@ -631,8 +632,9 @@ mod tests {
             handle.join().unwrap();
         }
 
-        let guard = cache.lock().unwrap();
+        let mut guard = cache.lock().unwrap();
         assert!(guard.len() <= 50);
+        guard.clear(); // Clean up for MIRI
     }
 
     #[test]
@@ -682,7 +684,8 @@ mod tests {
             handle.join().unwrap();
         }
 
-        let guard = cache.lock().unwrap();
+        let mut guard = cache.lock().unwrap();
         assert!(guard.len() <= 100);
+        guard.clear(); // Clean up for MIRI
     }
 }
