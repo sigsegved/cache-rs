@@ -147,6 +147,7 @@ unsafe fn update_priority(&mut self, key: &K) -> *mut Entry<(K, V)> {
 3. **Safety-first unsafe**: Every unsafe block needs detailed safety reasoning
 4. **Clone minimization**: Only clone when ownership semantics require it
 5. **Early returns**: Reduce nesting with guard clauses
+6. **No mod.rs pattern**: Use `module_name.rs` files instead of `module_name/mod.rs` directories. For example, use `src/lru.rs` not `src/lru/mod.rs`
 
 ## Key Files to Reference
 
