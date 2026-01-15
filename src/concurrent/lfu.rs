@@ -454,12 +454,11 @@ mod tests {
     #[test]
     fn test_with_segments_and_hasher() {
         let hasher = DefaultHashBuilder::default();
-        let cache: ConcurrentLfuCache<String, i32> =
-            ConcurrentLfuCache::with_segments_and_hasher(
-                NonZeroUsize::new(100).unwrap(),
-                4,
-                hasher,
-            );
+        let cache: ConcurrentLfuCache<String, i32> = ConcurrentLfuCache::with_segments_and_hasher(
+            NonZeroUsize::new(100).unwrap(),
+            4,
+            hasher,
+        );
 
         cache.put("test".to_string(), 42);
         assert_eq!(cache.get(&"test".to_string()), Some(42));

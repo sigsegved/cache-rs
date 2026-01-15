@@ -626,7 +626,7 @@ mod tests {
             ConcurrentLruCache::with_segments(NonZeroUsize::new(16).unwrap(), 16);
 
         cache.put("a".to_string(), 1);
-        assert!(cache.len() >= 1);
+        assert!(!cache.is_empty());
 
         cache.put("b".to_string(), 2);
         assert!(cache.len() <= 16);
@@ -635,12 +635,11 @@ mod tests {
     #[test]
     fn test_with_segments_and_hasher() {
         let hasher = DefaultHashBuilder::default();
-        let cache: ConcurrentLruCache<String, i32> =
-            ConcurrentLruCache::with_segments_and_hasher(
-                NonZeroUsize::new(100).unwrap(),
-                4,
-                hasher,
-            );
+        let cache: ConcurrentLruCache<String, i32> = ConcurrentLruCache::with_segments_and_hasher(
+            NonZeroUsize::new(100).unwrap(),
+            4,
+            hasher,
+        );
 
         cache.put("test".to_string(), 42);
         assert_eq!(cache.get(&"test".to_string()), Some(42));

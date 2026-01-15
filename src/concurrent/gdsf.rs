@@ -432,7 +432,7 @@ mod tests {
         cache.put("another".to_string(), 4, 200);
 
         // Small item with high frequency should be retained
-        assert!(cache.len() >= 1);
+        assert!(!cache.is_empty());
     }
 
     #[test]
@@ -486,12 +486,11 @@ mod tests {
     #[test]
     fn test_with_segments_and_hasher() {
         let hasher = DefaultHashBuilder::default();
-        let cache: ConcurrentGdsfCache<String, i32> =
-            ConcurrentGdsfCache::with_segments_and_hasher(
-                NonZeroUsize::new(10000).unwrap(),
-                4,
-                hasher,
-            );
+        let cache: ConcurrentGdsfCache<String, i32> = ConcurrentGdsfCache::with_segments_and_hasher(
+            NonZeroUsize::new(10000).unwrap(),
+            4,
+            hasher,
+        );
 
         cache.put("test".to_string(), 42, 100);
         assert_eq!(cache.get(&"test".to_string()), Some(42));

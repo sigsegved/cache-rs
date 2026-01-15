@@ -494,13 +494,12 @@ mod tests {
     #[test]
     fn test_with_segments_and_hasher() {
         let hasher = DefaultHashBuilder::default();
-        let cache: ConcurrentSlruCache<String, i32> =
-            ConcurrentSlruCache::with_segments_and_hasher(
-                NonZeroUsize::new(100).unwrap(),
-                NonZeroUsize::new(50).unwrap(),
-                4,
-                hasher,
-            );
+        let cache: ConcurrentSlruCache<String, i32> = ConcurrentSlruCache::with_segments_and_hasher(
+            NonZeroUsize::new(100).unwrap(),
+            NonZeroUsize::new(50).unwrap(),
+            4,
+            hasher,
+        );
 
         cache.put("test".to_string(), 42);
         assert_eq!(cache.get(&"test".to_string()), Some(42));
