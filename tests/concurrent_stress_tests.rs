@@ -2,6 +2,8 @@
 //!
 //! These tests verify thread safety and correctness under high contention.
 
+#![cfg(feature = "concurrent")]
+
 use cache_rs::{
     ConcurrentGdsfCache, ConcurrentLfuCache, ConcurrentLfudaCache, ConcurrentLruCache,
     ConcurrentSlruCache,

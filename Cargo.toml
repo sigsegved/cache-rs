@@ -38,6 +38,10 @@ name = "concurrent_benchmarks"
 harness = false
 required-features = ["concurrent"]
 
+[[example]]
+name = "concurrent_usage"
+required-features = ["concurrent"]
+
 
 [workspace.lints.rust]
 # https://doc.rust-lang.org/rustc/lints/listing

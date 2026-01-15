@@ -7,6 +7,8 @@ on:
       - develop
       - release/*
       - feature/*
+    tags:
+      - "v*"
   pull_request:
     branches:
       - main
@@ -130,7 +132,7 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        
+
       - name: Install Rust MSRV
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -149,7 +151,7 @@ jobs:
             ${{ runner.os }}-cargo-no-std-1.74.0-
             ${{ runner.os }}-cargo-1.74.0-
             ${{ runner.os }}-cargo-
-          
+
       - name: Build for no_std target
         run: cargo build --target thumbv6m-none-eabi --no-default-features --features hashbrown
 
@@ -159,7 +161,7 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        
+
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -177,7 +179,7 @@ jobs:
             ${{ runner.os }}-cargo-doc-stable-
             ${{ runner.os }}-cargo-stable-
             ${{ runner.os }}-cargo-
-          
+
       - name: Check documentation
         env:
           RUSTDOCFLAGS: -D warnings
@@ -208,10 +210,10 @@ jobs:
             ${{ runner.os }}-cargo-audit-stable-
             ${{ runner.os }}-cargo-stable-
             ${{ runner.os }}-cargo-
-        
+
       - name: Install cargo-audit
         run: cargo install cargo-audit
-        
+
       - name: Run security audit
         run: cargo audit
 
@@ -253,7 +255,7 @@ jobs:
         run: |
           # Generate coverage data
           cargo llvm-cov --lcov --output-path lcov.info
-          
+
           # Run tests with nextest for better test reporting (JUnit configured in nextest.toml)
           cargo nextest run --profile ci
 
@@ -265,11 +267,11 @@ jobs:
           fail_ci_if_error: false
           verbose: true
 
-  # Release job - only on main with release commits
+  # Release job - only runs on tag pushes
   release:
     name: Release
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && (startsWith(github.event.head_commit.message, 'release:') || startsWith(github.event.head_commit.message, 'Release v'))
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: [check, test, no_std, doc, security_audit]
     steps:
       - name: Checkout code
