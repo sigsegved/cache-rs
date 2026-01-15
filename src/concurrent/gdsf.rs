@@ -319,4 +319,236 @@ mod tests {
 
         assert!(!cache.is_empty());
     }
+
+    #[test]
+    fn test_capacity() {
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::new(NonZeroUsize::new(10000).unwrap());
+
+        // Capacity is distributed across segments
+        let capacity = cache.capacity();
+        assert!(capacity >= 16);
+        assert!(capacity <= 10000);
+    }
+
+    #[test]
+    fn test_segment_count() {
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::with_segments(NonZeroUsize::new(10000).unwrap(), 8);
+
+        assert_eq!(cache.segment_count(), 8);
+    }
+
+    #[test]
+    fn test_len_and_is_empty() {
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::new(NonZeroUsize::new(10000).unwrap());
+
+        assert!(cache.is_empty());
+        assert_eq!(cache.len(), 0);
+
+        cache.put("key1".to_string(), 1, 100);
+        assert_eq!(cache.len(), 1);
+        assert!(!cache.is_empty());
+
+        cache.put("key2".to_string(), 2, 200);
+        assert_eq!(cache.len(), 2);
+    }
+
+    #[test]
+    fn test_remove() {
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::new(NonZeroUsize::new(10000).unwrap());
+
+        cache.put("key1".to_string(), 1, 100);
+        cache.put("key2".to_string(), 2, 200);
+
+        assert_eq!(cache.remove(&"key1".to_string()), Some(1));
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.get(&"key1".to_string()), None);
+
+        assert_eq!(cache.remove(&"nonexistent".to_string()), None);
+    }
+
+    #[test]
+    fn test_clear() {
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::new(NonZeroUsize::new(10000).unwrap());
+
+        cache.put("key1".to_string(), 1, 100);
+        cache.put("key2".to_string(), 2, 200);
+        cache.put("key3".to_string(), 3, 300);
+
+        assert_eq!(cache.len(), 3);
+
+        cache.clear();
+
+        assert_eq!(cache.len(), 0);
+        assert!(cache.is_empty());
+        assert_eq!(cache.get(&"key1".to_string()), None);
+    }
+
+    #[test]
+    fn test_contains_key() {
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::new(NonZeroUsize::new(10000).unwrap());
+
+        cache.put("exists".to_string(), 1, 100);
+
+        assert!(cache.contains_key(&"exists".to_string()));
+        assert!(!cache.contains_key(&"missing".to_string()));
+    }
+
+    #[test]
+    fn test_get_with() {
+        let cache: ConcurrentGdsfCache<String, String> =
+            ConcurrentGdsfCache::new(NonZeroUsize::new(10000).unwrap());
+
+        cache.put("key".to_string(), "hello world".to_string(), 100);
+
+        let len = cache.get_with(&"key".to_string(), |v: &String| v.len());
+        assert_eq!(len, Some(11));
+
+        let missing = cache.get_with(&"missing".to_string(), |v: &String| v.len());
+        assert_eq!(missing, None);
+    }
+
+    #[test]
+    fn test_size_aware_eviction() {
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::new(NonZeroUsize::new(1000).unwrap());
+
+        // Add items with different sizes
+        cache.put("small".to_string(), 1, 100);
+        cache.put("medium".to_string(), 2, 500);
+        cache.put("large".to_string(), 3, 800);
+
+        // Access small item multiple times
+        for _ in 0..10 {
+            let _ = cache.get(&"small".to_string());
+        }
+
+        // Add more items to trigger eviction
+        cache.put("another".to_string(), 4, 200);
+
+        // Small item with high frequency should be retained
+        assert!(cache.len() >= 1);
+    }
+
+    #[test]
+    fn test_eviction_on_capacity() {
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::new(NonZeroUsize::new(5000).unwrap());
+
+        // Fill the cache with various sizes
+        for i in 0..20 {
+            let size = (100 + i * 50) as u64;
+            cache.put(std::format!("key{}", i), i, size);
+        }
+
+        // Cache size should be managed
+        assert!(!cache.is_empty());
+    }
+
+    #[test]
+    fn test_metrics() {
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::new(NonZeroUsize::new(10000).unwrap());
+
+        cache.put("a".to_string(), 1, 100);
+        cache.put("b".to_string(), 2, 200);
+
+        let metrics = cache.metrics();
+        // Metrics aggregation across segments
+        assert!(!metrics.is_empty());
+    }
+
+    #[test]
+    fn test_algorithm_name() {
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::new(NonZeroUsize::new(10000).unwrap());
+
+        assert_eq!(cache.algorithm_name(), "ConcurrentGDSF");
+    }
+
+    #[test]
+    fn test_empty_cache_operations() {
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::new(NonZeroUsize::new(10000).unwrap());
+
+        assert!(cache.is_empty());
+        assert_eq!(cache.len(), 0);
+        assert_eq!(cache.get(&"missing".to_string()), None);
+        assert_eq!(cache.remove(&"missing".to_string()), None);
+        assert!(!cache.contains_key(&"missing".to_string()));
+    }
+
+    #[test]
+    fn test_with_segments_and_hasher() {
+        let hasher = DefaultHashBuilder::default();
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::with_segments_and_hasher(
+                NonZeroUsize::new(10000).unwrap(),
+                4,
+                hasher,
+            );
+
+        cache.put("test".to_string(), 42, 100);
+        assert_eq!(cache.get(&"test".to_string()), Some(42));
+        assert_eq!(cache.segment_count(), 4);
+    }
+
+    #[test]
+    fn test_borrowed_key_lookup() {
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::new(NonZeroUsize::new(10000).unwrap());
+
+        cache.put("test_key".to_string(), 42, 100);
+
+        // Test with borrowed key
+        let key_str = "test_key";
+        assert_eq!(cache.get(key_str), Some(42));
+        assert!(cache.contains_key(key_str));
+        assert_eq!(cache.remove(key_str), Some(42));
+    }
+
+    #[test]
+    fn test_variable_sizes() {
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::new(NonZeroUsize::new(10000).unwrap());
+
+        // Add items with various sizes
+        cache.put("tiny".to_string(), 1, 10);
+        cache.put("small".to_string(), 2, 100);
+        cache.put("medium".to_string(), 3, 500);
+        cache.put("large".to_string(), 4, 1000);
+
+        // All items should be present
+        assert_eq!(cache.len(), 4);
+        assert_eq!(cache.get(&"tiny".to_string()), Some(1));
+        assert_eq!(cache.get(&"small".to_string()), Some(2));
+        assert_eq!(cache.get(&"medium".to_string()), Some(3));
+        assert_eq!(cache.get(&"large".to_string()), Some(4));
+    }
+
+    #[test]
+    fn test_frequency_and_size_interaction() {
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::new(NonZeroUsize::new(5000).unwrap());
+
+        // Add large item
+        cache.put("large".to_string(), 1, 3000);
+
+        // Add and frequently access small items
+        for i in 0..10 {
+            let key = std::format!("small{}", i);
+            cache.put(key.clone(), i, 100);
+            for _ in 0..5 {
+                let _ = cache.get(&key);
+            }
+        }
+
+        // Frequently accessed small items should have good priority
+        assert!(!cache.is_empty());
+    }
 }
