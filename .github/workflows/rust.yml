@@ -253,11 +253,11 @@ jobs:
 
       - name: Run coverage with test results
         run: |
-          # Generate coverage data
-          cargo llvm-cov --lcov --output-path lcov.info
+          # Generate coverage data (include concurrent feature)
+          cargo llvm-cov --lcov --output-path lcov.info --features concurrent
 
           # Run tests with nextest for better test reporting (JUnit configured in nextest.toml)
-          cargo nextest run --profile ci
+          cargo nextest run --profile ci --features concurrent
 
       - name: Upload coverage and test results to Codecov
         uses: codecov/codecov-action@v4
