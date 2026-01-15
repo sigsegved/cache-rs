@@ -5,6 +5,67 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-01-14
+
+### ✨ Added
+
+- **Concurrent Cache Implementations**: New thread-safe cache types with segmented storage for high-performance multi-threaded access:
+  - `ConcurrentLruCache`: Thread-safe LRU with configurable segments
+  - `ConcurrentSlruCache`: Thread-safe Segmented LRU
+  - `ConcurrentLfuCache`: Thread-safe LFU
+  - `ConcurrentLfudaCache`: Thread-safe LFUDA
+  - `ConcurrentGdsfCache`: Thread-safe GDSF
+
+- **New `concurrent` Feature Flag**: Enable concurrent cache types with `features = ["concurrent"]`. Uses `parking_lot` for efficient locking.
+
+- **Zero-Copy `get_with()` API**: All concurrent caches provide `get_with(key, f)` for processing values without cloning:
+  ```rust
+  let sum = cache.get_with(&key, |value| value.iter().sum());
+  ```
+
+- **Configurable Segment Count**: Tune concurrency vs memory overhead with `with_segments(capacity, segment_count)`:
+  ```rust
+  let cache = ConcurrentLruCache::with_segments(capacity, 32);
+  ```
+
+- **Concurrent Benchmarks**: New benchmark suite in `benches/concurrent_benchmarks.rs` measuring multi-threaded performance
+
+- **Stress Tests**: Comprehensive concurrency stress tests in `tests/concurrent_stress_tests.rs`
+
+### 🔧 Changed
+
+- **Internal Segment Extraction**: Refactored all cache algorithms to extract core logic into reusable `*Segment` types:
+  - `LruSegment`, `SlruSegment`, `LfuSegment`, `LfudaSegment`, `GdsfSegment`
+  - Single-threaded caches now wrap segments, sharing code with concurrent implementations
+  - **No API changes** for existing single-threaded cache users
+
+### 📝 Documentation
+
+- Updated README with Concurrency Support section
+- Added performance characteristics table for segment tuning
+- Created `examples/concurrent_usage.rs` demonstrating multi-threaded patterns
+
+### 🔒 Backwards Compatibility
+
+- All existing single-threaded cache APIs remain unchanged
+- `concurrent` feature is opt-in; disabled by default
+- No breaking changes for existing users
+
+### 🎯 Performance
+
+Benchmark results for 8-thread mixed workload (get/put operations):
+
+| Segments | Throughput |
+|----------|------------|
+| 1        | ~464µs |
+| 16       | ~379µs |
+| 32       | ~334µs (optimal) |
+| 64       | ~372µs |
+
+---
+
+**Full Changelog**: https://github.com/sigsegved/cache-rs/compare/v0.1.1...v0.2.0
+
 ## [0.1.1] - 2026-01-05
 
 ### 🐛 Fixed

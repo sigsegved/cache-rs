@@ -1,6 +1,31 @@
 //! Concurrent LRU Cache Implementation
 //!
-//! Provides a thread-safe LRU cache using segmented storage for high concurrency.
+//! Provides a thread-safe LRU cache using segmented storage for high-performance
+//! multi-threaded access. This is the concurrent equivalent of [`LruCache`][crate::LruCache].
+//!
+//! # How It Works
+//!
+//! The key space is partitioned across multiple segments using hash-based sharding.
+//! Each segment is protected by its own lock, allowing
+//! concurrent access to different segments without contention.
+//!
+//! # Performance Characteristics
+//!
+//! - **Time Complexity**: O(1) average for get, put, remove
+//! - **Concurrency**: Near-linear scaling up to segment count
+//! - **Overhead**: One Mutex per segment (~16 by default)
+//!
+//! # When to Use
+//!
+//! Use `ConcurrentLruCache` when:
+//! - Multiple threads need to access the same cache
+//! - You need higher throughput than a single `Mutex<LruCache>`
+//! - Your workload has good key distribution
+//!
+//! # Thread Safety
+//!
+//! `ConcurrentLruCache` implements `Send` and `Sync` and can be safely shared
+//! across threads via `Arc`.
 
 extern crate alloc;
 

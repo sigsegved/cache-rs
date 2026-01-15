@@ -1,8 +1,42 @@
 //! Concurrent GDSF Cache Implementation
 //!
-//! Provides a thread-safe GDSF cache using segmented storage for high concurrency.
-//! GDSF (Greedy Dual-Size Frequency) considers object size for optimal caching of
-//! variable-size objects.
+//! Provides a thread-safe GDSF cache using segmented storage for high-performance
+//! multi-threaded access. This is the concurrent equivalent of [`GdsfCache`][crate::GdsfCache].
+//!
+//! # How It Works
+//!
+//! GDSF (Greedy Dual-Size Frequency) is designed for caching variable-size objects.
+//! Priority is calculated as: `(Frequency / Size) + GlobalAge`
+//!
+//! This formula favors:
+//! - Smaller objects (more items fit in cache)
+//! - More frequently accessed objects
+//! - Newer objects (via aging)
+//!
+//! # Performance Characteristics
+//!
+//! - **Time Complexity**: O(1) average for get, put, remove
+//! - **Size-Aware**: Optimal for caching objects of varying sizes (images, documents)
+//! - **Concurrency**: Near-linear scaling up to segment count
+//!
+//! # When to Use
+//!
+//! Use `ConcurrentGdsfCache` when:
+//! - Caching variable-size objects (images, files, API responses)
+//! - Total size budget is more important than item count
+//! - CDN-like workloads with diverse object sizes
+//!
+//! # API Note
+//!
+//! Unlike other caches, `put()` requires a size parameter:
+//! ```rust,ignore
+//! cache.put("image.jpg".to_string(), image_data, 2048); // size in bytes
+//! ```
+//!
+//! # Thread Safety
+//!
+//! `ConcurrentGdsfCache` implements `Send` and `Sync` and can be safely shared
+//! across threads via `Arc`.
 
 extern crate alloc;
 
@@ -92,6 +126,7 @@ where
         (self.hash_builder.hash_one(key) as usize) % self.segments.len()
     }
 
+    /// Returns the total capacity across all segments (in size units).
     pub fn capacity(&self) -> usize {
         let mut total = 0usize;
         for segment in self.segments.iter() {
@@ -100,10 +135,12 @@ where
         total
     }
 
+    /// Returns the number of segments in the cache.
     pub fn segment_count(&self) -> usize {
         self.segments.len()
     }
 
+    /// Returns the total number of entries across all segments.
     pub fn len(&self) -> usize {
         let mut total = 0usize;
         for segment in self.segments.iter() {
@@ -112,6 +149,7 @@ where
         total
     }
 
+    /// Returns `true` if the cache contains no entries.
     pub fn is_empty(&self) -> bool {
         for segment in self.segments.iter() {
             if !segment.lock().is_empty() {
@@ -121,6 +159,10 @@ where
         true
     }
 
+    /// Gets a value from the cache.
+    ///
+    /// This clones the value to avoid holding the lock. For zero-copy access,
+    /// use `get_with()` instead.
     pub fn get<Q>(&self, key: &Q) -> Option<V>
     where
         K: Borrow<Q> + Clone,
@@ -131,6 +173,10 @@ where
         segment.get(key)
     }
 
+    /// Gets a value and applies a function to it while holding the lock.
+    ///
+    /// This is more efficient than `get()` when you only need to read from the value,
+    /// as it avoids cloning.
     pub fn get_with<Q, F, R>(&self, key: &Q, f: F) -> Option<R>
     where
         K: Borrow<Q> + Clone,
@@ -155,6 +201,7 @@ where
         segment.put(key, value, size)
     }
 
+    /// Removes a key from the cache, returning the value if it existed.
     pub fn remove<Q>(&self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
@@ -165,6 +212,7 @@ where
         segment.pop(key)
     }
 
+    /// Returns `true` if the cache contains the specified key.
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
         K: Borrow<Q> + Clone,
@@ -175,6 +223,7 @@ where
         segment.contains_key(key)
     }
 
+    /// Clears all entries from the cache.
     pub fn clear(&self) {
         for segment in self.segments.iter() {
             segment.lock().clear();

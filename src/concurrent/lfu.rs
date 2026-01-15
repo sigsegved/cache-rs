@@ -1,6 +1,31 @@
 //! Concurrent LFU Cache Implementation
 //!
-//! Provides a thread-safe LFU cache using segmented storage for high concurrency.
+//! Provides a thread-safe LFU cache using segmented storage for high-performance
+//! multi-threaded access. This is the concurrent equivalent of [`LfuCache`][crate::LfuCache].
+//!
+//! # How It Works
+//!
+//! LFU tracks access frequency for each item and evicts the least frequently used
+//! item when capacity is reached. The key space is partitioned across multiple
+//! segments using hash-based sharding.
+//!
+//! # Performance Characteristics
+//!
+//! - **Time Complexity**: O(1) average for get, put, remove
+//! - **Excellent Scan Resistance**: Frequency-based eviction ignores one-time accesses
+//! - **Concurrency**: Near-linear scaling up to segment count
+//!
+//! # When to Use
+//!
+//! Use `ConcurrentLfuCache` when:
+//! - Access frequency is more important than recency
+//! - You need excellent scan resistance
+//! - Workload has stable popularity patterns
+//!
+//! # Thread Safety
+//!
+//! `ConcurrentLfuCache` implements `Send` and `Sync` and can be safely shared
+//! across threads via `Arc`.
 
 extern crate alloc;
 
@@ -85,22 +110,30 @@ where
         (self.hash_builder.hash_one(key) as usize) % self.segments.len()
     }
 
+    /// Returns the total capacity across all segments.
     pub fn capacity(&self) -> usize {
         self.segments.iter().map(|s| s.lock().cap().get()).sum()
     }
 
+    /// Returns the number of segments in the cache.
     pub fn segment_count(&self) -> usize {
         self.segments.len()
     }
 
+    /// Returns the total number of entries across all segments.
     pub fn len(&self) -> usize {
         self.segments.iter().map(|s| s.lock().len()).sum()
     }
 
+    /// Returns `true` if the cache contains no entries.
     pub fn is_empty(&self) -> bool {
         self.segments.iter().all(|s| s.lock().is_empty())
     }
 
+    /// Gets a value from the cache.
+    ///
+    /// This clones the value to avoid holding the lock. For zero-copy access,
+    /// use `get_with()` instead.
     pub fn get<Q>(&self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
@@ -111,6 +144,10 @@ where
         segment.get(key).cloned()
     }
 
+    /// Gets a value and applies a function to it while holding the lock.
+    ///
+    /// This is more efficient than `get()` when you only need to read from the value,
+    /// as it avoids cloning.
     pub fn get_with<Q, F, R>(&self, key: &Q, f: F) -> Option<R>
     where
         K: Borrow<Q>,
@@ -122,12 +159,16 @@ where
         segment.get(key).map(f)
     }
 
+    /// Inserts a key-value pair into the cache.
+    ///
+    /// If the cache is at capacity, the least frequently used entry is evicted.
     pub fn put(&self, key: K, value: V) -> Option<(K, V)> {
         let idx = self.segment_index(&key);
         let mut segment = self.segments[idx].lock();
         segment.put(key, value)
     }
 
+    /// Removes a key from the cache, returning the value if it existed.
     pub fn remove<Q>(&self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
@@ -138,6 +179,7 @@ where
         segment.remove(key)
     }
 
+    /// Returns `true` if the cache contains the specified key.
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
         K: Borrow<Q>,
@@ -148,6 +190,7 @@ where
         segment.get(key).is_some()
     }
 
+    /// Clears all entries from the cache.
     pub fn clear(&self) {
         for segment in self.segments.iter() {
             segment.lock().clear();
