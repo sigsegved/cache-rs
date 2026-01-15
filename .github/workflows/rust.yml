@@ -183,7 +183,7 @@ jobs:
       - name: Check documentation
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --no-deps --document-private-items
+        run: cargo doc --no-deps --document-private-items --features concurrent
 
   security_audit:
     name: Security Audit

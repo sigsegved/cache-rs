@@ -1,10 +1,10 @@
 # Copilot Instructions for Cache-RS
 
-This document provides essential knowledge for AI agents working on cache-rs, a high-performance Rust caching library implementing multiple eviction algorithms (LRU, LFU, LFUDA, SLRU, GDSF).
+This document provides essential knowledge for AI agents working on cache-rs, a high-performance Rust caching library implementing multiple eviction algorithms (LRU, LFU, LFUDA, SLRU, GDSF) with both single-threaded and thread-safe concurrent implementations.
 
 ## Architecture Overview
 
-Cache-rs provides a high-performance Rust caching library implementing multiple eviction algorithms (LRU, LFU, LFUDA, SLRU, GDSF) with shared infrastructure.
+Cache-rs provides a high-performance Rust caching library implementing multiple eviction algorithms (LRU, LFU, LFUDA, SLRU, GDSF) with shared infrastructure. Each algorithm has both a single-threaded version and a thread-safe concurrent version (behind the `concurrent` feature flag).
 
 ### Core Design Pattern: **HashMap + Doubly-Linked Lists**
 
@@ -25,6 +25,23 @@ struct Cache<K, V, S> {
 - **LRU**: Single `List<(K,V)>` + `HashMap<K, *mut Entry<(K,V)>>`
 - **LFU/LFUDA/GDSF**: `BTreeMap<Priority, List<(K,V)>>` for priority-based eviction
 - **SLRU**: Two separate lists (probationary + protected segments)
+
+### Concurrent Cache Architecture
+
+Enabled via `--features concurrent`. Requires `std` (not `no_std` compatible).
+
+```rust
+// All concurrent caches wrap the single-threaded version with RwLock
+pub struct Lfu<K, V, S = DefaultHashBuilder> {
+    inner: RwLock<lfu::Lfu<K, V, S>>,  // parking_lot::RwLock
+}
+```
+
+**Design pattern**: Composition over reimplementation
+- Each concurrent cache wraps its single-threaded counterpart
+- Uses `parking_lot::RwLock` for better performance than `std::sync::RwLock`
+- Read operations (`get`) take read locks; write operations (`put`, `remove`) take write locks
+- Located in `src/concurrent/` module
 
 ## Critical Unsafe Code Patterns
 
@@ -49,6 +66,11 @@ unsafe {
 - Uses `alloc` crate for heap allocation
 - `hashbrown::HashMap` instead of `std::HashMap`
 - Feature flags control std/hashbrown/nightly optimizations
+
+**Feature flags**:
+- `hashbrown` (default): Use hashbrown for `no_std` support
+- `std`: Enable standard library support
+- `concurrent`: Enable thread-safe cache implementations (requires `std`)
 
 **Critical**: Always use conditional imports:
 ```rust
@@ -362,6 +384,34 @@ pub fn process_cache_entry(&mut self, key: &K, value: V) -> Result<Option<V>, Ca
 2. **Descriptive Messages**: Commit messages should clearly explain what and why
 3. **Breaking Changes**: Clearly document any breaking API changes
 4. **Changelog**: Update CHANGELOG.md for significant changes
+
+## Release Process
+
+Releases are **tag-based**, not commit-message based. The CI workflow triggers a release only when a version tag is pushed.
+
+### Release Steps
+```bash
+# 1. Update version in Cargo.toml
+# 2. Update CHANGELOG.md with release notes
+# 3. Commit and push to main
+git commit -am "Bump version to X.Y.Z"
+git push origin main
+
+# 4. Create an annotated tag (triggers release)
+git tag -a vX.Y.Z -m "Release vX.Y.Z - Brief description"
+git push origin vX.Y.Z
+```
+
+### Tag Conventions
+- **Format**: `vMAJOR.MINOR.PATCH` (e.g., `v0.2.0`, `v1.0.0`)
+- **Annotated tags only**: Use `git tag -a`, not lightweight tags
+- **Tag message**: Should summarize the release (features, fixes, breaking changes)
+
+### What Happens on Tag Push
+1. Full CI pipeline runs (test, clippy, doc, no_std, security audit)
+2. If all checks pass, the `release` job executes:
+   - Publishes to crates.io
+   - Creates a GitHub Release with artifacts
 
 ---
 
