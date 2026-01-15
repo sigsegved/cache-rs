@@ -13,6 +13,27 @@
 //! This design provides near-linear scalability with thread count for workloads
 //! with good key distribution.
 //!
+//! ## Why Mutex Instead of RwLock?
+//!
+//! Cache algorithms like LRU, LFU, LFUDA, GDSF, and SLRU require **mutable access
+//! even for read operations**. Every `get()` call must update internal state:
+//!
+//! - **LRU**: Moves the accessed item to the front of the recency list
+//! - **LFU**: Increments the frequency counter and may move the item between frequency buckets
+//! - **LFUDA**: Updates frequency and recalculates priority with the aging factor
+//! - **GDSF**: Recalculates priority based on size, frequency, and cost
+//! - **SLRU**: May promote items from the probationary to protected segment
+//!
+//! Since `get()` is inherently a write operation, using `RwLock` would provide no benefit—
+//! every access would still require an exclusive write lock. `Mutex` is preferred because:
+//!
+//! 1. **Lower overhead**: `Mutex` has less bookkeeping than `RwLock`
+//! 2. **No false promises**: Makes it clear that all operations are mutually exclusive
+//! 3. **Better performance**: `parking_lot::Mutex` is highly optimized for this use case
+//!
+//! Concurrency is achieved through **segmentation** instead: different keys can be accessed
+//! in parallel as long as they hash to different segments.
+//!
 //! # Available Concurrent Caches
 //!
 //! | Type | Description |
