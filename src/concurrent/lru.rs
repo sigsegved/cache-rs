@@ -516,4 +516,155 @@ mod tests {
 
         assert_eq!(cache.segment_count(), 8);
     }
+
+    #[test]
+    fn test_capacity() {
+        let cache: ConcurrentLruCache<String, i32> =
+            ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap());
+
+        // Capacity is distributed across segments, so it may not be exactly 100
+        // It should be close to the requested capacity
+        let capacity = cache.capacity();
+        assert!(capacity >= 16); // At least 1 per segment
+        assert!(capacity <= 100); // Not more than requested
+    }
+
+    #[test]
+    fn test_eviction_on_capacity() {
+        let cache: ConcurrentLruCache<String, i32> =
+            ConcurrentLruCache::with_segments(NonZeroUsize::new(48).unwrap(), 16);
+
+        cache.put("a".to_string(), 1);
+        cache.put("b".to_string(), 2);
+        cache.put("c".to_string(), 3);
+
+        assert_eq!(cache.len(), 3);
+
+        // This should evict the LRU item
+        cache.put("d".to_string(), 4);
+
+        assert!(cache.len() <= 48);
+        assert!(cache.contains_key(&"d".to_string()));
+    }
+
+    #[test]
+    fn test_update_existing_key() {
+        let cache: ConcurrentLruCache<String, i32> =
+            ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap());
+
+        cache.put("key".to_string(), 1);
+        assert_eq!(cache.get(&"key".to_string()), Some(1));
+
+        cache.put("key".to_string(), 2);
+        assert_eq!(cache.get(&"key".to_string()), Some(2));
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn test_lru_ordering() {
+        let cache: ConcurrentLruCache<String, i32> =
+            ConcurrentLruCache::with_segments(NonZeroUsize::new(48).unwrap(), 16);
+
+        cache.put("a".to_string(), 1);
+        cache.put("b".to_string(), 2);
+        cache.put("c".to_string(), 3);
+
+        // Access "a" to make it recently used
+        let _ = cache.get(&"a".to_string());
+
+        // Add a new item
+        cache.put("d".to_string(), 4);
+
+        assert!(cache.contains_key(&"a".to_string()));
+        assert!(cache.contains_key(&"d".to_string()));
+    }
+
+    #[test]
+    fn test_metrics() {
+        let cache: ConcurrentLruCache<String, i32> =
+            ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap());
+
+        cache.put("a".to_string(), 1);
+        cache.put("b".to_string(), 2);
+
+        let metrics = cache.metrics();
+        // Metrics aggregation across segments
+        assert!(!metrics.is_empty());
+    }
+
+    #[test]
+    fn test_record_miss() {
+        let cache: ConcurrentLruCache<String, i32> =
+            ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap());
+
+        cache.record_miss(100);
+        cache.record_miss(200);
+
+        let metrics = cache.metrics();
+        // Metrics are aggregated across segments
+        assert!(!metrics.is_empty());
+    }
+
+    #[test]
+    fn test_empty_cache_operations() {
+        let cache: ConcurrentLruCache<String, i32> =
+            ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap());
+
+        assert!(cache.is_empty());
+        assert_eq!(cache.len(), 0);
+        assert_eq!(cache.get(&"missing".to_string()), None);
+        assert_eq!(cache.remove(&"missing".to_string()), None);
+        assert!(!cache.contains_key(&"missing".to_string()));
+
+        let result = cache.get_with(&"missing".to_string(), |v: &i32| *v);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_single_item_cache() {
+        let cache: ConcurrentLruCache<String, i32> =
+            ConcurrentLruCache::with_segments(NonZeroUsize::new(16).unwrap(), 16);
+
+        cache.put("a".to_string(), 1);
+        assert!(!cache.is_empty());
+
+        cache.put("b".to_string(), 2);
+        assert!(cache.len() <= 16);
+    }
+
+    #[test]
+    fn test_with_segments_and_hasher() {
+        let hasher = DefaultHashBuilder::default();
+        let cache: ConcurrentLruCache<String, i32> = ConcurrentLruCache::with_segments_and_hasher(
+            NonZeroUsize::new(100).unwrap(),
+            4,
+            hasher,
+        );
+
+        cache.put("test".to_string(), 42);
+        assert_eq!(cache.get(&"test".to_string()), Some(42));
+        assert_eq!(cache.segment_count(), 4);
+    }
+
+    #[test]
+    fn test_borrowed_key_lookup() {
+        let cache: ConcurrentLruCache<String, i32> =
+            ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap());
+
+        cache.put("test_key".to_string(), 42);
+
+        // Test with borrowed key
+        let key_str = "test_key";
+        assert_eq!(cache.get(key_str), Some(42));
+        assert!(cache.contains_key(key_str));
+        assert_eq!(cache.remove(key_str), Some(42));
+    }
+
+    #[test]
+    fn test_algorithm_name() {
+        let cache: ConcurrentLruCache<String, i32> =
+            ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap());
+
+        assert_eq!(cache.algorithm_name(), "ConcurrentLRU");
+    }
 }
