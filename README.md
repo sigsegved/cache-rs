@@ -332,6 +332,34 @@ MIRIFLAGS="-Zmiri-ignore-leaks" cargo +nightly miri test --lib
 
 See [MIRI_ANALYSIS.md](MIRI_ANALYSIS.md) for a detailed Miri usage guide and analysis of findings.
 
+### Release Process
+
+Releases are **tag-based**. The CI workflow triggers a release only when a version tag is pushed.
+
+```bash
+# 1. Update version in Cargo.toml
+# 2. Update CHANGELOG.md with release notes
+# 3. Commit and push to main
+git commit -am "Bump version to X.Y.Z"
+git push origin main
+
+# 4. Create an annotated tag (triggers release)
+git tag -a vX.Y.Z -m "Release vX.Y.Z - Brief description"
+git push origin vX.Y.Z
+```
+
+**Tag Conventions:**
+- Format: `vMAJOR.MINOR.PATCH` (e.g., `v0.2.0`, `v1.0.0`)
+- Use annotated tags (`git tag -a`), not lightweight tags
+- Tag message should summarize the release
+
+**What happens on tag push:**
+1. Full CI pipeline runs (test, clippy, doc, no_std, security audit)
+2. If all checks pass, the crate is published to [crates.io](https://crates.io/crates/cache-rs)
+3. A GitHub Release is created with auto-generated release notes
+
+> **Note:** Publishing requires the `CARGO_REGISTRY_TOKEN` secret to be configured in repository settings.
+
 ## 📄 License
 
 Licensed under the [MIT License](LICENSE).
