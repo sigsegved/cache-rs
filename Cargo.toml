@@ -1,15 +1,15 @@
 [package]
 name = "cache-rs"
-version = "0.1.1"
+version = "0.2.0"
 authors = ["sigsegved"]
-categories = ["caching", "no-std"]
+categories = ["caching", "no-std", "concurrency"]
 description = "A high-performance, memory-efficient cache implementation supporting multiple eviction policies including LRU, LFU, LFUDA, SLRU and GDSF"
 readme = "README.md"
 repository = "https://github.com/sigsegved/cache-rs"
 homepage = "https://github.com/sigsegved/cache-rs"
 documentation = "https://docs.rs/cache-rs"
 license = "MIT"
-keywords = ["cache", "eviction", "lru", "memory", "data-structures"]
+keywords = ["cache", "eviction", "lru", "memory", "concurrent"]
 rust-version = "1.74.0"
 exclude = ["/.github", "/.gitignore"]
 edition = "2021"
@@ -18,10 +18,11 @@ edition = "2021"
 default = ["hashbrown"]
 nightly = ["hashbrown/nightly"]
 std = []
+concurrent = ["parking_lot"]
 
 [dependencies]
 hashbrown = { version = "0.14.5", optional = true }
-
+parking_lot = { version = "0.12", optional = true }
 
 [dev-dependencies]
 scoped_threadpool = "0.1.*"
@@ -31,3 +32,55 @@ criterion = "0.5.1"
 [[bench]]
 name = "criterion_benchmarks"
 harness = false
+
+[[bench]]
+name = "concurrent_benchmarks"
+harness = false
+required-features = ["concurrent"]
+
+[[example]]
+name = "concurrent_usage"
+required-features = ["concurrent"]
+
+
+[workspace.lints.rust]
+# https://doc.rust-lang.org/rustc/lints/listing
+future_incompatible = "deny"
+nonstandard_style = "deny"
+rust_2018_idioms = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+missing_debug_implementations = "deny"
+missing_docs = "deny"
+unused_import_braces = "deny"
+unused_lifetimes = "deny"
+
+[workspace.lints.clippy]
+# https://rust-lang.github.io/rust-clippy/master/index.html
+cast_possible_truncation = "warn"
+clear_with_drain = "warn"
+dbg_macro = "warn"
+debug_assert_with_mut_call = "warn"
+doc_link_with_quotes = "warn"
+filter_map_next = "warn"
+fn_params_excessive_bools = "warn"
+imprecise_flops = "warn"
+inefficient_to_string = "warn"
+linkedlist = "warn"
+lossy_float_literal = "warn"
+macro_use_imports = "warn"
+manual_instant_elapsed = "warn"
+manual_ok_or = "warn"
+manual_string_new = "warn"
+match_same_arms = "warn"
+mut_mut = "warn"
+needless_collect = "warn"
+needless_continue = "warn"
+option_option = "warn"
+ref_option_ref = "warn"
+rest_pat_in_fully_bound_structs = "warn"
+string_to_string = "warn"
+suboptimal_flops = "warn"
+undocumented_unsafe_blocks = "warn"
+unnecessary_box_returns = "warn"
+wildcard_dependencies = "warn"
+wildcard_imports = "warn"

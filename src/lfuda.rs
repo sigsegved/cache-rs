@@ -84,40 +84,20 @@ struct EntryMetadata<K, V> {
     node: *mut Entry<(K, V)>,
 }
 
-/// An implementation of a Least Frequently Used with Dynamic Aging (LFUDA) cache.
+/// Internal LFUDA segment containing the actual cache algorithm.
 ///
-/// LFUDA improves upon LFU by adding an aging mechanism that prevents old frequently-used
-/// items from blocking new items indefinitely. Each item's effective priority is calculated
-/// as (access_frequency + age_at_insertion), where age_at_insertion is the global age
-/// value when the item was first inserted.
+/// This is shared between `LfudaCache` (single-threaded) and
+/// `ConcurrentLfudaCache` (multi-threaded). All algorithm logic is
+/// implemented here to avoid code duplication.
 ///
-/// When an item is evicted, the global age is set to the evicted item's effective priority,
-/// ensuring that new items start with a competitive priority.
+/// # Safety
 ///
-/// # Examples
-///
-/// ```
-/// use cache_rs::lfuda::LfudaCache;
-/// use core::num::NonZeroUsize;
-///
-/// // Create an LFUDA cache with capacity 3
-/// let mut cache = LfudaCache::new(NonZeroUsize::new(3).unwrap());
-///
-/// // Add some items
-/// cache.put("a", 1);
-/// cache.put("b", 2);
-/// cache.put("c", 3);
-///
-/// // Access "a" multiple times to increase its frequency
-/// assert_eq!(cache.get(&"a"), Some(&1));
-/// assert_eq!(cache.get(&"a"), Some(&1));
-///
-/// // Add more items to trigger aging
-/// cache.put("d", 4); // This will evict an item and increase global age
-/// cache.put("e", 5); // New items benefit from the increased age
-/// ```
-#[derive(Debug)]
-pub struct LfudaCache<K, V, S = DefaultHashBuilder> {
+/// This struct contains raw pointers in the `map` field (via EntryMetadata).
+/// These pointers are always valid as long as:
+/// - The pointer was obtained from a `priority_lists` entry's `add()` call
+/// - The node has not been removed from the list
+/// - The segment has not been dropped
+pub(crate) struct LfudaSegment<K, V, S = DefaultHashBuilder> {
     /// Configuration for the LFUDA cache
     config: LfudaCacheConfig,
 
@@ -138,27 +118,21 @@ pub struct LfudaCache<K, V, S = DefaultHashBuilder> {
     metrics: LfudaCacheMetrics,
 }
 
-impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
-    /// Creates a new LFUDA cache with the specified capacity and hash builder.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use cache_rs::lfuda::LfudaCache;
-    /// use core::num::NonZeroUsize;
-    /// use std::collections::hash_map::RandomState;
-    ///
-    /// let cache: LfudaCache<&str, u32, _> = LfudaCache::with_hasher(
-    ///     NonZeroUsize::new(10).unwrap(),
-    ///     RandomState::new()
-    /// );
-    /// ```
-    pub fn with_hasher(cap: NonZeroUsize, hash_builder: S) -> Self {
+// SAFETY: LfudaSegment owns all data and raw pointers point only to nodes owned by
+// `priority_lists`. Concurrent access is safe when wrapped in proper synchronization primitives.
+unsafe impl<K: Send, V: Send, S: Send> Send for LfudaSegment<K, V, S> {}
+
+// SAFETY: All mutation requires &mut self; shared references cannot cause data races.
+unsafe impl<K: Send, V: Send, S: Sync> Sync for LfudaSegment<K, V, S> {}
+
+impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
+    /// Creates a new LFUDA segment with the specified capacity and hash builder.
+    pub(crate) fn with_hasher(cap: NonZeroUsize, hash_builder: S) -> Self {
         let config = LfudaCacheConfig::new(cap);
         let map_capacity = config.capacity().get().next_power_of_two();
-        let max_cache_size_bytes = config.capacity().get() as u64 * 128; // Estimate based on capacity
+        let max_cache_size_bytes = config.capacity().get() as u64 * 128;
 
-        LfudaCache {
+        LfudaSegment {
             config,
             global_age: config.initial_age(),
             min_priority: 0,
@@ -168,39 +142,48 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
         }
     }
 
-    /// Returns the maximum number of key-value pairs the cache can hold.
-    pub fn cap(&self) -> NonZeroUsize {
+    /// Returns the maximum number of key-value pairs the segment can hold.
+    #[inline]
+    pub(crate) fn cap(&self) -> NonZeroUsize {
         self.config.capacity()
     }
 
-    /// Returns the current number of key-value pairs in the cache.
-    pub fn len(&self) -> usize {
+    /// Returns the current number of key-value pairs in the segment.
+    #[inline]
+    pub(crate) fn len(&self) -> usize {
         self.map.len()
     }
 
-    /// Returns `true` if the cache contains no key-value pairs.
-    pub fn is_empty(&self) -> bool {
+    /// Returns `true` if the segment contains no key-value pairs.
+    #[inline]
+    pub(crate) fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
 
     /// Returns the current global age value.
-    pub fn global_age(&self) -> usize {
+    #[inline]
+    pub(crate) fn global_age(&self) -> usize {
         self.global_age
+    }
+
+    /// Returns a reference to the metrics for this segment.
+    #[inline]
+    pub(crate) fn metrics(&self) -> &LfudaCacheMetrics {
+        &self.metrics
     }
 
     /// Estimates the size of a key-value pair in bytes for metrics tracking
     fn estimate_object_size(&self, _key: &K, _value: &V) -> u64 {
-        // Simple estimation: key size + value size + overhead for pointers and metadata
         mem::size_of::<K>() as u64 + mem::size_of::<V>() as u64 + 64
     }
 
-    /// Records a cache miss for metrics tracking (to be called by simulation system)
-    pub fn record_miss(&mut self, object_size: u64) {
+    /// Records a cache miss for metrics tracking
+    #[inline]
+    pub(crate) fn record_miss(&mut self, object_size: u64) {
         self.metrics.core.record_miss(object_size);
     }
 
     /// Updates the priority of an item and moves it to the appropriate priority list.
-    /// Takes the node pointer directly to avoid aliasing issues.
     ///
     /// # Safety
     ///
@@ -211,7 +194,6 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
         K: Clone + Hash + Eq,
     {
         // SAFETY: node is guaranteed to be valid by the caller's contract
-        // Get the key from the node to look up metadata
         let (key_ref, _) = (*node).get_value();
         let key_cloned = key_ref.clone();
 
@@ -271,13 +253,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
     }
 
     /// Returns a reference to the value corresponding to the key.
-    ///
-    /// The key may be any borrowed form of the cache's key type, but
-    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for
-    /// the key type.
-    ///
-    /// Accessing an item increases its frequency count.
-    pub fn get<Q>(&mut self, key: &Q) -> Option<&V>
+    pub(crate) fn get<Q>(&mut self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q> + Clone,
         Q: ?Sized + Hash + Eq,
@@ -285,16 +261,11 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
         if let Some(metadata) = self.map.get(key) {
             let node = metadata.node;
             unsafe {
-                // SAFETY: node comes from our map, so it's a valid pointer to an entry in our priority list
-                // Get the key from the node to pass to update_priority
+                // SAFETY: node comes from our map
                 let (key_ref, value) = (*node).get_value();
-
-                // Record hit with object size estimation
                 let object_size = self.estimate_object_size(key_ref, value);
                 self.metrics.core.record_hit(object_size);
 
-                // Record frequency change
-                let _old_frequency = metadata.frequency;
                 let new_node = self.update_priority_by_node(node);
                 let (_, value) = (*new_node).get_value();
                 Some(value)
@@ -305,13 +276,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
     }
 
     /// Returns a mutable reference to the value corresponding to the key.
-    ///
-    /// The key may be any borrowed form of the cache's key type, but
-    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for
-    /// the key type.
-    ///
-    /// Accessing an item increases its frequency count.
-    pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
+    pub(crate) fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
         K: Borrow<Q> + Clone,
         Q: ?Sized + Hash + Eq,
@@ -319,15 +284,11 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
         if let Some(metadata) = self.map.get(key) {
             let node = metadata.node;
             unsafe {
-                // SAFETY: node comes from our map, so it's a valid pointer to an entry in our priority list
-                // Get the key from the node to pass to update_priority
+                // SAFETY: node comes from our map
                 let (key_ref, value) = (*node).get_value();
-
-                // Record hit with object size estimation
                 let object_size = self.estimate_object_size(key_ref, value);
                 self.metrics.core.record_hit(object_size);
 
-                // Record frequency change
                 let old_frequency = metadata.frequency;
                 let new_priority = (old_frequency + 1) + metadata.age_at_insertion;
                 self.metrics.record_frequency_increment(new_priority as u64);
@@ -341,15 +302,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
         }
     }
 
-    /// Inserts a key-value pair into the cache.
-    ///
-    /// If the cache already contained this key, the old value is replaced and returned.
-    /// Otherwise, if the cache is at capacity, the item with the lowest effective priority
-    /// is evicted. The global age is updated to the evicted item's effective priority.
-    ///
-    /// New items are inserted with a frequency of 1 and age_at_insertion set to the
-    /// current global_age.
-    pub fn put(&mut self, key: K, value: V) -> Option<(K, V)>
+    /// Inserts a key-value pair into the segment.
+    pub(crate) fn put(&mut self, key: K, value: V) -> Option<(K, V)>
     where
         K: Clone,
     {
@@ -361,16 +315,14 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
             let priority = metadata.frequency + metadata.age_at_insertion;
 
             unsafe {
-                // SAFETY: node comes from our map, so it's a valid pointer to an entry in our priority list
+                // SAFETY: node comes from our map
                 let old_entry = self.priority_lists.get_mut(&priority).unwrap().update(
                     node,
                     (key.clone(), value),
                     true,
                 );
 
-                // Record insertion (update)
                 self.metrics.core.record_insertion(object_size);
-
                 return old_entry.0;
             }
         }
@@ -384,34 +336,24 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
 
         // If at capacity, evict the item with lowest effective priority
         if self.len() >= self.config.capacity().get() {
-            // Find the list with minimum priority and evict from the end (LRU within priority)
             if let Some(min_priority_list) = self.priority_lists.get_mut(&self.min_priority) {
                 if let Some(old_entry) = min_priority_list.remove_last() {
                     unsafe {
-                        // SAFETY: old_entry comes from min_priority_list.remove_last(), so it's a valid Box
-                        // that we own. Converting to raw pointer is safe for temporary access.
                         let entry_ptr = Box::into_raw(old_entry);
                         let (old_key, old_value) = (*entry_ptr).get_value().clone();
 
-                        // Record eviction
                         let evicted_size = self.estimate_object_size(&old_key, &old_value);
                         self.metrics.core.record_eviction(evicted_size);
 
                         // Update global age to the evicted item's effective priority
                         if let Some(evicted_metadata) = self.map.get(&old_key) {
-                            let _old_global_age = self.global_age;
                             self.global_age =
                                 evicted_metadata.frequency + evicted_metadata.age_at_insertion;
-
-                            // Record aging event
                             self.metrics.record_aging_event(self.global_age as u64);
                         }
 
-                        // Remove from map
                         self.map.remove(&old_key);
                         evicted = Some((old_key, old_value));
-
-                        // SAFETY: Reconstructing Box from the same raw pointer to properly free memory
                         let _ = Box::from_raw(entry_ptr);
 
                         // Update min_priority if the list becomes empty
@@ -421,7 +363,6 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
                             .unwrap()
                             .is_empty()
                         {
-                            // Find the next minimum priority
                             self.min_priority = self
                                 .priority_lists
                                 .keys()
@@ -430,7 +371,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
                                         && !self.priority_lists.get(&p).unwrap().is_empty()
                                 })
                                 .copied()
-                                .unwrap_or(priority); // Use the new item's priority as fallback
+                                .unwrap_or(priority);
                         }
                     }
                 }
@@ -463,7 +404,6 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
 
             self.map.insert(key, metadata);
 
-            // Record insertion and frequency/aging metrics
             self.metrics.core.record_insertion(object_size);
             self.metrics.record_frequency_increment(priority as u64);
             if age_at_insertion > 0 {
@@ -474,12 +414,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
         evicted
     }
 
-    /// Removes a key from the cache, returning the value at the key if the key was previously in the cache.
-    ///
-    /// The key may be any borrowed form of the cache's key type, but
-    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for
-    /// the key type.
-    pub fn remove<Q>(&mut self, key: &Q) -> Option<V>
+    /// Removes a key from the segment, returning the value if the key was present.
+    pub(crate) fn remove<Q>(&mut self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
@@ -489,22 +425,19 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
         let priority = metadata.frequency + metadata.age_at_insertion;
 
         unsafe {
-            // SAFETY: metadata.node comes from our map and was just removed, so priority_lists.remove is safe
+            // SAFETY: metadata.node comes from our map and was just removed
             let boxed_entry = self
                 .priority_lists
                 .get_mut(&priority)?
                 .remove(metadata.node)?;
-            // SAFETY: boxed_entry is a valid Box we own, converting to raw pointer for temporary access
             let entry_ptr = Box::into_raw(boxed_entry);
             let value = (*entry_ptr).get_value().1.clone();
-            // SAFETY: Reconstructing Box from the same raw pointer to properly free memory
             let _ = Box::from_raw(entry_ptr);
 
             // Update min_priority if necessary
             if self.priority_lists.get(&priority).unwrap().is_empty()
                 && priority == self.min_priority
             {
-                // Find the next minimum priority
                 self.min_priority = self
                     .priority_lists
                     .keys()
@@ -517,9 +450,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
         }
     }
 
-    /// Clears the cache, removing all key-value pairs.
-    /// Resets the global age to 0.
-    pub fn clear(&mut self) {
+    /// Clears the segment, removing all key-value pairs.
+    pub(crate) fn clear(&mut self) {
         self.map.clear();
         self.priority_lists.clear();
         self.global_age = 0;
@@ -527,21 +459,184 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
     }
 }
 
-impl<K, V, S> CacheMetrics for LfudaCache<K, V, S> {
-    /// Returns all LFUDA cache metrics as key-value pairs in deterministic order
+// Implement Debug for LfudaSegment manually since it contains raw pointers
+impl<K, V, S> core::fmt::Debug for LfudaSegment<K, V, S> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("LfudaSegment")
+            .field("capacity", &self.config.capacity())
+            .field("len", &self.map.len())
+            .field("global_age", &self.global_age)
+            .field("min_priority", &self.min_priority)
+            .finish()
+    }
+}
+
+/// An implementation of a Least Frequently Used with Dynamic Aging (LFUDA) cache.
+///
+/// LFUDA improves upon LFU by adding an aging mechanism that prevents old frequently-used
+/// items from blocking new items indefinitely. Each item's effective priority is calculated
+/// as (access_frequency + age_at_insertion), where age_at_insertion is the global age
+/// value when the item was first inserted.
+///
+/// When an item is evicted, the global age is set to the evicted item's effective priority,
+/// ensuring that new items start with a competitive priority.
+///
+/// # Examples
+///
+/// ```
+/// use cache_rs::lfuda::LfudaCache;
+/// use core::num::NonZeroUsize;
+///
+/// // Create an LFUDA cache with capacity 3
+/// let mut cache = LfudaCache::new(NonZeroUsize::new(3).unwrap());
+///
+/// // Add some items
+/// cache.put("a", 1);
+/// cache.put("b", 2);
+/// cache.put("c", 3);
+///
+/// // Access "a" multiple times to increase its frequency
+/// assert_eq!(cache.get(&"a"), Some(&1));
+/// assert_eq!(cache.get(&"a"), Some(&1));
+///
+/// // Add more items to trigger aging
+/// cache.put("d", 4); // This will evict an item and increase global age
+/// cache.put("e", 5); // New items benefit from the increased age
+/// ```
+#[derive(Debug)]
+pub struct LfudaCache<K, V, S = DefaultHashBuilder> {
+    segment: LfudaSegment<K, V, S>,
+}
+
+impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
+    /// Creates a new LFUDA cache with the specified capacity and hash builder.
     ///
-    /// # Returns
-    /// A BTreeMap containing all metrics tracked by this LFUDA cache instance
-    fn metrics(&self) -> BTreeMap<String, f64> {
-        self.metrics.metrics()
+    /// # Examples
+    ///
+    /// ```
+    /// use cache_rs::lfuda::LfudaCache;
+    /// use core::num::NonZeroUsize;
+    /// use std::collections::hash_map::RandomState;
+    ///
+    /// let cache: LfudaCache<&str, u32, _> = LfudaCache::with_hasher(
+    ///     NonZeroUsize::new(10).unwrap(),
+    ///     RandomState::new()
+    /// );
+    /// ```
+    pub fn with_hasher(cap: NonZeroUsize, hash_builder: S) -> Self {
+        Self {
+            segment: LfudaSegment::with_hasher(cap, hash_builder),
+        }
     }
 
-    /// Returns the algorithm name for this cache implementation
+    /// Returns the maximum number of key-value pairs the cache can hold.
+    #[inline]
+    pub fn cap(&self) -> NonZeroUsize {
+        self.segment.cap()
+    }
+
+    /// Returns the current number of key-value pairs in the cache.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.segment.len()
+    }
+
+    /// Returns `true` if the cache contains no key-value pairs.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.segment.is_empty()
+    }
+
+    /// Returns the current global age value.
+    #[inline]
+    pub fn global_age(&self) -> usize {
+        self.segment.global_age()
+    }
+
+    /// Records a cache miss for metrics tracking (to be called by simulation system)
+    #[inline]
+    pub fn record_miss(&mut self, object_size: u64) {
+        self.segment.record_miss(object_size);
+    }
+
+    /// Returns a reference to the value corresponding to the key.
     ///
-    /// # Returns
-    /// "LFUDA" - identifying this as a Least Frequently Used with Dynamic Aging cache
+    /// The key may be any borrowed form of the cache's key type, but
+    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for
+    /// the key type.
+    ///
+    /// Accessing an item increases its frequency count.
+    #[inline]
+    pub fn get<Q>(&mut self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q> + Clone,
+        Q: ?Sized + Hash + Eq,
+    {
+        self.segment.get(key)
+    }
+
+    /// Returns a mutable reference to the value corresponding to the key.
+    ///
+    /// The key may be any borrowed form of the cache's key type, but
+    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for
+    /// the key type.
+    ///
+    /// Accessing an item increases its frequency count.
+    #[inline]
+    pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
+    where
+        K: Borrow<Q> + Clone,
+        Q: ?Sized + Hash + Eq,
+    {
+        self.segment.get_mut(key)
+    }
+
+    /// Inserts a key-value pair into the cache.
+    ///
+    /// If the cache already contained this key, the old value is replaced and returned.
+    /// Otherwise, if the cache is at capacity, the item with the lowest effective priority
+    /// is evicted. The global age is updated to the evicted item's effective priority.
+    ///
+    /// New items are inserted with a frequency of 1 and age_at_insertion set to the
+    /// current global_age.
+    #[inline]
+    pub fn put(&mut self, key: K, value: V) -> Option<(K, V)>
+    where
+        K: Clone,
+    {
+        self.segment.put(key, value)
+    }
+
+    /// Removes a key from the cache, returning the value at the key if the key was previously in the cache.
+    ///
+    /// The key may be any borrowed form of the cache's key type, but
+    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for
+    /// the key type.
+    #[inline]
+    pub fn remove<Q>(&mut self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Hash + Eq,
+        V: Clone,
+    {
+        self.segment.remove(key)
+    }
+
+    /// Clears the cache, removing all key-value pairs.
+    /// Resets the global age to 0.
+    #[inline]
+    pub fn clear(&mut self) {
+        self.segment.clear()
+    }
+}
+
+impl<K: Hash + Eq, V: Clone, S: BuildHasher> CacheMetrics for LfudaCache<K, V, S> {
+    fn metrics(&self) -> BTreeMap<String, f64> {
+        self.segment.metrics().metrics()
+    }
+
     fn algorithm_name(&self) -> &'static str {
-        self.metrics.algorithm_name()
+        self.segment.metrics().algorithm_name()
     }
 }
 
@@ -799,18 +894,10 @@ mod tests {
         cache.put("newer", 5);
 
         // The newer item should be able to compete despite the old item's high frequency
-        // This demonstrates that aging helps newer items compete
         assert!(cache.len() <= cache.cap().get());
     }
 
     /// Test to validate the fix for Stacked Borrows violations detected by Miri.
-    ///
-    /// The original code had an aliasing issue where a borrowed key reference from a node
-    /// was passed to update_priority, which then tried to mutably access the HashMap.
-    /// This violated Miri's Stacked Borrows rules.
-    ///
-    /// The fix passes the node pointer directly and clones the key internally,
-    /// breaking the aliasing chain.
     #[test]
     fn test_miri_stacked_borrows_fix() {
         let mut cache = LfudaCache::new(NonZeroUsize::new(10).unwrap());
@@ -821,7 +908,6 @@ mod tests {
         cache.put("c", 3);
 
         // Access items multiple times to trigger priority updates
-        // This would fail under Miri with the original buggy code
         for _ in 0..3 {
             assert_eq!(cache.get(&"a"), Some(&1));
             assert_eq!(cache.get(&"b"), Some(&2));
@@ -835,5 +921,59 @@ mod tests {
             *val += 10;
         }
         assert_eq!(cache.get(&"a"), Some(&11));
+    }
+
+    // Test that LfudaSegment works correctly (internal tests)
+    #[test]
+    fn test_lfuda_segment_directly() {
+        let mut segment: LfudaSegment<&str, i32, DefaultHashBuilder> =
+            LfudaSegment::with_hasher(NonZeroUsize::new(3).unwrap(), DefaultHashBuilder::default());
+
+        assert_eq!(segment.len(), 0);
+        assert!(segment.is_empty());
+        assert_eq!(segment.cap().get(), 3);
+        assert_eq!(segment.global_age(), 0);
+
+        segment.put("a", 1);
+        segment.put("b", 2);
+        assert_eq!(segment.len(), 2);
+
+        // Access to increase frequency
+        assert_eq!(segment.get(&"a"), Some(&1));
+        assert_eq!(segment.get(&"b"), Some(&2));
+    }
+
+    #[test]
+    fn test_lfuda_concurrent_access() {
+        extern crate std;
+        use std::sync::{Arc, Mutex};
+        use std::thread;
+        use std::vec::Vec;
+
+        let cache = Arc::new(Mutex::new(LfudaCache::new(NonZeroUsize::new(100).unwrap())));
+        let num_threads = 4;
+        let ops_per_thread = 100;
+
+        let mut handles: Vec<std::thread::JoinHandle<()>> = Vec::new();
+
+        for t in 0..num_threads {
+            let cache = Arc::clone(&cache);
+            handles.push(thread::spawn(move || {
+                for i in 0..ops_per_thread {
+                    let key = std::format!("key_{}_{}", t, i);
+                    let mut guard = cache.lock().unwrap();
+                    guard.put(key.clone(), i);
+                    let _ = guard.get(&key);
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let mut guard = cache.lock().unwrap();
+        assert!(guard.len() <= 100);
+        guard.clear(); // Clean up for MIRI
     }
 }

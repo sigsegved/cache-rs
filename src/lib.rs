@@ -39,6 +39,7 @@
 //! - `hashbrown`: Uses the [hashbrown](https://crates.io/crates/hashbrown) crate for HashMap implementation (enabled by default)
 //! - `nightly`: Enables nightly-only optimizations for improved performance
 //! - `std`: Enables standard library features (disabled by default to support `no_std`)
+//! - `concurrent`: Enables thread-safe concurrent cache implementations using `parking_lot`
 //!
 //! ## No-std Support
 //!
@@ -65,6 +66,7 @@
 //! - [`gdsf`]: A Greedy Dual Size Frequency (GDSF) cache implementation
 //! - [`config`]: Configuration structures for all cache algorithm implementations
 //! - [`metrics`]: Metrics collection for cache performance monitoring
+//! - [`concurrent`]: Thread-safe concurrent cache implementations (requires `concurrent` feature)
 
 #![no_std]
 
@@ -123,8 +125,24 @@ pub mod gdsf;
 /// Each algorithm can track algorithm-specific metrics while implementing a common interface.
 pub mod metrics;
 
+/// Concurrent cache implementations.
+///
+/// Provides thread-safe cache implementations using segmented storage for high-performance
+/// multi-threaded access. Each concurrent cache partitions the key space across multiple
+/// segments, with each segment protected by its own lock.
+///
+/// Available when the `concurrent` feature is enabled.
+#[cfg(feature = "concurrent")]
+pub mod concurrent;
+
 pub use gdsf::GdsfCache;
 pub use lfu::LfuCache;
 pub use lfuda::LfudaCache;
 pub use lru::LruCache;
 pub use slru::SlruCache;
+
+#[cfg(feature = "concurrent")]
+pub use concurrent::{
+    ConcurrentGdsfCache, ConcurrentLfuCache, ConcurrentLfudaCache, ConcurrentLruCache,
+    ConcurrentSlruCache,
+};

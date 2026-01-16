@@ -34,37 +34,20 @@ use std::collections::hash_map::RandomState as DefaultHashBuilder;
 #[cfg(not(feature = "hashbrown"))]
 use std::collections::HashMap;
 
-/// An implementation of a Least Frequently Used (LFU) cache.
+/// Internal LFU segment containing the actual cache algorithm.
 ///
-/// The cache tracks the frequency of access for each item and evicts the least
-/// frequently used items when the cache reaches capacity. In case of a tie in
-/// frequency, the least recently used item among those with the same frequency
-/// is evicted.
+/// This is shared between `LfuCache` (single-threaded) and
+/// `ConcurrentLfuCache` (multi-threaded). All algorithm logic is
+/// implemented here to avoid code duplication.
 ///
-/// # Examples
+/// # Safety
 ///
-/// ```
-/// use cache_rs::lfu::LfuCache;
-/// use core::num::NonZeroUsize;
-///
-/// // Create an LFU cache with capacity 3
-/// let mut cache = LfuCache::new(NonZeroUsize::new(3).unwrap());
-///
-/// // Add some items
-/// cache.put("a", 1);
-/// cache.put("b", 2);
-/// cache.put("c", 3);
-///
-/// // Access "a" multiple times to increase its frequency
-/// assert_eq!(cache.get(&"a"), Some(&1));
-/// assert_eq!(cache.get(&"a"), Some(&1));
-///
-/// // Add a new item, which will evict the least frequently used item
-/// cache.put("d", 4);
-/// assert_eq!(cache.get(&"b"), None); // "b" was evicted as it had frequency 0
-/// ```
-#[derive(Debug)]
-pub struct LfuCache<K, V, S = DefaultHashBuilder> {
+/// This struct contains raw pointers in the `map` field. These pointers
+/// are always valid as long as:
+/// - The pointer was obtained from a `frequency_lists` entry's `add()` call
+/// - The node has not been removed from the list
+/// - The segment has not been dropped
+pub(crate) struct LfuSegment<K, V, S = DefaultHashBuilder> {
     /// Configuration for the LFU cache
     config: LfuCacheConfig,
 
@@ -82,26 +65,20 @@ pub struct LfuCache<K, V, S = DefaultHashBuilder> {
     metrics: LfuCacheMetrics,
 }
 
-impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
-    /// Creates a new LFU cache with the specified capacity and hash builder.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use cache_rs::lfu::LfuCache;
-    /// use core::num::NonZeroUsize;
-    /// use std::collections::hash_map::RandomState;
-    ///
-    /// let cache: LfuCache<&str, u32, _> = LfuCache::with_hasher(
-    ///     NonZeroUsize::new(10).unwrap(),
-    ///     RandomState::new()
-    /// );
-    /// ```
-    pub fn with_hasher(cap: NonZeroUsize, hash_builder: S) -> Self {
+// SAFETY: LfuSegment owns all data and raw pointers point only to nodes owned by
+// `frequency_lists`. Concurrent access is safe when wrapped in proper synchronization primitives.
+unsafe impl<K: Send, V: Send, S: Send> Send for LfuSegment<K, V, S> {}
+
+// SAFETY: All mutation requires &mut self; shared references cannot cause data races.
+unsafe impl<K: Send, V: Send, S: Sync> Sync for LfuSegment<K, V, S> {}
+
+impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
+    /// Creates a new LFU segment with the specified capacity and hash builder.
+    pub(crate) fn with_hasher(cap: NonZeroUsize, hash_builder: S) -> Self {
         let config = LfuCacheConfig::new(cap);
         let map_capacity = config.capacity().get().next_power_of_two();
-        let max_cache_size_bytes = config.capacity().get() as u64 * 128; // Estimate based on capacity
-        LfuCache {
+        let max_cache_size_bytes = config.capacity().get() as u64 * 128;
+        LfuSegment {
             config,
             min_frequency: 1,
             map: HashMap::with_capacity_and_hasher(map_capacity, hash_builder),
@@ -110,25 +87,33 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
         }
     }
 
-    /// Returns the maximum number of key-value pairs the cache can hold.
-    pub fn cap(&self) -> NonZeroUsize {
+    /// Returns the maximum number of key-value pairs the segment can hold.
+    #[inline]
+    pub(crate) fn cap(&self) -> NonZeroUsize {
         self.config.capacity()
     }
 
-    /// Returns the current number of key-value pairs in the cache.
-    pub fn len(&self) -> usize {
+    /// Returns the current number of key-value pairs in the segment.
+    #[inline]
+    pub(crate) fn len(&self) -> usize {
         self.map.len()
     }
 
-    /// Returns `true` if the cache contains no key-value pairs.
-    pub fn is_empty(&self) -> bool {
+    /// Returns `true` if the segment contains no key-value pairs.
+    #[inline]
+    pub(crate) fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
 
     /// Estimates the size of a key-value pair in bytes for metrics tracking
     fn estimate_object_size(&self, _key: &K, _value: &V) -> u64 {
-        // Simple estimation: key size + value size + overhead for pointers and metadata
         mem::size_of::<K>() as u64 + mem::size_of::<V>() as u64 + 64
+    }
+
+    /// Returns a reference to the metrics for this segment.
+    #[inline]
+    pub(crate) fn metrics(&self) -> &LfuCacheMetrics {
+        &self.metrics
     }
 
     /// Updates the frequency of an item and moves it to the appropriate frequency list.
@@ -153,7 +138,6 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
             .record_frequency_increment(old_frequency, new_frequency);
 
         // SAFETY: node is guaranteed to be valid by the caller's contract
-        // Get the key from the node to look up in the map
         let (key_ref, _) = (*node).get_value();
         let key_cloned = key_ref.clone();
 
@@ -202,24 +186,15 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
     }
 
     /// Returns a reference to the value corresponding to the key.
-    ///
-    /// The key may be any borrowed form of the cache's key type, but
-    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for
-    /// the key type.
-    ///
-    /// Accessing an item increases its frequency count.
-    pub fn get<Q>(&mut self, key: &Q) -> Option<&V>
+    pub(crate) fn get<Q>(&mut self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q> + Clone,
         Q: ?Sized + Hash + Eq,
     {
         if let Some(&(frequency, node)) = self.map.get(key) {
-            // Cache hit
             unsafe {
                 // SAFETY: node comes from our map, so it's a valid pointer to an entry in our frequency list
                 let (key_ref, value) = (*node).get_value();
-
-                // Record hit with estimated object size
                 let object_size = self.estimate_object_size(key_ref, value);
                 self.metrics.record_frequency_hit(object_size, frequency);
 
@@ -228,31 +203,20 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
                 Some(value)
             }
         } else {
-            // Cache miss - we can't estimate size without the actual object
-            // The simulation system will need to call record_miss separately
             None
         }
     }
 
     /// Returns a mutable reference to the value corresponding to the key.
-    ///
-    /// The key may be any borrowed form of the cache's key type, but
-    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for
-    /// the key type.
-    ///
-    /// Accessing an item increases its frequency count.
-    pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
+    pub(crate) fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
         K: Borrow<Q> + Clone,
         Q: ?Sized + Hash + Eq,
     {
         if let Some(&(frequency, node)) = self.map.get(key) {
-            // Cache hit
             unsafe {
                 // SAFETY: node comes from our map, so it's a valid pointer to an entry in our frequency list
                 let (key_ref, value) = (*node).get_value();
-
-                // Record hit with estimated object size
                 let object_size = self.estimate_object_size(key_ref, value);
                 self.metrics.record_frequency_hit(object_size, frequency);
 
@@ -265,15 +229,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
         }
     }
 
-    /// Inserts a key-value pair into the cache.
-    ///
-    /// If the cache already contained this key, the old value is replaced and returned.
-    /// Otherwise, if the cache is at capacity, the least frequently used item is evicted.
-    /// In case of a tie in frequency, the least recently used item among those with
-    /// the same frequency is evicted.
-    ///
-    /// New items are inserted with a frequency of 1.
-    pub fn put(&mut self, key: K, value: V) -> Option<(K, V)>
+    /// Inserts a key-value pair into the segment.
+    pub(crate) fn put(&mut self, key: K, value: V) -> Option<(K, V)>
     where
         K: Clone,
     {
@@ -289,9 +246,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
                     true,
                 );
 
-                // Record the storage of the new value
                 self.metrics.core.record_insertion(object_size);
-
                 return old_entry.0;
             }
         }
@@ -300,24 +255,15 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
 
         // If at capacity, evict the least frequently used item
         if self.len() >= self.config.capacity().get() {
-            // Find the list with minimum frequency and evict from the end (LRU within frequency)
             if let Some(min_freq_list) = self.frequency_lists.get_mut(&self.min_frequency) {
                 if let Some(old_entry) = min_freq_list.remove_last() {
                     unsafe {
-                        // SAFETY: old_entry comes from min_freq_list.remove_last(), so it's a valid Box
-                        // that we own. Converting to raw pointer is safe for temporary access.
                         let entry_ptr = Box::into_raw(old_entry);
                         let (old_key, old_value) = (*entry_ptr).get_value().clone();
-
-                        // Record eviction
                         let evicted_size = self.estimate_object_size(&old_key, &old_value);
                         self.metrics.core.record_eviction(evicted_size);
-
-                        // Remove from map
                         self.map.remove(&old_key);
                         evicted = Some((old_key, old_value));
-
-                        // SAFETY: Reconstructing Box from the same raw pointer to properly free memory
                         let _ = Box::from_raw(entry_ptr);
                     }
                 }
@@ -343,21 +289,14 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
             self.map.insert(key, (frequency, node));
         }
 
-        // Record the insertion
         self.metrics.core.record_insertion(object_size);
-
-        // Update frequency levels
         self.metrics.update_frequency_levels(&self.frequency_lists);
 
         evicted
     }
 
-    /// Removes a key from the cache, returning the value at the key if the key was previously in the cache.
-    ///
-    /// The key may be any borrowed form of the cache's key type, but
-    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for
-    /// the key type.
-    pub fn remove<Q>(&mut self, key: &Q) -> Option<V>
+    /// Removes a key from the segment, returning the value if the key was present.
+    pub(crate) fn remove<Q>(&mut self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
@@ -366,19 +305,16 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
         let (frequency, node) = self.map.remove(key)?;
 
         unsafe {
-            // SAFETY: node comes from our map and was just removed, so frequency_lists.remove is safe
+            // SAFETY: node comes from our map and was just removed
             let boxed_entry = self.frequency_lists.get_mut(&frequency)?.remove(node)?;
-            // SAFETY: boxed_entry is a valid Box we own, converting to raw pointer for temporary access
             let entry_ptr = Box::into_raw(boxed_entry);
             let value = (*entry_ptr).get_value().1.clone();
-            // SAFETY: Reconstructing Box from the same raw pointer to properly free memory
             let _ = Box::from_raw(entry_ptr);
 
             // Update min_frequency if necessary
             if self.frequency_lists.get(&frequency).unwrap().is_empty()
                 && frequency == self.min_frequency
             {
-                // Find the next minimum frequency
                 self.min_frequency = self
                     .frequency_lists
                     .keys()
@@ -391,16 +327,177 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
         }
     }
 
-    /// Clears the cache, removing all key-value pairs.
-    pub fn clear(&mut self) {
+    /// Clears the segment, removing all key-value pairs.
+    pub(crate) fn clear(&mut self) {
         self.map.clear();
         self.frequency_lists.clear();
         self.min_frequency = 1;
     }
 
-    /// Records a cache miss for metrics tracking (to be called by simulation system)
-    pub fn record_miss(&mut self, object_size: u64) {
+    /// Records a cache miss for metrics tracking
+    #[inline]
+    pub(crate) fn record_miss(&mut self, object_size: u64) {
         self.metrics.record_miss(object_size);
+    }
+}
+
+// Implement Debug for LfuSegment manually since it contains raw pointers
+impl<K, V, S> core::fmt::Debug for LfuSegment<K, V, S> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("LfuSegment")
+            .field("capacity", &self.config.capacity())
+            .field("len", &self.map.len())
+            .field("min_frequency", &self.min_frequency)
+            .finish()
+    }
+}
+
+/// An implementation of a Least Frequently Used (LFU) cache.
+///
+/// The cache tracks the frequency of access for each item and evicts the least
+/// frequently used items when the cache reaches capacity. In case of a tie in
+/// frequency, the least recently used item among those with the same frequency
+/// is evicted.
+///
+/// # Examples
+///
+/// ```
+/// use cache_rs::lfu::LfuCache;
+/// use core::num::NonZeroUsize;
+///
+/// // Create an LFU cache with capacity 3
+/// let mut cache = LfuCache::new(NonZeroUsize::new(3).unwrap());
+///
+/// // Add some items
+/// cache.put("a", 1);
+/// cache.put("b", 2);
+/// cache.put("c", 3);
+///
+/// // Access "a" multiple times to increase its frequency
+/// assert_eq!(cache.get(&"a"), Some(&1));
+/// assert_eq!(cache.get(&"a"), Some(&1));
+///
+/// // Add a new item, which will evict the least frequently used item
+/// cache.put("d", 4);
+/// assert_eq!(cache.get(&"b"), None); // "b" was evicted as it had frequency 0
+/// ```
+#[derive(Debug)]
+pub struct LfuCache<K, V, S = DefaultHashBuilder> {
+    segment: LfuSegment<K, V, S>,
+}
+
+impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
+    /// Creates a new LFU cache with the specified capacity and hash builder.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cache_rs::lfu::LfuCache;
+    /// use core::num::NonZeroUsize;
+    /// use std::collections::hash_map::RandomState;
+    ///
+    /// let cache: LfuCache<&str, u32, _> = LfuCache::with_hasher(
+    ///     NonZeroUsize::new(10).unwrap(),
+    ///     RandomState::new()
+    /// );
+    /// ```
+    pub fn with_hasher(cap: NonZeroUsize, hash_builder: S) -> Self {
+        Self {
+            segment: LfuSegment::with_hasher(cap, hash_builder),
+        }
+    }
+
+    /// Returns the maximum number of key-value pairs the cache can hold.
+    #[inline]
+    pub fn cap(&self) -> NonZeroUsize {
+        self.segment.cap()
+    }
+
+    /// Returns the current number of key-value pairs in the cache.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.segment.len()
+    }
+
+    /// Returns `true` if the cache contains no key-value pairs.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.segment.is_empty()
+    }
+
+    /// Returns a reference to the value corresponding to the key.
+    ///
+    /// The key may be any borrowed form of the cache's key type, but
+    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for
+    /// the key type.
+    ///
+    /// Accessing an item increases its frequency count.
+    #[inline]
+    pub fn get<Q>(&mut self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q> + Clone,
+        Q: ?Sized + Hash + Eq,
+    {
+        self.segment.get(key)
+    }
+
+    /// Returns a mutable reference to the value corresponding to the key.
+    ///
+    /// The key may be any borrowed form of the cache's key type, but
+    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for
+    /// the key type.
+    ///
+    /// Accessing an item increases its frequency count.
+    #[inline]
+    pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
+    where
+        K: Borrow<Q> + Clone,
+        Q: ?Sized + Hash + Eq,
+    {
+        self.segment.get_mut(key)
+    }
+
+    /// Inserts a key-value pair into the cache.
+    ///
+    /// If the cache already contained this key, the old value is replaced and returned.
+    /// Otherwise, if the cache is at capacity, the least frequently used item is evicted.
+    /// In case of a tie in frequency, the least recently used item among those with
+    /// the same frequency is evicted.
+    ///
+    /// New items are inserted with a frequency of 1.
+    #[inline]
+    pub fn put(&mut self, key: K, value: V) -> Option<(K, V)>
+    where
+        K: Clone,
+    {
+        self.segment.put(key, value)
+    }
+
+    /// Removes a key from the cache, returning the value at the key if the key was previously in the cache.
+    ///
+    /// The key may be any borrowed form of the cache's key type, but
+    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for
+    /// the key type.
+    #[inline]
+    pub fn remove<Q>(&mut self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Hash + Eq,
+        V: Clone,
+    {
+        self.segment.remove(key)
+    }
+
+    /// Clears the cache, removing all key-value pairs.
+    #[inline]
+    pub fn clear(&mut self) {
+        self.segment.clear()
+    }
+
+    /// Records a cache miss for metrics tracking (to be called by simulation system)
+    #[inline]
+    pub fn record_miss(&mut self, object_size: u64) {
+        self.segment.record_miss(object_size);
     }
 }
 
@@ -424,13 +521,13 @@ where
     }
 }
 
-impl<K: Hash + Eq, V, S: BuildHasher> CacheMetrics for LfuCache<K, V, S> {
+impl<K: Hash + Eq, V: Clone, S: BuildHasher> CacheMetrics for LfuCache<K, V, S> {
     fn metrics(&self) -> BTreeMap<String, f64> {
-        self.metrics.metrics()
+        self.segment.metrics().metrics()
     }
 
     fn algorithm_name(&self) -> &'static str {
-        self.metrics.algorithm_name()
+        self.segment.metrics().algorithm_name()
     }
 }
 
@@ -607,13 +704,6 @@ mod tests {
     }
 
     /// Test to validate the fix for Stacked Borrows violations detected by Miri.
-    ///
-    /// The original code had an aliasing issue where a borrowed key reference from a node
-    /// was passed to update_frequency, which then tried to mutably access the HashMap.
-    /// This violated Miri's Stacked Borrows rules.
-    ///
-    /// The fix passes the node pointer directly and clones the key internally,
-    /// breaking the aliasing chain.
     #[test]
     fn test_miri_stacked_borrows_fix() {
         let mut cache = LfuCache::new(NonZeroUsize::new(10).unwrap());
@@ -624,7 +714,6 @@ mod tests {
         cache.put("c", 3);
 
         // Access items multiple times to trigger frequency updates
-        // This would fail under Miri with the original buggy code
         for _ in 0..3 {
             assert_eq!(cache.get(&"a"), Some(&1));
             assert_eq!(cache.get(&"b"), Some(&2));
@@ -638,5 +727,63 @@ mod tests {
             *val += 10;
         }
         assert_eq!(cache.get(&"a"), Some(&11));
+    }
+
+    // Test that LfuSegment works correctly (internal tests)
+    #[test]
+    fn test_lfu_segment_directly() {
+        let mut segment: LfuSegment<&str, i32, DefaultHashBuilder> =
+            LfuSegment::with_hasher(NonZeroUsize::new(3).unwrap(), DefaultHashBuilder::default());
+
+        assert_eq!(segment.len(), 0);
+        assert!(segment.is_empty());
+        assert_eq!(segment.cap().get(), 3);
+
+        segment.put("a", 1);
+        segment.put("b", 2);
+        assert_eq!(segment.len(), 2);
+
+        // Access to increase frequency
+        assert_eq!(segment.get(&"a"), Some(&1));
+        assert_eq!(segment.get(&"a"), Some(&1));
+        assert_eq!(segment.get(&"b"), Some(&2));
+    }
+
+    #[test]
+    fn test_lfu_concurrent_access() {
+        extern crate std;
+        use std::sync::{Arc, Mutex};
+        use std::thread;
+        use std::vec::Vec;
+
+        let cache = Arc::new(Mutex::new(LfuCache::new(NonZeroUsize::new(100).unwrap())));
+        let num_threads = 4;
+        let ops_per_thread = 100;
+
+        let mut handles: Vec<std::thread::JoinHandle<()>> = Vec::new();
+
+        for t in 0..num_threads {
+            let cache = Arc::clone(&cache);
+            handles.push(thread::spawn(move || {
+                for i in 0..ops_per_thread {
+                    let key = std::format!("key_{}_{}", t, i);
+                    let mut guard = cache.lock().unwrap();
+                    guard.put(key.clone(), i);
+                    // Access some keys multiple times to test frequency tracking
+                    if i % 3 == 0 {
+                        let _ = guard.get(&key);
+                        let _ = guard.get(&key);
+                    }
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let mut guard = cache.lock().unwrap();
+        assert!(guard.len() <= 100);
+        guard.clear(); // Clean up for MIRI
     }
 }
