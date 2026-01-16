@@ -209,7 +209,7 @@ where
     {
         let idx = self.segment_index(key);
         let mut segment = self.segments[idx].lock();
-        segment.pop(key)
+        segment.remove(key)
     }
 
     /// Returns `true` if the cache contains the specified key.
@@ -228,6 +228,43 @@ where
         for segment in self.segments.iter() {
             segment.lock().clear();
         }
+    }
+
+    /// Removes and returns an eviction candidate from any segment.
+    ///
+    /// This iterates through segments and returns the first item that can be popped.
+    /// Note that in a concurrent setting, this may not return the globally lowest
+    /// priority item, but rather the lowest priority item from the first non-empty segment.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some((key, value))` if an item was popped, `None` if all segments are empty.
+    pub fn pop(&self) -> Option<(K, V)> {
+        for segment in self.segments.iter() {
+            let mut guard = segment.lock();
+            if let Some(item) = guard.pop() {
+                return Some(item);
+            }
+        }
+        None
+    }
+
+    /// Removes and returns the highest priority item from any segment (reverse of pop).
+    ///
+    /// This is the opposite of `pop()` - it iterates through segments and returns
+    /// the first highest-priority item found instead of the lowest-priority item.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some((key, value))` if an item was popped, `None` if all segments are empty.
+    pub fn popr(&self) -> Option<(K, V)> {
+        for segment in self.segments.iter() {
+            let mut guard = segment.lock();
+            if let Some(item) = guard.popr() {
+                return Some(item);
+            }
+        }
+        None
     }
 }
 

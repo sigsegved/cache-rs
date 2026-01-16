@@ -214,6 +214,48 @@ where
             segment.lock().clear();
         }
     }
+
+    /// Removes and returns an eviction candidate from any segment.
+    ///
+    /// This iterates through segments and returns the first item that can be popped.
+    /// For SLRU, this prefers the probationary segment within each segment.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some((key, value))` if an item was popped, `None` if all segments are empty.
+    pub fn pop(&self) -> Option<(K, V)>
+    where
+        V: Clone,
+    {
+        for segment in self.segments.iter() {
+            let mut guard = segment.lock();
+            if let Some(item) = guard.pop() {
+                return Some(item);
+            }
+        }
+        None
+    }
+
+    /// Removes and returns the most recently used item from any segment (reverse of pop).
+    ///
+    /// This is the opposite of `pop()` - it iterates through segments and returns
+    /// the first MRU item found, preferring the protected segment within each segment.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some((key, value))` if an item was popped, `None` if all segments are empty.
+    pub fn popr(&self) -> Option<(K, V)>
+    where
+        V: Clone,
+    {
+        for segment in self.segments.iter() {
+            let mut guard = segment.lock();
+            if let Some(item) = guard.popr() {
+                return Some(item);
+            }
+        }
+        None
+    }
 }
 
 impl<K, V, S> CacheMetrics for ConcurrentSlruCache<K, V, S>

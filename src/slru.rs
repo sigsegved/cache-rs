@@ -441,6 +441,92 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruSegment<K, V, S> {
         self.probationary.clear();
         self.protected.clear();
     }
+
+    /// Removes and returns the eviction candidate.
+    ///
+    /// For SLRU, this is the least recently used item from the probationary
+    /// segment. If the probationary segment is empty, returns the least
+    /// recently used item from the protected segment.
+    ///
+    /// Returns `None` if the cache is empty.
+    pub(crate) fn pop(&mut self) -> Option<(K, V)>
+    where
+        K: Clone,
+        V: Clone,
+    {
+        // First try probationary segment
+        if let Some(old_entry) = self.probationary.remove_last() {
+            unsafe {
+                // SAFETY: entry comes from probationary.remove_last()
+                let entry_ptr = Box::into_raw(old_entry);
+                let (key, value) = (*entry_ptr).get_value().clone();
+                let object_size = self.estimate_object_size(&key, &value);
+                self.map.remove(&key);
+                self.metrics.record_probationary_eviction(object_size);
+                let _ = Box::from_raw(entry_ptr);
+                return Some((key, value));
+            }
+        }
+
+        // If probationary is empty, try protected segment
+        if let Some(old_entry) = self.protected.remove_last() {
+            unsafe {
+                // SAFETY: entry comes from protected.remove_last()
+                let entry_ptr = Box::into_raw(old_entry);
+                let (key, value) = (*entry_ptr).get_value().clone();
+                let object_size = self.estimate_object_size(&key, &value);
+                self.map.remove(&key);
+                self.metrics.record_protected_eviction(object_size);
+                let _ = Box::from_raw(entry_ptr);
+                return Some((key, value));
+            }
+        }
+
+        None
+    }
+
+    /// Removes and returns the most recently used item (reverse of pop).
+    ///
+    /// This is the opposite of `pop()` - instead of popping from the probationary
+    /// segment, it pops from the protected segment first. If the protected segment
+    /// is empty, it falls back to the probationary segment.
+    ///
+    /// Returns `None` if the cache is empty.
+    pub(crate) fn popr(&mut self) -> Option<(K, V)>
+    where
+        K: Clone,
+        V: Clone,
+    {
+        // First try protected segment (most valuable items)
+        if let Some(entry) = self.protected.remove_first() {
+            unsafe {
+                // SAFETY: entry comes from protected.remove_first()
+                let entry_ptr = Box::into_raw(entry);
+                let (key, value) = (*entry_ptr).get_value().clone();
+                let object_size = self.estimate_object_size(&key, &value);
+                self.map.remove(&key);
+                self.metrics.record_protected_eviction(object_size);
+                let _ = Box::from_raw(entry_ptr);
+                return Some((key, value));
+            }
+        }
+
+        // If protected is empty, try probationary segment
+        if let Some(entry) = self.probationary.remove_first() {
+            unsafe {
+                // SAFETY: entry comes from probationary.remove_first()
+                let entry_ptr = Box::into_raw(entry);
+                let (key, value) = (*entry_ptr).get_value().clone();
+                let object_size = self.estimate_object_size(&key, &value);
+                self.map.remove(&key);
+                self.metrics.record_probationary_eviction(object_size);
+                let _ = Box::from_raw(entry_ptr);
+                return Some((key, value));
+            }
+        }
+
+        None
+    }
 }
 
 // Implement Debug for SlruSegment manually since it contains raw pointers
@@ -621,6 +707,66 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruCache<K, V, S> {
     #[inline]
     pub fn clear(&mut self) {
         self.segment.clear()
+    }
+
+    /// Removes and returns the eviction candidate.
+    ///
+    /// For SLRU, this is the least recently used item from the probationary
+    /// segment. If the probationary segment is empty, returns the least
+    /// recently used item from the protected segment.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cache_rs::slru::SlruCache;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let mut cache = SlruCache::new(
+    ///     NonZeroUsize::new(4).unwrap(),
+    ///     NonZeroUsize::new(2).unwrap()
+    /// );
+    /// cache.put("a", 1);
+    /// cache.put("b", 2);
+    ///
+    /// // Pop the eviction candidate (from probationary segment)
+    /// assert_eq!(cache.pop(), Some(("a", 1)));
+    /// ```
+    #[inline]
+    pub fn pop(&mut self) -> Option<(K, V)>
+    where
+        V: Clone,
+    {
+        self.segment.pop()
+    }
+
+    /// Removes and returns the most recently used item (reverse of pop).
+    ///
+    /// This is the opposite of `pop()` - instead of popping from the probationary
+    /// segment, it pops from the protected segment first.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cache_rs::slru::SlruCache;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let mut cache = SlruCache::new(
+    ///     NonZeroUsize::new(4).unwrap(),
+    ///     NonZeroUsize::new(2).unwrap()
+    /// );
+    /// cache.put("a", 1);
+    /// cache.put("b", 2);
+    /// cache.get(&"a"); // Promote "a" to protected
+    ///
+    /// // Pop the most recently used item
+    /// assert_eq!(cache.popr(), Some(("a", 1)));
+    /// ```
+    #[inline]
+    pub fn popr(&mut self) -> Option<(K, V)>
+    where
+        V: Clone,
+    {
+        self.segment.popr()
     }
 }
 

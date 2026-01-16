@@ -196,6 +196,43 @@ where
             segment.lock().clear();
         }
     }
+
+    /// Removes and returns an eviction candidate from any segment.
+    ///
+    /// This iterates through segments and returns the first item that can be popped.
+    /// Note that in a concurrent setting, this may not return the globally lowest
+    /// frequency item, but rather the lowest frequency item from the first non-empty segment.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some((key, value))` if an item was popped, `None` if all segments are empty.
+    pub fn pop(&self) -> Option<(K, V)> {
+        for segment in self.segments.iter() {
+            let mut guard = segment.lock();
+            if let Some(item) = guard.pop() {
+                return Some(item);
+            }
+        }
+        None
+    }
+
+    /// Removes and returns the highest frequency item from any segment (reverse of pop).
+    ///
+    /// This is the opposite of `pop()` - it iterates through segments and returns
+    /// the first highest-frequency item found instead of the lowest-frequency item.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some((key, value))` if an item was popped, `None` if all segments are empty.
+    pub fn popr(&self) -> Option<(K, V)> {
+        for segment in self.segments.iter() {
+            let mut guard = segment.lock();
+            if let Some(item) = guard.popr() {
+                return Some(item);
+            }
+        }
+        None
+    }
 }
 
 impl<K, V, S> CacheMetrics for ConcurrentLfuCache<K, V, S>

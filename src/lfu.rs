@@ -334,6 +334,84 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
         self.min_frequency = 1;
     }
 
+    /// Removes and returns the eviction candidate (least frequently used item).
+    ///
+    /// For LFU, this is the item with the lowest frequency. If there are multiple
+    /// items with the same lowest frequency, the least recently used among them
+    /// is returned.
+    ///
+    /// Returns `None` if the cache is empty.
+    pub(crate) fn pop(&mut self) -> Option<(K, V)>
+    where
+        K: Clone,
+    {
+        if self.is_empty() {
+            return None;
+        }
+
+        let min_frequency = self.min_frequency;
+        let min_freq_list = self.frequency_lists.get_mut(&min_frequency)?;
+        let old_entry = min_freq_list.remove_last()?;
+        let is_list_empty = min_freq_list.is_empty();
+
+        unsafe {
+            // SAFETY: entry comes from frequency_lists.remove_last()
+            let entry_ptr = Box::into_raw(old_entry);
+            let (key, value) = (*entry_ptr).get_value().clone();
+            let object_size = mem::size_of::<K>() as u64 + mem::size_of::<V>() as u64 + 64;
+            self.map.remove(&key);
+            self.metrics.core.record_eviction(object_size);
+
+            // Update min_frequency if the list is now empty
+            if is_list_empty {
+                self.frequency_lists.remove(&min_frequency);
+                self.min_frequency = self.frequency_lists.keys().copied().next().unwrap_or(1);
+            }
+
+            let _ = Box::from_raw(entry_ptr);
+            Some((key, value))
+        }
+    }
+
+    /// Removes and returns the item with the highest frequency (reverse of pop).
+    ///
+    /// This is the opposite of `pop()` - instead of returning the lowest frequency item,
+    /// it returns the highest frequency item. If there are multiple items with the same
+    /// highest frequency, the most recently used among them is returned.
+    ///
+    /// Returns `None` if the cache is empty.
+    pub(crate) fn popr(&mut self) -> Option<(K, V)>
+    where
+        K: Clone,
+    {
+        if self.is_empty() {
+            return None;
+        }
+
+        // Get the highest frequency (last key in BTreeMap)
+        let max_frequency = *self.frequency_lists.keys().next_back()?;
+        let max_freq_list = self.frequency_lists.get_mut(&max_frequency)?;
+        let entry = max_freq_list.remove_first()?;
+        let is_list_empty = max_freq_list.is_empty();
+
+        unsafe {
+            // SAFETY: entry comes from frequency_lists.remove_first()
+            let entry_ptr = Box::into_raw(entry);
+            let (key, value) = (*entry_ptr).get_value().clone();
+            let object_size = mem::size_of::<K>() as u64 + mem::size_of::<V>() as u64 + 64;
+            self.map.remove(&key);
+            self.metrics.core.record_eviction(object_size);
+
+            // Remove empty frequency list
+            if is_list_empty {
+                self.frequency_lists.remove(&max_frequency);
+            }
+
+            let _ = Box::from_raw(entry_ptr);
+            Some((key, value))
+        }
+    }
+
     /// Records a cache miss for metrics tracking
     #[inline]
     pub(crate) fn record_miss(&mut self, object_size: u64) {
@@ -492,6 +570,62 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
     #[inline]
     pub fn clear(&mut self) {
         self.segment.clear()
+    }
+
+    /// Removes and returns the eviction candidate (least frequently used item).
+    ///
+    /// For LFU, this is the item with the lowest frequency. If there are multiple
+    /// items with the same lowest frequency, the least recently used among them
+    /// is returned.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cache_rs::lfu::LfuCache;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let mut cache = LfuCache::new(NonZeroUsize::new(2).unwrap());
+    /// cache.put("a", 1);
+    /// cache.put("b", 2);
+    /// cache.get(&"b"); // Increase frequency of "b"
+    ///
+    /// // Pop the eviction candidate (lowest frequency item)
+    /// assert_eq!(cache.pop(), Some(("a", 1)));
+    /// ```
+    #[inline]
+    pub fn pop(&mut self) -> Option<(K, V)>
+    where
+        K: Clone,
+    {
+        self.segment.pop()
+    }
+
+    /// Removes and returns the item with the highest frequency (reverse of pop).
+    ///
+    /// This is the opposite of `pop()` - instead of returning the lowest frequency item,
+    /// it returns the highest frequency item.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cache_rs::lfu::LfuCache;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let mut cache = LfuCache::new(NonZeroUsize::new(2).unwrap());
+    /// cache.put("a", 1);
+    /// cache.put("b", 2);
+    /// cache.get(&"b"); // Increase frequency of "b"
+    /// cache.get(&"b"); // Increase frequency again
+    ///
+    /// // Pop the highest frequency item
+    /// assert_eq!(cache.popr(), Some(("b", 2)));
+    /// ```
+    #[inline]
+    pub fn popr(&mut self) -> Option<(K, V)>
+    where
+        K: Clone,
+    {
+        self.segment.popr()
     }
 
     /// Records a cache miss for metrics tracking (to be called by simulation system)

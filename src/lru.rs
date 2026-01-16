@@ -234,6 +234,53 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
         self.map.clear();
         self.list.clear();
     }
+
+    /// Removes and returns the eviction candidate (least recently used item).
+    ///
+    /// Returns `None` if the cache is empty.
+    pub(crate) fn pop(&mut self) -> Option<(K, V)>
+    where
+        K: Clone,
+    {
+        let old_entry = self.list.remove_last()?;
+        unsafe {
+            // SAFETY: entry comes from list.remove_last() which returns valid entries
+            let entry_ptr = Box::into_raw(old_entry);
+            let (key, value) = (*entry_ptr).get_value();
+            let key = key.clone();
+            let value = value.clone();
+            let object_size = self.estimate_object_size(&key, &value);
+            self.map.remove(&key);
+            self.metrics.core.record_eviction(object_size);
+            let _ = Box::from_raw(entry_ptr);
+            Some((key, value))
+        }
+    }
+
+    /// Removes and returns the most recently used item (reverse of pop).
+    ///
+    /// This is the opposite of `pop()` - instead of returning the eviction candidate,
+    /// it returns the most recently accessed or inserted item.
+    ///
+    /// Returns `None` if the cache is empty.
+    pub(crate) fn popr(&mut self) -> Option<(K, V)>
+    where
+        K: Clone,
+    {
+        let entry = self.list.remove_first()?;
+        unsafe {
+            // SAFETY: entry comes from list.remove_first() which returns valid entries
+            let entry_ptr = Box::into_raw(entry);
+            let (key, value) = (*entry_ptr).get_value();
+            let key = key.clone();
+            let value = value.clone();
+            let object_size = self.estimate_object_size(&key, &value);
+            self.map.remove(&key);
+            self.metrics.core.record_eviction(object_size);
+            let _ = Box::from_raw(entry_ptr);
+            Some((key, value))
+        }
+    }
 }
 
 impl<K, V, S> core::fmt::Debug for LruSegment<K, V, S> {
@@ -349,6 +396,52 @@ impl<K: Hash + Eq + Clone, V: Clone, S: BuildHasher> LruCache<K, V, S> {
     #[inline]
     pub fn clear(&mut self) {
         self.segment.clear()
+    }
+
+    /// Removes and returns the eviction candidate (least recently used item).
+    ///
+    /// For LRU, this is equivalent to `pop_oldest()`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cache_rs::LruCache;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+    /// cache.put("a", 1);
+    /// cache.put("b", 2);
+    ///
+    /// // Pop the eviction candidate (LRU item)
+    /// assert_eq!(cache.pop(), Some(("a", 1)));
+    /// assert_eq!(cache.len(), 1);
+    /// ```
+    #[inline]
+    pub fn pop(&mut self) -> Option<(K, V)> {
+        self.segment.pop()
+    }
+
+    /// Removes and returns the most recently used item (reverse of pop).
+    ///
+    /// This is the opposite of `pop()` - instead of returning the eviction candidate,
+    /// it returns the most recently accessed or inserted item.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cache_rs::LruCache;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+    /// cache.put("a", 1);
+    /// cache.put("b", 2);
+    ///
+    /// // Pop the most recently used item
+    /// assert_eq!(cache.popr(), Some(("b", 2)));
+    /// ```
+    #[inline]
+    pub fn popr(&mut self) -> Option<(K, V)> {
+        self.segment.popr()
     }
 
     pub fn iter(&self) -> Iter<'_, K, V> {

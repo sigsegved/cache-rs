@@ -457,6 +457,92 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
         self.global_age = 0;
         self.min_priority = 0;
     }
+
+    /// Removes and returns the eviction candidate (lowest priority item).
+    ///
+    /// For LFUDA, this is the item with the lowest effective priority
+    /// (frequency + age_at_insertion). This also updates the global age
+    /// to the evicted item's priority.
+    ///
+    /// Returns `None` if the cache is empty.
+    pub(crate) fn pop(&mut self) -> Option<(K, V)>
+    where
+        K: Clone,
+    {
+        if self.is_empty() {
+            return None;
+        }
+
+        let min_priority = *self.priority_lists.keys().next()?;
+        let min_priority_list = self.priority_lists.get_mut(&min_priority)?;
+        let old_entry = min_priority_list.remove_last()?;
+        let is_list_empty = min_priority_list.is_empty();
+
+        unsafe {
+            // SAFETY: entry comes from priority_lists.remove_last()
+            let entry_ptr = Box::into_raw(old_entry);
+            let (key, value) = (*entry_ptr).get_value().clone();
+            let object_size = mem::size_of::<K>() as u64 + mem::size_of::<V>() as u64 + 64;
+            self.map.remove(&key);
+            self.metrics.core.record_eviction(object_size);
+
+            // Update global age to the evicted item's priority (LFUDA aging)
+            self.global_age = min_priority;
+
+            // Remove empty priority list and update min_priority
+            if is_list_empty {
+                self.priority_lists.remove(&min_priority);
+                self.min_priority = self
+                    .priority_lists
+                    .keys()
+                    .copied()
+                    .next()
+                    .unwrap_or(self.global_age);
+            }
+
+            let _ = Box::from_raw(entry_ptr);
+            Some((key, value))
+        }
+    }
+
+    /// Removes and returns the item with the highest priority (reverse of pop).
+    ///
+    /// This is the opposite of `pop()` - instead of returning the lowest priority item,
+    /// it returns the highest priority item. If there are multiple items with the same
+    /// highest priority, the most recently used among them is returned.
+    ///
+    /// Returns `None` if the cache is empty.
+    pub(crate) fn popr(&mut self) -> Option<(K, V)>
+    where
+        K: Clone,
+    {
+        if self.is_empty() {
+            return None;
+        }
+
+        // Get the highest priority (last key in BTreeMap)
+        let max_priority = *self.priority_lists.keys().next_back()?;
+        let max_priority_list = self.priority_lists.get_mut(&max_priority)?;
+        let entry = max_priority_list.remove_first()?;
+        let is_list_empty = max_priority_list.is_empty();
+
+        unsafe {
+            // SAFETY: entry comes from priority_lists.remove_first()
+            let entry_ptr = Box::into_raw(entry);
+            let (key, value) = (*entry_ptr).get_value().clone();
+            let object_size = mem::size_of::<K>() as u64 + mem::size_of::<V>() as u64 + 64;
+            self.map.remove(&key);
+            self.metrics.core.record_eviction(object_size);
+
+            // Remove empty priority list
+            if is_list_empty {
+                self.priority_lists.remove(&max_priority);
+            }
+
+            let _ = Box::from_raw(entry_ptr);
+            Some((key, value))
+        }
+    }
 }
 
 // Implement Debug for LfudaSegment manually since it contains raw pointers
@@ -627,6 +713,61 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
     #[inline]
     pub fn clear(&mut self) {
         self.segment.clear()
+    }
+
+    /// Removes and returns the eviction candidate (lowest priority item).
+    ///
+    /// For LFUDA, this is the item with the lowest effective priority
+    /// (frequency + age_at_insertion). This also updates the global age.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cache_rs::lfuda::LfudaCache;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let mut cache = LfudaCache::new(NonZeroUsize::new(2).unwrap());
+    /// cache.put("a", 1);
+    /// cache.put("b", 2);
+    /// cache.get(&"b"); // Increase frequency of "b"
+    ///
+    /// // Pop the eviction candidate (lowest priority item)
+    /// assert_eq!(cache.pop(), Some(("a", 1)));
+    /// ```
+    #[inline]
+    pub fn pop(&mut self) -> Option<(K, V)>
+    where
+        K: Clone,
+    {
+        self.segment.pop()
+    }
+
+    /// Removes and returns the item with the highest priority (reverse of pop).
+    ///
+    /// This is the opposite of `pop()` - instead of returning the lowest priority item,
+    /// it returns the highest priority item.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cache_rs::lfuda::LfudaCache;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let mut cache = LfudaCache::new(NonZeroUsize::new(2).unwrap());
+    /// cache.put("a", 1);
+    /// cache.put("b", 2);
+    /// cache.get(&"b"); // Increase frequency of "b"
+    /// cache.get(&"b"); // Increase frequency again
+    ///
+    /// // Pop the highest priority item
+    /// assert_eq!(cache.popr(), Some(("b", 2)));
+    /// ```
+    #[inline]
+    pub fn popr(&mut self) -> Option<(K, V)>
+    where
+        K: Clone,
+    {
+        self.segment.popr()
     }
 }
 
