@@ -47,20 +47,38 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - name: Run clippy
+      - name: Run clippy (default features)
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: Check compilation
+      - name: Run clippy (concurrent)
+        run: cargo clippy --all-targets --features concurrent -- -D warnings
+
+      - name: Run clippy (std + concurrent)
+        run: cargo clippy --all-targets --features std,concurrent -- -D warnings
+
+      - name: Check compilation (default features)
         run: cargo check --all-targets
+
+      - name: Check compilation (concurrent)
+        run: cargo check --all-targets --features concurrent
+
+      - name: Check compilation (std + concurrent)
+        run: cargo check --all-targets --features std,concurrent
 
   # Core test suite - runs on primary platforms with MSRV and stable
   test:
-    name: Test Suite
+    name: Test Suite (${{ matrix.features }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         rust: [1.74.0, stable]
+        features: ["default", "concurrent"]
+        include:
+          # Test with std + concurrent on stable (excludes nightly which requires nightly toolchain)
+          - os: ubuntu-latest
+            rust: stable
+            features: "std-concurrent"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -77,17 +95,36 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-test-${{ matrix.rust }}-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-test-${{ matrix.rust }}-${{ matrix.features }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
+            ${{ runner.os }}-cargo-test-${{ matrix.rust }}-${{ matrix.features }}-
             ${{ runner.os }}-cargo-test-${{ matrix.rust }}-
             ${{ runner.os }}-cargo-${{ matrix.rust }}-
             ${{ runner.os }}-cargo-
 
-      - name: Build all targets
+      - name: Build all targets (default features)
+        if: matrix.features == 'default'
         run: cargo build --all-targets
 
-      - name: Run tests
+      - name: Run tests (default features)
+        if: matrix.features == 'default'
         run: cargo test --verbose
+
+      - name: Build all targets (concurrent)
+        if: matrix.features == 'concurrent'
+        run: cargo build --all-targets --features concurrent
+
+      - name: Run tests (concurrent)
+        if: matrix.features == 'concurrent'
+        run: cargo test --verbose --features concurrent
+
+      - name: Build all targets (std + concurrent)
+        if: matrix.features == 'std-concurrent'
+        run: cargo build --all-targets --features std,concurrent
+
+      - name: Run tests (std + concurrent)
+        if: matrix.features == 'std-concurrent'
+        run: cargo test --verbose --features std,concurrent
 
   # Extended testing with nightly - allows failures
   test-nightly:
