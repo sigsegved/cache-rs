@@ -365,7 +365,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
         }
     }
 
-    pub(crate) fn pop<Q>(&mut self, key: &Q) -> Option<V>
+    /// Removes a key from the segment, returning the value if the key was present.
+    pub(crate) fn remove<Q>(&mut self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
@@ -390,6 +391,97 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
             }
         } else {
             None
+        }
+    }
+
+    /// Removes and returns the eviction candidate (lowest priority item).
+    ///
+    /// For GDSF, this is the item with the lowest priority based on the
+    /// greedy dual-size frequency formula. This also updates the global age.
+    ///
+    /// Returns `None` if the cache is empty.
+    pub(crate) fn pop(&mut self) -> Option<(K, V)>
+    where
+        K: Clone,
+    {
+        if self.is_empty() {
+            return None;
+        }
+
+        let min_priority_key = *self.priority_lists.keys().next()?;
+        let list = self.priority_lists.get_mut(&min_priority_key)?;
+        let entry = list.remove_last()?;
+
+        unsafe {
+            // SAFETY: entry comes from priority_lists.remove_last()
+            let entry_ptr = Box::into_raw(entry);
+            let (key, value) = (*entry_ptr).get_value();
+            let key = key.clone();
+            let value = value.clone();
+
+            let priority_to_update = if let Some(metadata) = self.map.get(&key) {
+                metadata.priority
+            } else {
+                self.global_age
+            };
+
+            let estimated_size = mem::size_of::<K>() as u64 + mem::size_of::<V>() as u64 + 64;
+            self.metrics.core.record_eviction(estimated_size);
+            self.metrics.record_size_based_eviction();
+            self.metrics.record_aging_event(priority_to_update);
+
+            self.global_age = priority_to_update;
+            self.map.remove(&key);
+
+            // Remove empty priority list
+            if list.is_empty() {
+                self.priority_lists.remove(&min_priority_key);
+            }
+
+            let _ = Box::from_raw(entry_ptr);
+            Some((key, value))
+        }
+    }
+
+    /// Removes and returns the item with the highest priority (reverse of pop).
+    ///
+    /// This is the opposite of `pop()` - instead of returning the lowest priority item,
+    /// it returns the highest priority item. If there are multiple items with the same
+    /// highest priority, the most recently used among them is returned.
+    ///
+    /// Returns `None` if the cache is empty.
+    pub(crate) fn popr(&mut self) -> Option<(K, V)>
+    where
+        K: Clone,
+    {
+        if self.is_empty() {
+            return None;
+        }
+
+        // Get the highest priority (last key in BTreeMap)
+        let max_priority_key = *self.priority_lists.keys().next_back()?;
+        let list = self.priority_lists.get_mut(&max_priority_key)?;
+        let entry = list.remove_first()?;
+
+        unsafe {
+            // SAFETY: entry comes from priority_lists.remove_first()
+            let entry_ptr = Box::into_raw(entry);
+            let (key, value) = (*entry_ptr).get_value();
+            let key = key.clone();
+            let value = value.clone();
+
+            let estimated_size = mem::size_of::<K>() as u64 + mem::size_of::<V>() as u64 + 64;
+            self.metrics.core.record_eviction(estimated_size);
+
+            self.map.remove(&key);
+
+            // Remove empty priority list
+            if list.is_empty() {
+                self.priority_lists.remove(&max_priority_key);
+            }
+
+            let _ = Box::from_raw(entry_ptr);
+            Some((key, value))
         }
     }
 
@@ -484,13 +576,71 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfCache<K, V, S> {
         self.segment.put(key, val, size)
     }
 
+    /// Removes a key from the cache, returning the value if present.
     #[inline]
-    pub fn pop<Q>(&mut self, key: &Q) -> Option<V>
+    pub fn remove<Q>(&mut self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
-        self.segment.pop(key)
+        self.segment.remove(key)
+    }
+
+    /// Removes and returns the eviction candidate (lowest priority item).
+    ///
+    /// For GDSF, this is the item with the lowest priority based on the
+    /// greedy dual-size frequency formula. This also updates the global age.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cache_rs::gdsf::GdsfCache;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let mut cache = GdsfCache::new(NonZeroUsize::new(2).unwrap());
+    /// cache.put("a", 1, 10);
+    /// cache.put("b", 2, 20);
+    /// cache.get(&"b"); // Increase priority of "b"
+    ///
+    /// // Pop the eviction candidate (lowest priority item)
+    /// let popped = cache.pop();
+    /// assert!(popped.is_some());
+    /// ```
+    #[inline]
+    pub fn pop(&mut self) -> Option<(K, V)>
+    where
+        K: Clone,
+    {
+        self.segment.pop()
+    }
+
+    /// Removes and returns the item with the highest priority (reverse of pop).
+    ///
+    /// This is the opposite of `pop()` - instead of returning the lowest priority item,
+    /// it returns the highest priority item.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cache_rs::gdsf::GdsfCache;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let mut cache = GdsfCache::new(NonZeroUsize::new(2).unwrap());
+    /// cache.put("a", 1, 10);
+    /// cache.put("b", 2, 20);
+    /// cache.get(&"b"); // Increase priority of "b"
+    /// cache.get(&"b"); // Increase priority again
+    ///
+    /// // Pop the highest priority item
+    /// let popped = cache.popr();
+    /// assert!(popped.is_some());
+    /// ```
+    #[inline]
+    pub fn popr(&mut self) -> Option<(K, V)>
+    where
+        K: Clone,
+    {
+        self.segment.popr()
     }
 
     #[inline]
@@ -591,18 +741,31 @@ mod tests {
     }
 
     #[test]
+    fn test_gdsf_remove() {
+        let mut cache = GdsfCache::new(NonZeroUsize::new(2).unwrap());
+
+        cache.put("a", 1, 1);
+        cache.put("b", 2, 1);
+
+        assert_eq!(cache.remove(&"a"), Some(1));
+        assert_eq!(cache.len(), 1);
+        assert!(!cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
+
+        assert_eq!(cache.remove(&"nonexistent"), None);
+    }
+
+    #[test]
     fn test_gdsf_pop() {
         let mut cache = GdsfCache::new(NonZeroUsize::new(2).unwrap());
 
         cache.put("a", 1, 1);
         cache.put("b", 2, 1);
 
-        assert_eq!(cache.pop(&"a"), Some(1));
+        // Pop the eviction candidate
+        let popped = cache.pop();
+        assert!(popped.is_some());
         assert_eq!(cache.len(), 1);
-        assert!(!cache.contains_key(&"a"));
-        assert!(cache.contains_key(&"b"));
-
-        assert_eq!(cache.pop(&"nonexistent"), None);
     }
 
     #[test]

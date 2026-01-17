@@ -284,6 +284,43 @@ where
         }
     }
 
+    /// Removes and returns an eviction candidate from any segment.
+    ///
+    /// This iterates through segments and returns the first item that can be popped.
+    /// Note that in a concurrent setting, this may not return the globally "oldest"
+    /// item, but rather the oldest item from the first non-empty segment.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some((key, value))` if an item was popped, `None` if all segments are empty.
+    pub fn pop(&self) -> Option<(K, V)> {
+        for segment in self.segments.iter() {
+            let mut guard = segment.lock();
+            if let Some(item) = guard.pop() {
+                return Some(item);
+            }
+        }
+        None
+    }
+
+    /// Removes and returns the most recently used item from any segment (reverse of pop).
+    ///
+    /// This is the opposite of `pop()` - it iterates through segments and returns
+    /// the first MRU item found instead of the LRU item.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some((key, value))` if an item was popped, `None` if all segments are empty.
+    pub fn popr(&self) -> Option<(K, V)> {
+        for segment in self.segments.iter() {
+            let mut guard = segment.lock();
+            if let Some(item) = guard.popr() {
+                return Some(item);
+            }
+        }
+        None
+    }
+
     /// Records a cache miss for metrics purposes.
     pub fn record_miss(&self, object_size: u64) {
         // Record on the first segment (metrics are aggregated anyway)
