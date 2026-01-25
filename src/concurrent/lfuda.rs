@@ -1,7 +1,7 @@
 //! Concurrent LFUDA Cache Implementation
 //!
-//! Provides a thread-safe LFUDA cache using segmented storage for high-performance
-//! multi-threaded access. This is the concurrent equivalent of [`LfudaCache`][crate::LfudaCache].
+//! A thread-safe LFUDA cache using lock striping (segmented storage) for high-performance
+//! concurrent access. This is the multi-threaded counterpart to [`LfudaCache`](crate::LfudaCache).
 //!
 //! # How It Works
 //!
@@ -10,23 +10,108 @@
 //! priority. Newly inserted items start with priority = age + 1, giving them a fair
 //! chance against long-cached items with high frequency counts.
 //!
+//! The cache partitions keys across multiple independent segments, each with its own
+//! lock and independent aging state.
+//!
+//! ```text
+//! ┌──────────────────────────────────────────────────────────────────────┐
+//! │                     ConcurrentLfudaCache                             │
+//! │                                                                      │
+//! │  hash(key) % N  ──>  Segment Selection                               │
+//! │                                                                      │
+//! │  ┌──────────────┐ ┌──────────────┐     ┌──────────────┐              │
+//! │  │  Segment 0   │ │  Segment 1   │ ... │  Segment N-1 │              │
+//! │  │  age=100     │ │  age=150     │     │  age=120     │              │
+//! │  │  ┌────────┐  │ │  ┌────────┐  │     │  ┌────────┐  │              │
+//! │  │  │ Mutex  │  │ │  │ Mutex  │  │     │  │ Mutex  │  │              │
+//! │  │  └────┬───┘  │ │  └────┬───┘  │     │  └────┬───┘  │              │
+//! │  │       │      │ │       │      │     │       │      │              │
+//! │  │  ┌────▼────┐ │ │  ┌────▼────┐ │     │  ┌────▼────┐ │              │
+//! │  │  │LfudaSeg │ │ │  │LfudaSeg │ │     │  │LfudaSeg │ │              │
+//! │  │  └─────────┘ │ │  └─────────┘ │     │  └─────────┘ │              │
+//! │  └──────────────┘ └──────────────┘     └──────────────┘              │
+//! └──────────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! ## Per-Segment Aging
+//!
+//! Each segment maintains its own global age counter. This means:
+//! - Aging happens independently in each segment
+//! - High-activity segments may age faster than low-activity ones
+//! - Items in different segments are not directly comparable by priority
+//!
+//! This is a deliberate trade-off: global aging would require cross-segment
+//! coordination, hurting concurrency.
+//!
+//! ## Trade-offs
+//!
+//! - **Pros**: Near-linear scaling, adapts to changing popularity per segment
+//! - **Cons**: Aging is local to each segment, not global
+//!
 //! # Performance Characteristics
 //!
-//! - **Time Complexity**: O(1) average for get, put, remove
-//! - **Adaptive**: Handles changing popularity patterns better than LFU
-//! - **Concurrency**: Near-linear scaling up to segment count
+//! | Metric | Value |
+//! |--------|-------|
+//! | Get/Put/Remove | O(1) average |
+//! | Concurrency | Near-linear scaling up to segment count |
+//! | Memory overhead | ~160 bytes per entry + one Mutex per segment |
+//! | Adaptability | Handles changing popularity patterns |
 //!
 //! # When to Use
 //!
-//! Use `ConcurrentLfudaCache` when:
+//! **Use ConcurrentLfudaCache when:**
+//! - Multiple threads need cache access
 //! - Item popularity changes over time
-//! - Long-running applications where old frequently-used items should eventually age out
+//! - Long-running applications where old items should eventually age out
 //! - You need frequency-based eviction with adaptation
+//!
+//! **Consider alternatives when:**
+//! - Single-threaded access only → use `LfudaCache`
+//! - Static popularity patterns → use `ConcurrentLfuCache` (simpler)
+//! - Recency-based access → use `ConcurrentLruCache`
+//! - Need global aging coordination → use `Mutex<LfudaCache>`
 //!
 //! # Thread Safety
 //!
-//! `ConcurrentLfudaCache` implements `Send` and `Sync` and can be safely shared
-//! across threads via `Arc`.
+//! `ConcurrentLfudaCache` is `Send + Sync` and can be shared via `Arc`.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use cache_rs::concurrent::ConcurrentLfudaCache;
+//! use std::sync::Arc;
+//! use std::thread;
+//!
+//! // Create a cache that adapts to changing popularity
+//! let cache = Arc::new(ConcurrentLfudaCache::new(10_000));
+//!
+//! // Phase 1: Establish initial popularity
+//! for i in 0..1000 {
+//!     cache.put(format!("old-{}", i), i);
+//!     for _ in 0..10 {
+//!         cache.get(&format!("old-{}", i));
+//!     }
+//! }
+//!
+//! // Phase 2: New content arrives, old content ages out
+//! let handles: Vec<_> = (0..4).map(|t| {
+//!     let cache = Arc::clone(&cache);
+//!     thread::spawn(move || {
+//!         for i in 0..5000 {
+//!             let key = format!("new-{}-{}", t, i);
+//!             cache.put(key.clone(), i as i32);
+//!             let _ = cache.get(&key);
+//!         }
+//!     })
+//! }).collect();
+//!
+//! for h in handles {
+//!     h.join().unwrap();
+//! }
+//!
+//! // Old items gradually evicted despite high historical frequency
+//! println!("Cache size: {}", cache.len());
+//! ```
 
 extern crate alloc;
 
@@ -68,6 +153,49 @@ where
     /// Creates a new concurrent LFUDA cache with custom segment count.
     pub fn with_segments(capacity: NonZeroUsize, segment_count: usize) -> Self {
         Self::with_segments_and_hasher(capacity, segment_count, DefaultHashBuilder::default())
+    }
+
+    /// Creates a size-based concurrent LFUDA cache.
+    pub fn with_max_size(max_size: u64) -> Self {
+        let max_entries = NonZeroUsize::new(10_000_000).unwrap();
+        Self::with_limits(max_entries, max_size)
+    }
+
+    /// Creates a dual-limit concurrent LFUDA cache.
+    pub fn with_limits(max_entries: NonZeroUsize, max_size: u64) -> Self {
+        Self::with_limits_and_segments(max_entries, max_size, default_segment_count())
+    }
+
+    /// Creates a dual-limit concurrent LFUDA cache with custom segment count.
+    pub fn with_limits_and_segments(
+        max_entries: NonZeroUsize,
+        max_size: u64,
+        segment_count: usize,
+    ) -> Self {
+        assert!(segment_count > 0, "segment_count must be greater than 0");
+        assert!(
+            max_entries.get() >= segment_count,
+            "max_entries must be >= segment_count"
+        );
+
+        let segment_capacity = max_entries.get() / segment_count;
+        let segment_cap = NonZeroUsize::new(segment_capacity.max(1)).unwrap();
+        let segment_max_size = max_size / segment_count as u64;
+
+        let segments: Vec<_> = (0..segment_count)
+            .map(|_| {
+                Mutex::new(LfudaSegment::with_hasher_and_size(
+                    segment_cap,
+                    DefaultHashBuilder::default(),
+                    segment_max_size,
+                ))
+            })
+            .collect();
+
+        Self {
+            segments: segments.into_boxed_slice(),
+            hash_builder: DefaultHashBuilder::default(),
+        }
     }
 }
 
@@ -182,6 +310,13 @@ where
         segment.put(key, value)
     }
 
+    /// Inserts a key-value pair with explicit size tracking.
+    pub fn put_with_size(&self, key: K, value: V, size: u64) -> Option<(K, V)> {
+        let idx = self.segment_index(&key);
+        let mut segment = self.segments[idx].lock();
+        segment.put_with_size(key, value, size)
+    }
+
     /// Removes a key from the cache, returning the value if it existed.
     pub fn remove<Q>(&self, key: &Q) -> Option<V>
     where
@@ -209,6 +344,16 @@ where
         for segment in self.segments.iter() {
             segment.lock().clear();
         }
+    }
+
+    /// Returns the current total size of cached content across all segments.
+    pub fn current_size(&self) -> u64 {
+        self.segments.iter().map(|s| s.lock().current_size()).sum()
+    }
+
+    /// Returns the maximum content size the cache can hold across all segments.
+    pub fn max_size(&self) -> u64 {
+        self.segments.iter().map(|s| s.lock().max_size()).sum()
     }
 }
 

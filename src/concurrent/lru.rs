@@ -1,31 +1,91 @@
 //! Concurrent LRU Cache Implementation
 //!
-//! Provides a thread-safe LRU cache using segmented storage for high-performance
-//! multi-threaded access. This is the concurrent equivalent of [`LruCache`][crate::LruCache].
+//! A thread-safe LRU cache using lock striping (segmented storage) for high-performance
+//! concurrent access. This is the multi-threaded counterpart to [`LruCache`](crate::LruCache).
 //!
 //! # How It Works
 //!
-//! The key space is partitioned across multiple segments using hash-based sharding.
-//! Each segment is protected by its own lock, allowing
-//! concurrent access to different segments without contention.
+//! The cache partitions keys across multiple independent segments, each with its own lock.
+//! This allows concurrent operations on different segments without contention.
+//!
+//! ```text
+//! ┌──────────────────────────────────────────────────────────────────────┐
+//! │                      ConcurrentLruCache                              │
+//! │                                                                      │
+//! │  hash(key) % N  ──▶  Segment Selection                               │
+//! │                                                                      │
+//! │  ┌──────────────┐ ┌──────────────┐     ┌──────────────┐              │
+//! │  │  Segment 0   │ │  Segment 1   │ ... │  Segment N-1 │              │
+//! │  │  ┌────────┐  │ │  ┌────────┐  │     │  ┌────────┐  │              │
+//! │  │  │ Mutex  │  │ │  │ Mutex  │  │     │  │ Mutex  │  │              │
+//! │  │  └────┬───┘  │ │  └────┬───┘  │     │  └────┬───┘  │              │
+//! │  │       │      │ │       │      │     │       │      │              │
+//! │  │  ┌────▼───┐  │ │  ┌────▼───┐  │     │  ┌────▼───┐  │              │
+//! │  │  │LruCache│  │ │  │LruCache│  │     │  │LruCache│  │              │
+//! │  │  └────────┘  │ │  └────────┘  │     │  └────────┘  │              │
+//! │  └──────────────┘ └──────────────┘     └──────────────┘              │
+//! └──────────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! ## Segment Count
+//!
+//! The default segment count is based on available CPU cores (typically 16).
+//! More segments = less contention but more memory overhead.
+//!
+//! ## Trade-offs
+//!
+//! - **Pros**: Near-linear scaling with thread count, no global lock
+//! - **Cons**: LRU ordering is per-segment, not global. An item might be evicted
+//!   from one segment while another segment has older items.
 //!
 //! # Performance Characteristics
 //!
-//! - **Time Complexity**: O(1) average for get, put, remove
-//! - **Concurrency**: Near-linear scaling up to segment count
-//! - **Overhead**: One Mutex per segment (~16 by default)
+//! | Metric | Value |
+//! |--------|-------|
+//! | Get/Put/Remove | O(1) average |
+//! | Concurrency | Near-linear scaling up to segment count |
+//! | Memory overhead | ~150 bytes per entry + one Mutex per segment |
 //!
 //! # When to Use
 //!
-//! Use `ConcurrentLruCache` when:
-//! - Multiple threads need to access the same cache
-//! - You need higher throughput than a single `Mutex<LruCache>`
-//! - Your workload has good key distribution
+//! **Use ConcurrentLruCache when:**
+//! - Multiple threads need cache access
+//! - You need better throughput than `Mutex<LruCache>`
+//! - Keys distribute evenly (hot keys in one segment will still contend)
+//!
+//! **Consider alternatives when:**
+//! - Single-threaded access only → use `LruCache`
+//! - Need strict global LRU ordering → use `Mutex<LruCache>`
+//! - Very hot keys → consider per-key caching or request coalescing
 //!
 //! # Thread Safety
 //!
-//! `ConcurrentLruCache` implements `Send` and `Sync` and can be safely shared
-//! across threads via `Arc`.
+//! `ConcurrentLruCache` is `Send + Sync` and can be shared via `Arc`.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use cache_rs::concurrent::ConcurrentLruCache;
+//! use std::sync::Arc;
+//! use std::thread;
+//!
+//! let cache = Arc::new(ConcurrentLruCache::new(10_000));
+//!
+//! let handles: Vec<_> = (0..4).map(|i| {
+//!     let cache = Arc::clone(&cache);
+//!     thread::spawn(move || {
+//!         for j in 0..1000 {
+//!             cache.put(format!("key-{}-{}", i, j), j);
+//!         }
+//!     })
+//! }).collect();
+//!
+//! for h in handles {
+//!     h.join().unwrap();
+//! }
+//!
+//! println!("Total entries: {}", cache.len());
+//! ```
 
 extern crate alloc;
 
@@ -50,30 +110,34 @@ use super::default_segment_count;
 
 /// A thread-safe LRU cache with segmented storage for high concurrency.
 ///
-/// This cache partitions the key space across multiple segments, each protected
-/// by its own lock. This allows concurrent access to different segments while
-/// maintaining LRU semantics within each segment.
+/// Keys are partitioned across multiple segments using hash-based sharding.
+/// Each segment has its own lock, allowing concurrent access to different
+/// segments without blocking.
 ///
 /// # Type Parameters
 ///
-/// - `K`: Key type, must implement `Hash + Eq + Clone + Send`
-/// - `V`: Value type, must implement `Clone + Send`
-/// - `S`: Hash builder type, defaults to `DefaultHashBuilder`
+/// - `K`: Key type. Must implement `Hash + Eq + Clone + Send`.
+/// - `V`: Value type. Must implement `Clone + Send`.
+/// - `S`: Hash builder type. Defaults to `DefaultHashBuilder`.
+///
+/// # Note on LRU Semantics
+///
+/// LRU ordering is maintained **per-segment**, not globally. This means an item
+/// in segment A might be evicted while segment B has items that were accessed
+/// less recently in wall-clock time. For most workloads with good key distribution,
+/// this approximation works well.
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use cache_rs::concurrent::ConcurrentLruCache;
 /// use std::sync::Arc;
-/// use std::thread;
 ///
 /// let cache = Arc::new(ConcurrentLruCache::new(1000));
 ///
-/// // Use from multiple threads
-/// let cache_clone = Arc::clone(&cache);
-/// thread::spawn(move || {
-///     cache_clone.put("key".to_string(), 42);
-/// });
+/// // Safe to use from multiple threads
+/// cache.put("key".to_string(), 42);
+/// assert_eq!(cache.get(&"key".to_string()), Some(42));
 /// ```
 pub struct ConcurrentLruCache<K, V, S = DefaultHashBuilder> {
     segments: Box<[Mutex<LruSegment<K, V, S>>]>,
@@ -85,35 +149,50 @@ where
     K: Hash + Eq + Clone + Send,
     V: Clone + Send,
 {
-    /// Creates a new concurrent LRU cache with the specified total capacity.
+    /// Creates a new concurrent LRU cache with the specified capacity.
     ///
-    /// The capacity is distributed evenly across the default number of segments.
+    /// Capacity is distributed evenly across the default number of segments
+    /// (typically 16, based on CPU count).
     ///
     /// # Arguments
     ///
-    /// * `capacity` - Total capacity across all segments
+    /// * `capacity` - Total maximum number of entries across all segments
     ///
     /// # Example
     ///
     /// ```rust,ignore
     /// use cache_rs::concurrent::ConcurrentLruCache;
     ///
-    /// let cache: ConcurrentLruCache<String, i32> = ConcurrentLruCache::new(1000);
+    /// let cache: ConcurrentLruCache<String, i32> = ConcurrentLruCache::new(10_000);
     /// ```
     pub fn new(capacity: NonZeroUsize) -> Self {
         Self::with_segments(capacity, default_segment_count())
     }
 
-    /// Creates a new concurrent LRU cache with the specified capacity and segment count.
+    /// Creates a concurrent LRU cache with a custom segment count.
+    ///
+    /// More segments = less lock contention but more memory overhead.
+    /// Use a power of 2 for optimal hash distribution.
     ///
     /// # Arguments
     ///
-    /// * `capacity` - Total capacity across all segments
-    /// * `segment_count` - Number of segments to use (should be a power of 2 for best performance)
+    /// * `capacity` - Total maximum entries across all segments
+    /// * `segment_count` - Number of independent segments (recommend power of 2)
     ///
     /// # Panics
     ///
-    /// Panics if `segment_count` is 0 or if `capacity < segment_count`.
+    /// - If `segment_count` is 0
+    /// - If `capacity < segment_count`
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use cache_rs::concurrent::ConcurrentLruCache;
+    ///
+    /// // 32 segments for high-contention workloads
+    /// let cache: ConcurrentLruCache<String, i32> =
+    ///     ConcurrentLruCache::with_segments(10_000, 32);
+    /// ```
     pub fn with_segments(capacity: NonZeroUsize, segment_count: usize) -> Self {
         assert!(segment_count > 0, "segment_count must be greater than 0");
         assert!(
@@ -123,6 +202,84 @@ where
 
         Self::with_segments_and_hasher(capacity, segment_count, DefaultHashBuilder::default())
     }
+
+    /// Creates a size-based concurrent LRU cache.
+    ///
+    /// Use this when you want to bound cache by total content size.
+    /// Entry count is set to a large default (10 million).
+    ///
+    /// # Arguments
+    ///
+    /// * `max_size` - Maximum total size of cached content
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use cache_rs::concurrent::ConcurrentLruCache;
+    ///
+    /// // 100MB cache for binary data
+    /// let cache: ConcurrentLruCache<String, Vec<u8>> =
+    ///     ConcurrentLruCache::with_max_size(100 * 1024 * 1024);
+    /// ```
+    pub fn with_max_size(max_size: u64) -> Self {
+        let max_entries = NonZeroUsize::new(10_000_000).unwrap();
+        Self::with_limits(max_entries, max_size)
+    }
+
+    /// Creates a dual-limit concurrent LRU cache.
+    ///
+    /// Eviction occurs when **either** limit would be exceeded.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_entries` - Maximum total entries across all segments
+    /// * `max_size` - Maximum total content size
+    pub fn with_limits(max_entries: NonZeroUsize, max_size: u64) -> Self {
+        Self::with_limits_and_segments(max_entries, max_size, default_segment_count())
+    }
+
+    /// Creates a dual-limit concurrent LRU cache with custom segment count.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_entries` - Maximum total entries
+    /// * `max_size` - Maximum total content size
+    /// * `segment_count` - Number of segments
+    ///
+    /// # Panics
+    ///
+    /// - If `segment_count` is 0
+    /// - If `max_entries < segment_count`
+    pub fn with_limits_and_segments(
+        max_entries: NonZeroUsize,
+        max_size: u64,
+        segment_count: usize,
+    ) -> Self {
+        assert!(segment_count > 0, "segment_count must be greater than 0");
+        assert!(
+            max_entries.get() >= segment_count,
+            "max_entries must be >= segment_count"
+        );
+
+        let segment_capacity = max_entries.get() / segment_count;
+        let segment_cap = NonZeroUsize::new(segment_capacity.max(1)).unwrap();
+        let segment_max_size = max_size / segment_count as u64;
+
+        let segments: Vec<_> = (0..segment_count)
+            .map(|_| {
+                Mutex::new(crate::lru::LruSegment::with_hasher_and_size(
+                    segment_cap,
+                    DefaultHashBuilder::default(),
+                    segment_max_size,
+                ))
+            })
+            .collect();
+
+        Self {
+            segments: segments.into_boxed_slice(),
+            hash_builder: DefaultHashBuilder::default(),
+        }
+    }
 }
 
 impl<K, V, S> ConcurrentLruCache<K, V, S>
@@ -131,7 +288,15 @@ where
     V: Clone + Send,
     S: BuildHasher + Clone + Send,
 {
-    /// Creates a new concurrent LRU cache with custom hasher.
+    /// Creates a concurrent LRU cache with a custom hash builder.
+    ///
+    /// Use this for deterministic hashing or DoS-resistant hashers.
+    ///
+    /// # Arguments
+    ///
+    /// * `capacity` - Total maximum entries
+    /// * `segment_count` - Number of segments
+    /// * `hash_builder` - Custom hash builder (will be cloned for each segment)
     pub fn with_segments_and_hasher(
         capacity: NonZeroUsize,
         segment_count: usize,
@@ -171,6 +336,9 @@ where
     }
 
     /// Returns the total number of entries across all segments.
+    ///
+    /// Note: This acquires a lock on each segment sequentially, so the
+    /// returned value may be slightly stale in high-concurrency scenarios.
     pub fn len(&self) -> usize {
         self.segments.iter().map(|s| s.lock().len()).sum()
     }
@@ -180,14 +348,18 @@ where
         self.segments.iter().all(|s| s.lock().is_empty())
     }
 
-    /// Gets a value from the cache.
+    /// Retrieves a value from the cache.
     ///
-    /// This clones the value to avoid holding the lock. For zero-copy access,
-    /// use `get_with()` instead.
+    /// Returns a **clone** of the value to avoid holding the lock. For operations
+    /// that don't need ownership, use [`get_with()`](Self::get_with) instead.
     ///
-    /// # Returns
+    /// If the key exists, it is moved to the MRU position within its segment.
     ///
-    /// Returns `Some(value)` if the key exists, `None` otherwise.
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let value = cache.get(&"key".to_string());
+    /// ```
     pub fn get<Q>(&self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
@@ -198,14 +370,20 @@ where
         segment.get(key).cloned()
     }
 
-    /// Gets a value and applies a function to it while holding the lock.
+    /// Retrieves a value and applies a function to it while holding the lock.
     ///
-    /// This is more efficient than `get()` when you only need to read from the value,
-    /// as it avoids cloning.
+    /// More efficient than `get()` when you only need to read from the value,
+    /// as it avoids cloning. The lock is released after `f` returns.
+    ///
+    /// # Type Parameters
+    ///
+    /// - `F`: Function that takes `&V` and returns `R`
+    /// - `R`: Return type of the function
     ///
     /// # Example
     ///
     /// ```rust,ignore
+    /// // Get length without cloning the whole string
     /// let len = cache.get_with(&key, |value| value.len());
     /// ```
     pub fn get_with<Q, F, R>(&self, key: &Q, f: F) -> Option<R>
@@ -219,12 +397,15 @@ where
         segment.get(key).map(f)
     }
 
-    /// Gets a mutable reference to a value and applies a function to it.
+    /// Retrieves a mutable reference and applies a function to it.
+    ///
+    /// Allows in-place modification of cached values without removing them.
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// cache.get_mut_with(&key, |value| *value += 1);
+    /// // Increment a counter in-place
+    /// cache.get_mut_with(&"counter".to_string(), |value| *value += 1);
     /// ```
     pub fn get_mut_with<Q, F, R>(&self, key: &Q, f: F) -> Option<R>
     where
@@ -239,23 +420,54 @@ where
 
     /// Inserts a key-value pair into the cache.
     ///
-    /// If the key already exists, the value is updated and the old value is returned.
-    /// If the cache is at capacity, the least recently used entry is evicted.
+    /// If the key exists, the value is updated and moved to MRU position.
+    /// If at capacity, the LRU entry in the target segment is evicted.
     ///
     /// # Returns
     ///
-    /// Returns `Some((key, value))` if an entry was evicted or updated, `None` otherwise.
+    /// - `Some((old_key, old_value))` if key existed or entry was evicted
+    /// - `None` if inserted with available capacity
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// cache.put("key".to_string(), 42);
+    /// ```
     pub fn put(&self, key: K, value: V) -> Option<(K, V)> {
         let idx = self.segment_index(&key);
         let mut segment = self.segments[idx].lock();
         segment.put(key, value)
     }
 
+    /// Inserts a key-value pair with explicit size tracking.
+    ///
+    /// Use this for size-aware caching. The size is used for `max_size` tracking
+    /// and eviction decisions.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to insert
+    /// * `value` - The value to cache
+    /// * `size` - Size of this entry (in your chosen unit)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let data = vec![0u8; 1024];
+    /// cache.put_with_size("file".to_string(), data, 1024);
+    /// ```
+    pub fn put_with_size(&self, key: K, value: V, size: u64) -> Option<(K, V)> {
+        let idx = self.segment_index(&key);
+        let mut segment = self.segments[idx].lock();
+        segment.put_with_size(key, value, size)
+    }
+
     /// Removes a key from the cache.
     ///
     /// # Returns
     ///
-    /// Returns `Some(value)` if the key existed, `None` otherwise.
+    /// - `Some(value)` if the key existed
+    /// - `None` if the key was not found
     pub fn remove<Q>(&self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
@@ -266,7 +478,10 @@ where
         segment.remove(key)
     }
 
-    /// Returns `true` if the cache contains the specified key.
+    /// Checks if the cache contains a key.
+    ///
+    /// Note: This **does** update the entry's recency (moves to MRU position).
+    /// If you need a pure existence check without side effects, this isn't it.
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
         K: Borrow<Q>,
@@ -277,14 +492,30 @@ where
         segment.get(key).is_some()
     }
 
-    /// Clears all entries from the cache.
+    /// Removes all entries from all segments.
+    ///
+    /// Acquires locks on each segment sequentially.
     pub fn clear(&self) {
         for segment in self.segments.iter() {
             segment.lock().clear();
         }
     }
 
-    /// Records a cache miss for metrics purposes.
+    /// Returns the current total size across all segments.
+    ///
+    /// This is the sum of all `size` values from `put_with_size()` calls.
+    pub fn current_size(&self) -> u64 {
+        self.segments.iter().map(|s| s.lock().current_size()).sum()
+    }
+
+    /// Returns the maximum total content size across all segments.
+    pub fn max_size(&self) -> u64 {
+        self.segments.iter().map(|s| s.lock().max_size()).sum()
+    }
+
+    /// Records a cache miss for metrics tracking.
+    ///
+    /// Call this after a failed `get()` when you fetch from the origin.
     pub fn record_miss(&self, object_size: u64) {
         // Record on the first segment (metrics are aggregated anyway)
         if let Some(segment) = self.segments.first() {

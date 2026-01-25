@@ -1,31 +1,101 @@
 //! Concurrent LFU Cache Implementation
 //!
-//! Provides a thread-safe LFU cache using segmented storage for high-performance
-//! multi-threaded access. This is the concurrent equivalent of [`LfuCache`][crate::LfuCache].
+//! A thread-safe LFU cache using lock striping (segmented storage) for high-performance
+//! concurrent access. This is the multi-threaded counterpart to [`LfuCache`](crate::LfuCache).
 //!
 //! # How It Works
 //!
-//! LFU tracks access frequency for each item and evicts the least frequently used
-//! item when capacity is reached. The key space is partitioned across multiple
-//! segments using hash-based sharding.
+//! The cache partitions keys across multiple independent segments, each with its own lock.
+//! This allows concurrent operations on different segments without contention.
+//!
+//! ```text
+//! ┌──────────────────────────────────────────────────────────────────────┐
+//! │                      ConcurrentLfuCache                              │
+//! │                                                                      │
+//! │  hash(key) % N  ──▶  Segment Selection                               │
+//! │                                                                      │
+//! │  ┌──────────────┐ ┌──────────────┐     ┌──────────────┐              │
+//! │  │  Segment 0   │ │  Segment 1   │ ... │  Segment N-1 │              │
+//! │  │  ┌────────┐  │ │  ┌────────┐  │     │  ┌────────┐  │              │
+//! │  │  │ Mutex  │  │ │  │ Mutex  │  │     │  │ Mutex  │  │              │
+//! │  │  └────┬───┘  │ │  └────┬───┘  │     │  └────┬───┘  │              │
+//! │  │       │      │ │       │      │     │       │      │              │
+//! │  │  ┌────▼───┐  │ │  ┌────▼───┐  │     │  ┌────▼───┐  │              │
+//! │  │  │LfuCache│  │ │  │LfuCache│  │     │  │LfuCache│  │              │
+//! │  │  └────────┘  │ │  └────────┘  │     │  └────────┘  │              │
+//! │  └──────────────┘ └──────────────┘     └──────────────┘              │
+//! └──────────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! ## Segment Count
+//!
+//! The default segment count is based on available CPU cores (typically 16).
+//! More segments = less contention but more memory overhead.
+//!
+//! ## Trade-offs
+//!
+//! - **Pros**: Near-linear scaling with thread count, excellent scan resistance
+//! - **Cons**: LFU frequency tracking is per-segment, not global. An item accessed
+//!   in segment A doesn't affect frequency tracking in segment B.
 //!
 //! # Performance Characteristics
 //!
-//! - **Time Complexity**: O(1) average for get, put, remove
-//! - **Excellent Scan Resistance**: Frequency-based eviction ignores one-time accesses
-//! - **Concurrency**: Near-linear scaling up to segment count
+//! | Metric | Value |
+//! |--------|-------|
+//! | Get/Put/Remove | O(1) average |
+//! | Concurrency | Near-linear scaling up to segment count |
+//! | Memory overhead | ~150 bytes per entry + one Mutex per segment |
+//! | Scan resistance | Excellent (frequency-based eviction) |
 //!
 //! # When to Use
 //!
-//! Use `ConcurrentLfuCache` when:
-//! - Access frequency is more important than recency
+//! **Use ConcurrentLfuCache when:**
+//! - Multiple threads need cache access
+//! - Access patterns have stable popularity (some keys consistently more popular)
 //! - You need excellent scan resistance
-//! - Workload has stable popularity patterns
+//! - Frequency is more important than recency
+//!
+//! **Consider alternatives when:**
+//! - Single-threaded access only → use `LfuCache`
+//! - Need global frequency tracking → use `Mutex<LfuCache>`
+//! - Popularity changes over time → use `ConcurrentLfudaCache`
+//! - Recency-based access → use `ConcurrentLruCache`
 //!
 //! # Thread Safety
 //!
-//! `ConcurrentLfuCache` implements `Send` and `Sync` and can be safely shared
-//! across threads via `Arc`.
+//! `ConcurrentLfuCache` is `Send + Sync` and can be shared via `Arc`.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use cache_rs::concurrent::ConcurrentLfuCache;
+//! use std::sync::Arc;
+//! use std::thread;
+//!
+//! let cache = Arc::new(ConcurrentLfuCache::new(10_000));
+//!
+//! let handles: Vec<_> = (0..4).map(|i| {
+//!     let cache = Arc::clone(&cache);
+//!     thread::spawn(move || {
+//!         for j in 0..1000 {
+//!             let key = format!("key-{}-{}", i, j);
+//!             cache.put(key.clone(), j);
+//!             // Access popular keys more frequently
+//!             if j % 10 == 0 {
+//!                 for _ in 0..5 {
+//!                     let _ = cache.get(&key);
+//!                 }
+//!             }
+//!         }
+//!     })
+//! }).collect();
+//!
+//! for h in handles {
+//!     h.join().unwrap();
+//! }
+//!
+//! println!("Total entries: {}", cache.len());
+//! ```
 
 extern crate alloc;
 
@@ -67,6 +137,49 @@ where
     /// Creates a new concurrent LFU cache with custom segment count.
     pub fn with_segments(capacity: NonZeroUsize, segment_count: usize) -> Self {
         Self::with_segments_and_hasher(capacity, segment_count, DefaultHashBuilder::default())
+    }
+
+    /// Creates a size-based concurrent LFU cache.
+    pub fn with_max_size(max_size: u64) -> Self {
+        let max_entries = NonZeroUsize::new(10_000_000).unwrap();
+        Self::with_limits(max_entries, max_size)
+    }
+
+    /// Creates a dual-limit concurrent LFU cache.
+    pub fn with_limits(max_entries: NonZeroUsize, max_size: u64) -> Self {
+        Self::with_limits_and_segments(max_entries, max_size, default_segment_count())
+    }
+
+    /// Creates a dual-limit concurrent LFU cache with custom segment count.
+    pub fn with_limits_and_segments(
+        max_entries: NonZeroUsize,
+        max_size: u64,
+        segment_count: usize,
+    ) -> Self {
+        assert!(segment_count > 0, "segment_count must be greater than 0");
+        assert!(
+            max_entries.get() >= segment_count,
+            "max_entries must be >= segment_count"
+        );
+
+        let segment_capacity = max_entries.get() / segment_count;
+        let segment_cap = NonZeroUsize::new(segment_capacity.max(1)).unwrap();
+        let segment_max_size = max_size / segment_count as u64;
+
+        let segments: Vec<_> = (0..segment_count)
+            .map(|_| {
+                Mutex::new(LfuSegment::with_hasher_and_size(
+                    segment_cap,
+                    DefaultHashBuilder::default(),
+                    segment_max_size,
+                ))
+            })
+            .collect();
+
+        Self {
+            segments: segments.into_boxed_slice(),
+            hash_builder: DefaultHashBuilder::default(),
+        }
     }
 }
 
@@ -168,6 +281,13 @@ where
         segment.put(key, value)
     }
 
+    /// Inserts a key-value pair with explicit size tracking.
+    pub fn put_with_size(&self, key: K, value: V, size: u64) -> Option<(K, V)> {
+        let idx = self.segment_index(&key);
+        let mut segment = self.segments[idx].lock();
+        segment.put_with_size(key, value, size)
+    }
+
     /// Removes a key from the cache, returning the value if it existed.
     pub fn remove<Q>(&self, key: &Q) -> Option<V>
     where
@@ -195,6 +315,16 @@ where
         for segment in self.segments.iter() {
             segment.lock().clear();
         }
+    }
+
+    /// Returns the current total size of cached content across all segments.
+    pub fn current_size(&self) -> u64 {
+        self.segments.iter().map(|s| s.lock().current_size()).sum()
+    }
+
+    /// Returns the maximum content size the cache can hold across all segments.
+    pub fn max_size(&self) -> u64 {
+        self.segments.iter().map(|s| s.lock().max_size()).sum()
     }
 }
 

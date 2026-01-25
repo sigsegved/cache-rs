@@ -1,7 +1,7 @@
 //! Concurrent GDSF Cache Implementation
 //!
-//! Provides a thread-safe GDSF cache using segmented storage for high-performance
-//! multi-threaded access. This is the concurrent equivalent of [`GdsfCache`][crate::GdsfCache].
+//! A thread-safe GDSF cache using lock striping (segmented storage) for high-performance
+//! concurrent access. This is the multi-threaded counterpart to [`GdsfCache`](crate::GdsfCache).
 //!
 //! # How It Works
 //!
@@ -9,34 +9,148 @@
 //! Priority is calculated as: `(Frequency / Size) + GlobalAge`
 //!
 //! This formula favors:
-//! - Smaller objects (more items fit in cache)
-//! - More frequently accessed objects
-//! - Newer objects (via aging)
+//! - **Smaller objects**: More items fit in cache
+//! - **Frequently accessed objects**: Higher hit rates
+//! - **Newer objects**: Via aging mechanism
+//!
+//! The cache partitions keys across multiple independent segments using hash-based sharding.
+//!
+//! ```text
+//! ┌──────────────────────────────────────────────────────────────────────────────┐
+//! │                        ConcurrentGdsfCache                                   │
+//! │                                                                              │
+//! │  hash(key) % N  ──▶  Segment Selection                                       │
+//! │                                                                              │
+//! │  ┌────────────────────┐ ┌────────────────────┐     ┌────────────────────┐    │
+//! │  │    Segment 0       │ │    Segment 1       │ ... │   Segment N-1      │    │
+//! │  │  max_size=625MB    │ │  max_size=625MB    │     │  max_size=625MB    │    │
+//! │  │  age=1.5           │ │  age=2.3           │     │  age=1.8           │    │
+//! │  │  ┌──────────────┐  │ │  ┌──────────────┐  │     │  ┌──────────────┐  │    │
+//! │  │  │    Mutex     │  │ │  │    Mutex     │  │     │  │    Mutex     │  │    │
+//! │  │  └──────┬───────┘  │ │  └──────┬───────┘  │     │  └──────┬───────┘  │    │
+//! │  │         │          │ │         │          │     │         │          │    │
+//! │  │  ┌──────▼───────┐  │ │  ┌──────▼───────┐  │     │  ┌──────▼───────┐  │    │
+//! │  │  │  GdsfSegment │  │ │  │  GdsfSegment │  │     │  │  GdsfSegment │  │    │
+//! │  │  │  (priority   │  │ │  │  (priority   │  │     │  │  (priority   │  │    │
+//! │  │  │   lists)     │  │ │  │   lists)     │  │     │  │   lists)     │  │    │
+//! │  │  └──────────────┘  │ │  └──────────────┘  │     │  └──────────────┘  │    │
+//! │  └────────────────────┘ └────────────────────┘     └────────────────────┘    │
+//! └──────────────────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! ## Per-Segment Size Tracking
+//!
+//! Each segment has its own:
+//! - **max_size**: Total size = cache_max_size / segment_count
+//! - **current_size**: Sum of item sizes in this segment
+//! - **global_age**: Aging factor (incremented on evictions)
+//!
+//! ## Trade-offs
+//!
+//! - **Pros**: Near-linear scaling, size-aware eviction per segment
+//! - **Cons**: Size distribution depends on key hashing. Uneven key distribution
+//!   can cause some segments to be fuller than others.
+//!
+//! # API Note: Size Parameter Required
+//!
+//! Unlike other caches, GDSF's `put()` requires a size parameter:
+//!
+//! ```rust,ignore
+//! // Standard caches
+//! lru_cache.put(key, value);
+//!
+//! // GDSF requires size
+//! gdsf_cache.put(key, value, 2048);  // size in bytes
+//! ```
 //!
 //! # Performance Characteristics
 //!
-//! - **Time Complexity**: O(1) average for get, put, remove
-//! - **Size-Aware**: Optimal for caching objects of varying sizes (images, documents)
-//! - **Concurrency**: Near-linear scaling up to segment count
+//! | Metric | Value |
+//! |--------|-------|
+//! | Get/Put/Remove | O(1) average |
+//! | Concurrency | Near-linear scaling up to segment count |
+//! | Memory overhead | ~170 bytes per entry + one Mutex per segment |
+//! | Size-awareness | Excellent (per-segment size tracking) |
 //!
 //! # When to Use
 //!
-//! Use `ConcurrentGdsfCache` when:
+//! **Use ConcurrentGdsfCache when:**
+//! - Multiple threads need cache access
 //! - Caching variable-size objects (images, files, API responses)
 //! - Total size budget is more important than item count
 //! - CDN-like workloads with diverse object sizes
 //!
-//! # API Note
-//!
-//! Unlike other caches, `put()` requires a size parameter:
-//! ```rust,ignore
-//! cache.put("image.jpg".to_string(), image_data, 2048); // size in bytes
-//! ```
+//! **Consider alternatives when:**
+//! - Single-threaded access only → use `GdsfCache`
+//! - Uniform-size objects → simpler caches work equally well
+//! - Need global size coordination → use `Mutex<GdsfCache>`
+//! - Entry-count is the primary constraint → use `ConcurrentLruCache`
 //!
 //! # Thread Safety
 //!
-//! `ConcurrentGdsfCache` implements `Send` and `Sync` and can be safely shared
-//! across threads via `Arc`.
+//! `ConcurrentGdsfCache` is `Send + Sync` and can be shared via `Arc`.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use cache_rs::concurrent::ConcurrentGdsfCache;
+//! use std::sync::Arc;
+//! use std::thread;
+//!
+//! // 10GB cache distributed across segments
+//! let cache = Arc::new(ConcurrentGdsfCache::with_max_size(10 * 1024 * 1024 * 1024));
+//!
+//! // Simulate CDN edge cache with multiple worker threads
+//! let handles: Vec<_> = (0..4).map(|worker| {
+//!     let cache = Arc::clone(&cache);
+//!     thread::spawn(move || {
+//!         for i in 0..1000 {
+//!             // Simulate varying object sizes
+//!             let size = if i % 10 == 0 {
+//!                 1024 * 1024  // 1MB (large objects)
+//!             } else {
+//!                 4096  // 4KB (small objects)
+//!             };
+//!             
+//!             let key = format!("asset-{}-{}", worker, i);
+//!             let data = vec![0u8; size as usize];
+//!             cache.put(key.clone(), data, size);
+//!             
+//!             // Simulate cache reads
+//!             let _ = cache.get(&key);
+//!         }
+//!     })
+//! }).collect();
+//!
+//! for h in handles {
+//!     h.join().unwrap();
+//! }
+//!
+//! println!("Cache size: {} bytes", cache.current_size());
+//! ```
+//!
+//! # Size-Based Eviction Example
+//!
+//! ```rust,ignore
+//! use cache_rs::concurrent::ConcurrentGdsfCache;
+//!
+//! // 10MB cache
+//! let cache = ConcurrentGdsfCache::with_max_size(10 * 1024 * 1024);
+//!
+//! // Insert small frequently-accessed items
+//! for i in 0..100 {
+//!     cache.put(format!("small-{}", i), vec![0u8; 1024], 1024);
+//!     // Access multiple times to increase frequency
+//!     for _ in 0..5 {
+//!         let _ = cache.get(&format!("small-{}", i));
+//!     }
+//! }
+//!
+//! // Insert large item - may evict multiple small items based on priority
+//! cache.put("large".to_string(), vec![0u8; 5 * 1024 * 1024], 5 * 1024 * 1024);
+//!
+//! // GDSF may choose to keep small popular items over one large item
+//! ```
 
 extern crate alloc;
 
@@ -83,6 +197,49 @@ where
     /// Creates a new concurrent GDSF cache with custom segment count.
     pub fn with_segments(capacity: NonZeroUsize, segment_count: usize) -> Self {
         Self::with_segments_and_hasher(capacity, segment_count, DefaultHashBuilder::default())
+    }
+
+    /// Creates a size-based concurrent GDSF cache.
+    pub fn with_max_size(max_size: u64) -> Self {
+        let max_entries = NonZeroUsize::new(10_000_000).unwrap();
+        Self::with_limits(max_entries, max_size)
+    }
+
+    /// Creates a dual-limit concurrent GDSF cache.
+    pub fn with_limits(max_entries: NonZeroUsize, max_size: u64) -> Self {
+        Self::with_limits_and_segments(max_entries, max_size, default_segment_count())
+    }
+
+    /// Creates a dual-limit concurrent GDSF cache with custom segment count.
+    pub fn with_limits_and_segments(
+        max_entries: NonZeroUsize,
+        max_size: u64,
+        segment_count: usize,
+    ) -> Self {
+        assert!(segment_count > 0, "segment_count must be greater than 0");
+        assert!(
+            max_entries.get() >= segment_count,
+            "max_entries must be >= segment_count"
+        );
+
+        let segment_capacity = max_entries.get() / segment_count;
+        let segment_cap = NonZeroUsize::new(segment_capacity.max(1)).unwrap();
+        let segment_max_size = max_size / segment_count as u64;
+
+        let segments: Vec<_> = (0..segment_count)
+            .map(|_| {
+                Mutex::new(GdsfSegment::with_hasher_and_size(
+                    segment_cap,
+                    DefaultHashBuilder::default(),
+                    segment_max_size,
+                ))
+            })
+            .collect();
+
+        Self {
+            segments: segments.into_boxed_slice(),
+            hash_builder: DefaultHashBuilder::default(),
+        }
     }
 }
 
@@ -228,6 +385,16 @@ where
         for segment in self.segments.iter() {
             segment.lock().clear();
         }
+    }
+
+    /// Returns the current total size of cached content across all segments.
+    pub fn current_size(&self) -> u64 {
+        self.segments.iter().map(|s| s.lock().current_size()).sum()
+    }
+
+    /// Returns the maximum content size the cache can hold across all segments.
+    pub fn max_size(&self) -> u64 {
+        self.segments.iter().map(|s| s.lock().max_size()).sum()
     }
 }
 

@@ -1,17 +1,191 @@
-//! Greedy Dual-Size Frequency (GDSF) cache implementation.
+//! Greedy Dual-Size Frequency (GDSF) Cache Implementation
 //!
-//! GDSF is a sophisticated cache replacement algorithm that combines frequency, size,
-//! and aging to optimize cache performance for variable-sized objects.
+//! GDSF is a sophisticated cache replacement algorithm designed for **variable-sized objects**.
+//! It combines object size, access frequency, and aging into a unified priority formula,
+//! making it ideal for CDN caches, image caches, and any scenario where cached objects
+//! have different sizes.
+//!
+//! # How the Algorithm Works
+//!
+//! GDSF calculates priority for each cached item using the formula:
+//!
+//! ```text
+//! Priority = (Frequency / Size) + GlobalAge
+//! ```
+//!
+//! This formula cleverly balances multiple factors:
+//! - **Frequency**: More frequently accessed items get higher priority
+//! - **Size**: Smaller items are favored (more items fit in cache)
+//! - **Aging**: Prevents old popular items from staying forever
+//!
+//! ## Mathematical Formulation
+//!
+//! ```text
+//! For each cache entry i:
+//!   - F_i = access frequency of item i
+//!   - S_i = size of item i (in bytes)
+//!   - GlobalAge = increases on eviction (set to evicted item's priority)
+//!   - Priority_i = (F_i / S_i) + GlobalAge
+//!
+//! On eviction: select item j where Priority_j = min{Priority_i for all i}
+//! ```
+//!
+//! ## Why Size Matters
+//!
+//! Consider a cache with 10KB capacity:
+//! - Option A: Cache one 10KB file accessed 10 times → Priority = 10/10000 = 0.001
+//! - Option B: Cache ten 1KB files accessed once each → Each Priority = 1/1000 = 0.001
+//!
+//! GDSF recognizes that caching many small frequently-accessed items often yields
+//! better hit rates than caching fewer large items.
+//!
+//! ## Data Structure
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────────────────────┐
+//! │                    GDSF Cache (global_age=1.5, max_size=10MB)               │
+//! │                                                                              │
+//! │  HashMap<K, *Node>              BTreeMap<Priority, List>                     │
+//! │  ┌──────────────┐              ┌─────────────────────────────────────────┐   │
+//! │  │ "icon.png" ─────────────────│ pri=3.5: [icon.png]   (f=2, s=1KB)      │   │
+//! │  │ "thumb.jpg" ────────────────│ pri=2.5: [thumb.jpg]  (f=1, s=1KB)      │   │
+//! │  │ "video.mp4" ────────────────│ pri=1.5: [video.mp4]  (f=10, s=100MB)←E │   │
+//! │  └──────────────┘              └─────────────────────────────────────────┘   │
+//! │                                        ▲                                     │
+//! │                                        │                                     │
+//! │                                   min_priority=1.5                           │
+//! │                                                                              │
+//! │  Note: video.mp4 has high frequency (10) but large size (100MB),            │
+//! │        so its priority = 10/100000000 + 1.5 ≈ 1.5 (eviction candidate)      │
+//! └─────────────────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! ## Operations
+//!
+//! | Operation | Action | Time |
+//! |-----------|--------|------|
+//! | `get(key)` | Increment frequency, recalculate priority | O(1) |
+//! | `put(key, value, size)` | Insert with priority=(1/size)+age | O(1) |
+//! | `remove(key)` | Remove from priority list, update min_priority | O(1) |
+//!
+//! ## Size-Aware Example
+//!
+//! ```text
+//! Cache: max_size=5KB, global_age=0
+//!
+//! put("small.txt", data, 1KB)   →  pri=1.0, total_size=1KB
+//! put("medium.txt", data, 2KB)  →  pri=0.5, total_size=3KB
+//! put("large.txt", data, 3KB)   →  pri=0.33, total_size=6KB  OVERFLOW!
+//!
+//! Eviction needed: evict "large.txt" (lowest priority=0.33)
+//! global_age = 0.33
+//!
+//! put("large.txt", data, 3KB)   →  pri=0.33+0.33=0.66, total_size=6KB  OVERFLOW!
+//!
+//! Evict again: now "medium.txt" has lowest priority (0.5 < 0.66)
+//! Result: small.txt + large.txt fit in 4KB
+//! ```
+//!
+//! # Dual-Limit Capacity
+//!
+//! GDSF naturally works with size-based limits:
+//!
+//! - **`max_entries`**: Maximum number of items (prevents too many tiny items)
+//! - **`max_size`**: Maximum total size (primary constraint for GDSF)
+//!
+//! # Performance Characteristics
+//!
+//! | Metric | Value |
+//! |--------|-------|
+//! | Get | O(1) |
+//! | Put | O(1) amortized |
+//! | Remove | O(1) |
+//! | Memory per entry | ~120 bytes overhead + key×2 + value |
+//!
+//! Higher overhead than simpler algorithms due to priority calculation and
+//! BTreeMap-based priority lists.
+//!
+//! # When to Use GDSF
+//!
+//! **Good for:**
+//! - CDN and proxy caches with variable object sizes
+//! - Image thumbnail caches
+//! - API response caches with varying payload sizes
+//! - File system caches
+//! - Any size-constrained cache with heterogeneous objects
+//!
+//! **Not ideal for:**
+//! - Uniform-size objects (simpler algorithms work equally well)
+//! - Entry-count-constrained caches (LRU/LFU are simpler)
+//! - Very small caches (overhead not justified)
+//!
+//! # GDSF vs Other Algorithms
+//!
+//! | Aspect | LRU | LFU | GDSF |
+//! |--------|-----|-----|------|
+//! | Size-aware | No | No | **Yes** |
+//! | Frequency-aware | No | Yes | Yes |
+//! | Aging | Implicit | No | Yes |
+//! | Best for | Recency | Frequency | Variable-size objects |
 //!
 //! # Thread Safety
 //!
-//! This implementation is not thread-safe. For concurrent access, wrap the cache
-//! with a synchronization primitive such as `Mutex` or `RwLock`.
+//! `GdsfCache` is **not thread-safe**. For concurrent access, either:
+//! - Wrap with `Mutex` or `RwLock`
+//! - Use `ConcurrentGdsfCache` (requires `concurrent` feature)
+//!
+//! # Examples
+//!
+//! ## Basic Usage
+//!
+//! ```
+//! use cache_rs::GdsfCache;
+//! use core::num::NonZeroUsize;
+//!
+//! // Create cache with max 1000 entries and 10MB size limit
+//! let mut cache: GdsfCache<String, Vec<u8>> = GdsfCache::with_limits(
+//!     NonZeroUsize::new(1000).unwrap(),
+//!     10 * 1024 * 1024,  // 10MB
+//! );
+//!
+//! // Insert with explicit size tracking
+//! let small_data = vec![0u8; 1024];  // 1KB
+//! cache.put("small.txt".to_string(), small_data, 1024);
+//!
+//! let large_data = vec![0u8; 1024 * 1024];  // 1MB
+//! cache.put("large.bin".to_string(), large_data, 1024 * 1024);
+//!
+//! // Small items get higher priority per byte
+//! assert!(cache.get(&"small.txt".to_string()).is_some());
+//! ```
+//!
+//! ## CDN-Style Caching
+//!
+//! ```
+//! use cache_rs::GdsfCache;
+//! use core::num::NonZeroUsize;
+//!
+//! // 100MB cache for web assets
+//! let mut cache: GdsfCache<String, Vec<u8>> = GdsfCache::with_limits(
+//!     NonZeroUsize::new(10000).unwrap(),
+//!     100 * 1024 * 1024,
+//! );
+//!
+//! // Cache various asset types with their sizes
+//! fn cache_asset(cache: &mut GdsfCache<String, Vec<u8>>, url: &str, data: Vec<u8>) {
+//!     let size = data.len() as u64;
+//!     cache.put(url.to_string(), data, size);
+//! }
+//!
+//! // Small, frequently-accessed assets get priority over large, rarely-used ones
+//! ```
 
 extern crate alloc;
 
 use crate::config::GdsfCacheConfig;
-use crate::list::{Entry, List};
+use crate::entry::CacheEntry;
+use crate::list::{List, ListEntry};
+use crate::meta::GdsfMeta;
 use crate::metrics::{CacheMetrics, GdsfCacheMetrics};
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
@@ -31,23 +205,22 @@ use std::collections::hash_map::RandomState as DefaultHashBuilder;
 #[cfg(not(feature = "hashbrown"))]
 use std::collections::HashMap;
 
-/// Metadata for each cache entry in GDSF
-#[derive(Debug, Clone, Copy)]
-struct EntryMetadata<K, V> {
-    frequency: u64,
-    size: u64,
-    priority: f64,
-    node: *mut Entry<(K, V)>,
-}
-
 /// Internal GDSF segment containing the actual cache algorithm.
+///
+/// Uses `CacheEntry<K, V, GdsfMeta>` as the unified entry type. The map stores
+/// raw pointers to list nodes, and all entry data (key, value, size, metadata)
+/// is stored in the `CacheEntry`.
 pub(crate) struct GdsfSegment<K, V, S = DefaultHashBuilder> {
     config: GdsfCacheConfig,
     global_age: f64,
     min_priority: f64,
-    map: HashMap<K, EntryMetadata<K, V>, S>,
-    priority_lists: BTreeMap<u64, List<(K, V)>>,
+    /// Maps keys to node pointers. The node contains CacheEntry with all data.
+    map: HashMap<K, *mut ListEntry<CacheEntry<K, V, GdsfMeta>>, S>,
+    /// Priority lists: key is (priority * 1000) as u64 for BTreeMap ordering
+    priority_lists: BTreeMap<u64, List<CacheEntry<K, V, GdsfMeta>>>,
     metrics: GdsfCacheMetrics,
+    /// Current total size of cached content (sum of entry sizes)
+    current_size: u64,
 }
 
 // SAFETY: GdsfSegment owns all data and raw pointers point only to nodes owned by
@@ -59,17 +232,21 @@ unsafe impl<K: Send, V: Send, S: Sync> Sync for GdsfSegment<K, V, S> {}
 
 impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
     pub(crate) fn with_hasher(cap: NonZeroUsize, hash_builder: S) -> Self {
-        let config = GdsfCacheConfig::new(cap);
+        Self::with_hasher_and_size(cap, hash_builder, u64::MAX)
+    }
+
+    pub(crate) fn with_hasher_and_size(cap: NonZeroUsize, hash_builder: S, max_size: u64) -> Self {
+        let config = GdsfCacheConfig::with_max_size(cap, max_size);
         let map_capacity = config.capacity().get().next_power_of_two();
-        let max_cache_size_bytes = config.capacity().get() as u64 * 128;
 
         GdsfSegment {
-            config,
             global_age: config.initial_age(),
             min_priority: 0.0,
             map: HashMap::with_capacity_and_hasher(map_capacity, hash_builder),
             priority_lists: BTreeMap::new(),
-            metrics: GdsfCacheMetrics::new(max_cache_size_bytes),
+            metrics: GdsfCacheMetrics::new(max_size),
+            current_size: 0,
+            config,
         }
     }
 
@@ -93,6 +270,18 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
         self.global_age
     }
 
+    /// Returns the current total size of cached content.
+    #[inline]
+    pub(crate) fn current_size(&self) -> u64 {
+        self.current_size
+    }
+
+    /// Returns the maximum content size the cache can hold.
+    #[inline]
+    pub(crate) fn max_size(&self) -> u64 {
+        self.config.max_size()
+    }
+
     #[inline]
     pub(crate) fn metrics(&self) -> &GdsfCacheMetrics {
         &self.metrics
@@ -114,33 +303,29 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
         (frequency as f64 / size as f64) + self.global_age
     }
 
-    unsafe fn update_priority_by_node(&mut self, node: *mut Entry<(K, V)>) -> *mut Entry<(K, V)>
+    unsafe fn update_priority_by_node(
+        &mut self,
+        node: *mut ListEntry<CacheEntry<K, V, GdsfMeta>>,
+    ) -> *mut ListEntry<CacheEntry<K, V, GdsfMeta>>
     where
         K: Clone + Hash + Eq,
     {
         // SAFETY: node is guaranteed valid by caller's contract
-        let (key_ref, _) = (*node).get_value();
-        let key_cloned = key_ref.clone();
+        let entry = (*node).get_value_mut();
+        let key_cloned = entry.key.clone();
+        let size = entry.size;
+        let meta = entry.metadata_mut().unwrap();
+        let old_priority = meta.priority;
 
-        let metadata = self.map.get_mut(&key_cloned).unwrap();
-        let old_priority = metadata.priority;
-        let size = metadata.size;
-
-        metadata.frequency += 1;
+        meta.increment();
 
         let global_age = self.global_age;
-        let new_priority = if size == 0 {
-            f64::INFINITY
-        } else {
-            (metadata.frequency as f64 / size as f64) + global_age
-        };
-        metadata.priority = new_priority;
+        let new_priority = meta.calculate_priority(size, global_age);
 
         let old_priority_key = (old_priority * 1000.0) as u64;
         let new_priority_key = (new_priority * 1000.0) as u64;
 
         if old_priority_key == new_priority_key {
-            let node = metadata.node;
             self.priority_lists
                 .get_mut(&new_priority_key)
                 .unwrap()
@@ -148,7 +333,6 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
             return node;
         }
 
-        let node = metadata.node;
         let boxed_entry = self
             .priority_lists
             .get_mut(&old_priority_key)
@@ -177,7 +361,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
             .unwrap()
             .attach_from_other_list(entry_ptr);
 
-        metadata.node = entry_ptr;
+        // Update map with new node pointer
+        self.map.insert(key_cloned, entry_ptr);
         entry_ptr
     }
 
@@ -186,22 +371,19 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
         K: Borrow<Q> + Clone,
         Q: ?Sized + Hash + Eq,
     {
-        if let Some(metadata) = self.map.get(key) {
-            let node = metadata.node;
+        if let Some(&node) = self.map.get(key) {
             unsafe {
                 // SAFETY: node comes from our map
-                let (key_ref, value) = (*node).get_value();
-                let object_size = self.estimate_object_size(key_ref, value);
+                let entry = (*node).get_value();
+                let object_size = self.estimate_object_size(&entry.key, &entry.value);
+                let meta = entry.metadata.as_ref().unwrap();
                 self.metrics.core.record_hit(object_size);
-                self.metrics.record_item_access(
-                    metadata.frequency,
-                    metadata.size,
-                    metadata.priority,
-                );
+                self.metrics
+                    .record_item_access(meta.frequency, entry.size, meta.priority);
 
                 let new_node = self.update_priority_by_node(node);
-                let (_, value) = (*new_node).get_value();
-                Some(value.clone())
+                let value = (*new_node).get_value().value.clone();
+                Some(value)
             }
         } else {
             None
@@ -213,22 +395,19 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
         K: Borrow<Q> + Clone,
         Q: ?Sized + Hash + Eq,
     {
-        if let Some(metadata) = self.map.get(key) {
-            let node = metadata.node;
+        if let Some(&node) = self.map.get(key) {
             unsafe {
                 // SAFETY: node comes from our map
-                let (key_ref, value) = (*node).get_value();
-                let object_size = self.estimate_object_size(key_ref, value);
+                let entry = (*node).get_value();
+                let object_size = self.estimate_object_size(&entry.key, &entry.value);
+                let meta = entry.metadata.as_ref().unwrap();
                 self.metrics.core.record_hit(object_size);
-                self.metrics.record_item_access(
-                    metadata.frequency,
-                    metadata.size,
-                    metadata.priority,
-                );
+                self.metrics
+                    .record_item_access(meta.frequency, entry.size, meta.priority);
 
                 let new_node = self.update_priority_by_node(node);
-                let (_, value) = (*new_node).get_value_mut();
-                Some(value)
+                let entry_mut = (*new_node).get_value_mut();
+                Some(&mut entry_mut.value)
             }
         } else {
             None
@@ -253,70 +432,91 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
 
         let object_size = self.estimate_object_size(&key, &val);
 
-        if let Some(mut metadata) = self.map.remove(&key) {
+        // Check if key exists - update existing entry
+        if let Some(&node) = self.map.get(&key) {
             unsafe {
-                // SAFETY: metadata.node comes from our map
-                let old_priority_key = (metadata.priority * 1000.0) as u64;
+                // SAFETY: node comes from our map
+                let entry = (*node).get_value_mut();
+                let old_size = entry.size;
+                let meta = entry.metadata_mut().unwrap();
+                let old_priority_key = (meta.priority * 1000.0) as u64;
+                let frequency = meta.frequency;
+
+                // Remove from old priority list
                 let list = self.priority_lists.get_mut(&old_priority_key).unwrap();
-                let entry = list.remove(metadata.node).unwrap();
+                let boxed_entry = list.remove(node).unwrap();
 
                 if list.is_empty() {
                     self.priority_lists.remove(&old_priority_key);
                 }
 
-                let entry_ptr = Box::into_raw(entry);
-                let (_, old_value) = (*entry_ptr).get_value().clone();
+                let entry_ptr = Box::into_raw(boxed_entry);
+                let old_value = (*entry_ptr).get_value().value.clone();
                 let _ = Box::from_raw(entry_ptr);
 
-                metadata.size = size;
-                metadata.priority = self.calculate_priority(metadata.frequency, size);
+                // Update size tracking
+                self.current_size = self.current_size.saturating_sub(old_size);
+                self.current_size += size;
 
-                let new_priority_key = (metadata.priority * 1000.0) as u64;
+                // Create new entry with updated values but preserved frequency
+                let new_priority = self.calculate_priority(frequency, size);
+                let new_priority_key = (new_priority * 1000.0) as u64;
+
+                let new_entry = CacheEntry::with_metadata(
+                    key.clone(),
+                    val,
+                    size,
+                    GdsfMeta::new(frequency, new_priority),
+                );
+
                 let capacity = self.cap();
                 let list = self
                     .priority_lists
                     .entry(new_priority_key)
                     .or_insert_with(|| List::new(capacity));
 
-                if let Some(new_node) = list.add((key.clone(), val)) {
-                    metadata.node = new_node;
-                    self.map.insert(key, metadata);
+                if let Some(new_node) = list.add(new_entry) {
+                    self.map.insert(key, new_node);
                     self.metrics.core.record_insertion(object_size);
                     return Some(old_value);
                 } else {
+                    self.map.remove(&key);
                     return None;
                 }
             }
         }
 
-        while self.len() >= self.config.capacity().get() {
+        // New entry - check capacity and size limits
+        let capacity = self.config.capacity().get();
+        let max_size = self.config.max_size();
+
+        while self.len() >= capacity
+            || (self.current_size + size > max_size && !self.map.is_empty())
+        {
             self.evict_one();
         }
 
         let priority = self.calculate_priority(1, size);
         let priority_key = (priority * 1000.0) as u64;
 
-        let capacity = self.config.capacity();
+        let cap = self.config.capacity();
         let list = self
             .priority_lists
             .entry(priority_key)
-            .or_insert_with(|| List::new(capacity));
+            .or_insert_with(|| List::new(cap));
 
-        if let Some(entry) = list.add((key.clone(), val)) {
-            let metadata = EntryMetadata {
-                frequency: 1,
-                size,
-                priority,
-                node: entry,
-            };
+        let cache_entry =
+            CacheEntry::with_metadata(key.clone(), val, size, GdsfMeta::new(1, priority));
 
-            self.map.insert(key, metadata);
+        if let Some(node) = list.add(cache_entry) {
+            self.map.insert(key, node);
+            self.current_size += size;
 
             if self.len() == 1 || priority < self.min_priority {
                 self.min_priority = priority;
             }
 
-            self.metrics.core.record_insertion(object_size);
+            self.metrics.core.record_insertion(size);
             self.metrics
                 .record_item_cached(size, self.metrics.average_item_size());
             self.metrics.record_item_access(1, size, priority);
@@ -335,26 +535,25 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
         let min_priority_key = *self.priority_lists.keys().next().unwrap();
         let list = self.priority_lists.get_mut(&min_priority_key).unwrap();
 
-        if let Some(entry) = list.remove_last() {
+        if let Some(boxed_entry) = list.remove_last() {
             unsafe {
                 // SAFETY: entry comes from list.remove_last()
-                let entry_ptr = Box::into_raw(entry);
-                let (entry_key, _entry_value) = (*entry_ptr).get_value();
+                let entry_ptr = Box::into_raw(boxed_entry);
+                let entry = (*entry_ptr).get_value();
+                let evicted_size = entry.size;
+                let priority_to_update = entry
+                    .metadata
+                    .as_ref()
+                    .map(|m| m.priority)
+                    .unwrap_or(self.global_age);
 
-                let priority_to_update = if let Some(metadata) = self.map.get(entry_key) {
-                    metadata.priority
-                } else {
-                    self.global_age
-                };
-
-                let estimated_size = mem::size_of::<K>() as u64 + mem::size_of::<V>() as u64 + 64;
-
-                self.metrics.core.record_eviction(estimated_size);
+                self.current_size = self.current_size.saturating_sub(evicted_size);
+                self.metrics.core.record_eviction(evicted_size);
                 self.metrics.record_size_based_eviction();
                 self.metrics.record_aging_event(priority_to_update);
 
                 self.global_age = priority_to_update;
-                self.map.remove(entry_key);
+                self.map.remove(&entry.key);
 
                 let _ = Box::from_raw(entry_ptr);
             }
@@ -370,20 +569,24 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
         K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
-        if let Some(metadata) = self.map.remove(key) {
+        if let Some(node) = self.map.remove(key) {
             unsafe {
-                // SAFETY: metadata.node comes from our map
-                let priority_key = (metadata.priority * 1000.0) as u64;
+                // SAFETY: node comes from our map
+                let entry = (*node).get_value();
+                let removed_size = entry.size;
+                let priority = entry.metadata.as_ref().map(|m| m.priority).unwrap_or(0.0);
+                let priority_key = (priority * 1000.0) as u64;
+
                 let list = self.priority_lists.get_mut(&priority_key).unwrap();
-                let entry = list.remove(metadata.node).unwrap();
+                let boxed_entry = list.remove(node).unwrap();
 
                 if list.is_empty() {
                     self.priority_lists.remove(&priority_key);
                 }
 
-                let entry_ptr = Box::into_raw(entry);
-                let (_, value) = (*entry_ptr).get_value();
-                let result = value.clone();
+                let entry_ptr = Box::into_raw(boxed_entry);
+                let result = (*entry_ptr).get_value().value.clone();
+                self.current_size = self.current_size.saturating_sub(removed_size);
                 let _ = Box::from_raw(entry_ptr);
 
                 Some(result)
@@ -398,6 +601,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
         self.priority_lists.clear();
         self.global_age = 0.0;
         self.min_priority = 0.0;
+        self.current_size = 0;
     }
 }
 
@@ -424,6 +628,13 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfCache<K, V, S> {
         }
     }
 
+    /// Creates a new GDSF cache with the specified capacity, hash builder, and max size.
+    pub fn with_hasher_and_size(cap: NonZeroUsize, hash_builder: S, max_size: u64) -> Self {
+        Self {
+            segment: GdsfSegment::with_hasher_and_size(cap, hash_builder, max_size),
+        }
+    }
+
     #[inline]
     pub fn cap(&self) -> NonZeroUsize {
         self.segment.cap()
@@ -437,6 +648,18 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfCache<K, V, S> {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.segment.is_empty()
+    }
+
+    /// Returns the current total size of cached content.
+    #[inline]
+    pub fn current_size(&self) -> u64 {
+        self.segment.current_size()
+    }
+
+    /// Returns the maximum content size the cache can hold.
+    #[inline]
+    pub fn max_size(&self) -> u64 {
+        self.segment.max_size()
     }
 
     #[inline]
@@ -513,6 +736,47 @@ impl<K: Hash + Eq, V: Clone> GdsfCache<K, V, DefaultHashBuilder> {
     pub fn new(cap: NonZeroUsize) -> Self {
         let config = GdsfCacheConfig::new(cap);
         Self::with_hasher(config.capacity(), DefaultHashBuilder::default())
+    }
+
+    /// Creates a size-based GDSF cache.
+    ///
+    /// Since GDSF already considers object size in its algorithm, this
+    /// is useful for in-memory caches bounded by total memory.
+    ///
+    /// # Example
+    /// ```
+    /// use cache_rs::GdsfCache;
+    ///
+    /// // 10 MB cache
+    /// let mut cache: GdsfCache<String, Vec<u8>> = GdsfCache::with_max_size(10 * 1024 * 1024);
+    /// // cache.put("image.png".into(), bytes.clone(), bytes.len() as u64);
+    /// ```
+    pub fn with_max_size(max_size: u64) -> Self {
+        // Use a large but reasonable entry limit to avoid excessive memory pre-allocation
+        // 10 million entries * ~100 bytes overhead = ~1GB cache index memory
+        let max_entries = NonZeroUsize::new(10_000_000).unwrap();
+        Self::with_hasher_and_size(max_entries, DefaultHashBuilder::default(), max_size)
+    }
+
+    /// Creates a dual-limit GDSF cache.
+    ///
+    /// Evicts when EITHER limit would be exceeded:
+    /// - `max_entries`: bounds cache-rs memory (~150 bytes per entry)
+    /// - `max_size`: bounds content storage (sum of `size` params)
+    ///
+    /// # Example
+    /// ```
+    /// use cache_rs::GdsfCache;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// // 5M entries (~750MB RAM for index), 100GB tracked content
+    /// let cache: GdsfCache<String, String> = GdsfCache::with_limits(
+    ///     NonZeroUsize::new(5_000_000).unwrap(),
+    ///     100 * 1024 * 1024 * 1024
+    /// );
+    /// ```
+    pub fn with_limits(max_entries: NonZeroUsize, max_size: u64) -> Self {
+        Self::with_hasher_and_size(max_entries, DefaultHashBuilder::default(), max_size)
     }
 }
 
@@ -703,5 +967,43 @@ mod tests {
         let mut guard = cache.lock().unwrap();
         assert!(guard.len() <= 100);
         guard.clear(); // Clean up for MIRI
+    }
+
+    #[test]
+    fn test_gdsf_size_aware_tracking() {
+        let mut cache = GdsfCache::new(NonZeroUsize::new(10).unwrap());
+
+        assert_eq!(cache.current_size(), 0);
+        assert_eq!(cache.max_size(), u64::MAX);
+
+        // GDSF already requires size in put()
+        cache.put("a", 1, 100);
+        cache.put("b", 2, 200);
+        cache.put("c", 3, 150);
+
+        assert_eq!(cache.current_size(), 450);
+        assert_eq!(cache.len(), 3);
+
+        // GDSF doesn't have remove method, test clear instead
+        cache.clear();
+        assert_eq!(cache.current_size(), 0);
+    }
+
+    #[test]
+    fn test_gdsf_with_max_size_constructor() {
+        let cache: GdsfCache<String, i32> = GdsfCache::with_max_size(1024 * 1024);
+
+        assert_eq!(cache.current_size(), 0);
+        assert_eq!(cache.max_size(), 1024 * 1024);
+    }
+
+    #[test]
+    fn test_gdsf_with_limits_constructor() {
+        let cache: GdsfCache<String, String> =
+            GdsfCache::with_limits(NonZeroUsize::new(100).unwrap(), 1024 * 1024);
+
+        assert_eq!(cache.current_size(), 0);
+        assert_eq!(cache.max_size(), 1024 * 1024);
+        assert_eq!(cache.cap().get(), 100);
     }
 }

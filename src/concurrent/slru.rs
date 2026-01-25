@@ -1,30 +1,117 @@
 //! Concurrent SLRU Cache Implementation
 //!
-//! Provides a thread-safe Segmented LRU cache using segmented storage for high-performance
-//! multi-threaded access. This is the concurrent equivalent of [`SlruCache`][crate::SlruCache].
+//! A thread-safe Segmented LRU cache using lock striping (segmented storage) for
+//! high-performance concurrent access. This is the multi-threaded counterpart to
+//! [`SlruCache`](crate::SlruCache).
 //!
 //! # How It Works
 //!
-//! SLRU maintains two segments per shard: probationary and protected. Items enter
-//! the probationary segment and are promoted to protected on subsequent access.
-//! The key space is partitioned across multiple shards using hash-based sharding.
+//! SLRU maintains two segments per shard: **probationary** (for new items) and
+//! **protected** (for frequently accessed items). Items enter probationary and
+//! are promoted to protected on subsequent access.
+//!
+//! The cache partitions keys across multiple independent shards using hash-based sharding.
+//!
+//! ```text
+//! ┌──────────────────────────────────────────────────────────────────────────────┐
+//! │                        ConcurrentSlruCache                                   │
+//! │                                                                              │
+//! │  hash(key) % N  ──▶  Shard Selection                                         │
+//! │                                                                              │
+//! │  ┌────────────────────┐ ┌────────────────────┐     ┌────────────────────┐    │
+//! │  │     Shard 0        │ │     Shard 1        │ ... │    Shard N-1       │    │
+//! │  │  ┌──────────────┐  │ │  ┌──────────────┐  │     │  ┌──────────────┐  │    │
+//! │  │  │    Mutex     │  │ │  │    Mutex     │  │     │  │    Mutex     │  │    │
+//! │  │  └──────┬───────┘  │ │  └──────┬───────┘  │     │  └──────┬───────┘  │    │
+//! │  │         │          │ │         │          │     │         │          │    │
+//! │  │  ┌──────▼───────┐  │ │  ┌──────▼───────┐  │     │  ┌──────▼───────┐  │    │
+//! │  │  │ Protected    │  │ │  │ Protected    │  │     │  │ Protected    │  │    │
+//! │  │  │ [hot items]  │  │ │  │ [hot items]  │  │     │  │ [hot items]  │  │    │
+//! │  │  ├──────────────┤  │ │  ├──────────────┤  │     │  ├──────────────┤  │    │
+//! │  │  │ Probationary │  │ │  │ Probationary │  │     │  │ Probationary │  │    │
+//! │  │  │ [new items]  │  │ │  │ [new items]  │  │     │  │ [new items]  │  │    │
+//! │  │  └──────────────┘  │ │  └──────────────┘  │     │  └──────────────┘  │    │
+//! │  └────────────────────┘ └────────────────────┘     └────────────────────┘    │
+//! └──────────────────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! ## Segment Structure
+//!
+//! Each shard contains:
+//! - **Probationary segment**: New items enter here (default: 80% of shard capacity)
+//! - **Protected segment**: Items promoted on second access (default: 20% of shard capacity)
+//!
+//! ## Trade-offs
+//!
+//! - **Pros**: Near-linear scaling, excellent scan resistance per shard
+//! - **Cons**: Protection is per-shard, not global. An item hot in shard A
+//!   doesn't influence protection in shard B.
 //!
 //! # Performance Characteristics
 //!
-//! - **Time Complexity**: O(1) average for get, put, remove
-//! - **Scan Resistance**: Better than LRU for mixed workloads
-//! - **Concurrency**: Near-linear scaling up to segment count
+//! | Metric | Value |
+//! |--------|-------|
+//! | Get/Put/Remove | O(1) average |
+//! | Concurrency | Near-linear scaling up to shard count |
+//! | Memory overhead | ~140 bytes per entry + one Mutex per shard |
+//! | Scan resistance | Good (two-tier protection) |
 //!
 //! # When to Use
 //!
-//! Use `ConcurrentSlruCache` when:
-//! - You need scan resistance in a multi-threaded environment
-//! - Workload has both frequently and occasionally accessed items
+//! **Use ConcurrentSlruCache when:**
+//! - Multiple threads need cache access
+//! - Workload mixes hot items with sequential scans
+//! - You need scan resistance in a concurrent environment
+//! - Some items are accessed repeatedly while others are one-time
+//!
+//! **Consider alternatives when:**
+//! - Single-threaded access only → use `SlruCache`
+//! - Pure recency patterns → use `ConcurrentLruCache` (simpler)
+//! - Frequency-dominant patterns → use `ConcurrentLfuCache`
+//! - Need global protection coordination → use `Mutex<SlruCache>`
 //!
 //! # Thread Safety
 //!
-//! `ConcurrentSlruCache` implements `Send` and `Sync` and can be safely shared
-//! across threads via `Arc`.
+//! `ConcurrentSlruCache` is `Send + Sync` and can be shared via `Arc`.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use cache_rs::concurrent::ConcurrentSlruCache;
+//! use std::sync::Arc;
+//! use std::thread;
+//!
+//! // Total capacity 10000, protected segment 2000 (20%)
+//! let cache = Arc::new(ConcurrentSlruCache::new(10_000, 2_000));
+//!
+//! // Thread 1: Establish hot items
+//! let cache1 = Arc::clone(&cache);
+//! let hot_handle = thread::spawn(move || {
+//!     for i in 0..100 {
+//!         let key = format!("hot-{}", i);
+//!         cache1.put(key.clone(), i);
+//!         // Second access promotes to protected
+//!         let _ = cache1.get(&key);
+//!     }
+//! });
+//!
+//! // Thread 2: Sequential scan (shouldn't evict hot items)
+//! let cache2 = Arc::clone(&cache);
+//! let scan_handle = thread::spawn(move || {
+//!     for i in 0..50000 {
+//!         cache2.put(format!("scan-{}", i), i as i32);
+//!         // No second access - stays in probationary
+//!     }
+//! });
+//!
+//! hot_handle.join().unwrap();
+//! scan_handle.join().unwrap();
+//!
+//! // Hot items should still be accessible (protected from scan)
+//! for i in 0..100 {
+//!     assert!(cache.get(&format!("hot-{}", i)).is_some());
+//! }
+//! ```
 
 extern crate alloc;
 
@@ -75,6 +162,63 @@ where
             segment_count,
             DefaultHashBuilder::default(),
         )
+    }
+
+    /// Creates a size-based concurrent SLRU cache with default protected ratio (20%).
+    pub fn with_max_size(max_size: u64) -> Self {
+        let max_entries = NonZeroUsize::new(10_000_000).unwrap();
+        let protected_cap = NonZeroUsize::new(max_entries.get() / 5).unwrap();
+        Self::with_limits(max_entries, protected_cap, max_size)
+    }
+
+    /// Creates a dual-limit concurrent SLRU cache.
+    pub fn with_limits(
+        max_entries: NonZeroUsize,
+        protected_capacity: NonZeroUsize,
+        max_size: u64,
+    ) -> Self {
+        Self::with_limits_and_segments(
+            max_entries,
+            protected_capacity,
+            max_size,
+            default_segment_count(),
+        )
+    }
+
+    /// Creates a dual-limit concurrent SLRU cache with custom segment count.
+    pub fn with_limits_and_segments(
+        max_entries: NonZeroUsize,
+        protected_capacity: NonZeroUsize,
+        max_size: u64,
+        segment_count: usize,
+    ) -> Self {
+        assert!(segment_count > 0, "segment_count must be greater than 0");
+        assert!(
+            max_entries.get() >= segment_count,
+            "max_entries must be >= segment_count"
+        );
+
+        let segment_capacity = max_entries.get() / segment_count;
+        let segment_protected = protected_capacity.get() / segment_count;
+        let segment_cap = NonZeroUsize::new(segment_capacity.max(1)).unwrap();
+        let segment_protected_cap = NonZeroUsize::new(segment_protected.max(1)).unwrap();
+        let segment_max_size = max_size / segment_count as u64;
+
+        let segments: Vec<_> = (0..segment_count)
+            .map(|_| {
+                Mutex::new(SlruSegment::with_hasher_and_size(
+                    segment_cap,
+                    segment_protected_cap,
+                    DefaultHashBuilder::default(),
+                    segment_max_size,
+                ))
+            })
+            .collect();
+
+        Self {
+            segments: segments.into_boxed_slice(),
+            hash_builder: DefaultHashBuilder::default(),
+        }
     }
 }
 
@@ -186,6 +330,13 @@ where
         segment.put(key, value)
     }
 
+    /// Inserts a key-value pair with explicit size tracking.
+    pub fn put_with_size(&self, key: K, value: V, size: u64) -> Option<(K, V)> {
+        let idx = self.segment_index(&key);
+        let mut segment = self.segments[idx].lock();
+        segment.put_with_size(key, value, size)
+    }
+
     /// Removes a key from the cache, returning the value if it existed.
     pub fn remove<Q>(&self, key: &Q) -> Option<V>
     where
@@ -213,6 +364,16 @@ where
         for segment in self.segments.iter() {
             segment.lock().clear();
         }
+    }
+
+    /// Returns the current total size of cached content across all segments.
+    pub fn current_size(&self) -> u64 {
+        self.segments.iter().map(|s| s.lock().current_size()).sum()
+    }
+
+    /// Returns the maximum content size the cache can hold across all segments.
+    pub fn max_size(&self) -> u64 {
+        self.segments.iter().map(|s| s.lock().max_size()).sum()
     }
 }
 

@@ -19,6 +19,7 @@ use core::num::NonZeroUsize;
 ///
 /// assert_eq!(config.capacity(), NonZeroUsize::new(100).unwrap());
 /// assert_eq!(config.initial_age(), 0);
+/// assert_eq!(config.max_size(), u64::MAX); // Default: no size limit
 /// ```
 #[derive(Clone, Copy)]
 pub struct LfudaCacheConfig {
@@ -27,6 +28,9 @@ pub struct LfudaCacheConfig {
 
     /// Initial global age value
     initial_age: usize,
+
+    /// Maximum total size of cached content (sum of entry sizes)
+    max_size: u64,
 }
 
 impl LfudaCacheConfig {
@@ -38,6 +42,7 @@ impl LfudaCacheConfig {
         Self {
             capacity,
             initial_age: 0,
+            max_size: u64::MAX,
         }
     }
 
@@ -50,6 +55,20 @@ impl LfudaCacheConfig {
         Self {
             capacity,
             initial_age,
+            max_size: u64::MAX,
+        }
+    }
+
+    /// Creates a new configuration with both entry limit and size limit.
+    ///
+    /// # Arguments
+    /// * `capacity` - Maximum number of key-value pairs the cache can hold
+    /// * `max_size` - Maximum total size of cached content
+    pub fn with_max_size(capacity: NonZeroUsize, max_size: u64) -> Self {
+        Self {
+            capacity,
+            initial_age: 0,
+            max_size,
         }
     }
 
@@ -62,6 +81,11 @@ impl LfudaCacheConfig {
     pub fn initial_age(&self) -> usize {
         self.initial_age
     }
+
+    /// Returns the maximum total size of cached content.
+    pub fn max_size(&self) -> u64 {
+        self.max_size
+    }
 }
 
 impl fmt::Debug for LfudaCacheConfig {
@@ -69,6 +93,7 @@ impl fmt::Debug for LfudaCacheConfig {
         f.debug_struct("LfudaCacheConfig")
             .field("capacity", &self.capacity)
             .field("initial_age", &self.initial_age)
+            .field("max_size", &self.max_size)
             .finish()
     }
 }
@@ -82,10 +107,18 @@ mod tests {
         let config = LfudaCacheConfig::new(NonZeroUsize::new(100).unwrap());
         assert_eq!(config.capacity().get(), 100);
         assert_eq!(config.initial_age(), 0);
+        assert_eq!(config.max_size(), u64::MAX);
 
         let config_with_age =
             LfudaCacheConfig::with_initial_age(NonZeroUsize::new(50).unwrap(), 10);
         assert_eq!(config_with_age.capacity().get(), 50);
         assert_eq!(config_with_age.initial_age(), 10);
+    }
+
+    #[test]
+    fn test_lfuda_config_with_max_size() {
+        let config = LfudaCacheConfig::with_max_size(NonZeroUsize::new(100).unwrap(), 1024 * 1024);
+        assert_eq!(config.capacity().get(), 100);
+        assert_eq!(config.max_size(), 1024 * 1024);
     }
 }
