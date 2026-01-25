@@ -70,6 +70,21 @@ impl SimulationStats {
         }
     }
 
+    /// Record storage statistics for an algorithm+mode
+    pub fn record_storage(
+        &mut self,
+        key: SimulationKey,
+        peak_bytes: usize,
+        final_bytes: usize,
+        estimated_memory: usize,
+    ) {
+        if let Some(stats) = self.stats.get_mut(&key) {
+            stats.peak_storage_bytes = peak_bytes;
+            stats.final_storage_bytes = final_bytes;
+            stats.estimated_memory_bytes = estimated_memory;
+        }
+    }
+
     /// Record a request (increases total counts) - call once per request
     #[allow(dead_code)]
     pub fn record_request(&mut self, size: usize) {
@@ -78,7 +93,12 @@ impl SimulationStats {
     }
 
     /// Get the current result
-    pub fn result(&self, duration: std::time::Duration, unique_objects: usize) -> SimulationResult {
+    pub fn result(
+        &self,
+        duration: std::time::Duration,
+        unique_objects: usize,
+        capacity: usize,
+    ) -> SimulationResult {
         // Calculate total requests from one of the algorithm stats
         let total_requests = self
             .stats
@@ -101,6 +121,7 @@ impl SimulationStats {
             total_bytes,
             unique_objects,
             duration,
+            capacity,
         }
     }
 
@@ -130,10 +151,10 @@ impl SimulationStats {
 
         println!("\nResults by Algorithm and Mode:");
         println!(
-            "{:<6} {:<12} {:>10} {:>10} {:>15} {:>8}",
-            "Algo", "Mode", "Hit Rate", "Byte HR", "Hits/Misses", "Time(ms)"
+            "{:<6} {:<12} {:>10} {:>10} {:>15} {:>10} {:>12}",
+            "Algo", "Mode", "Hit Rate", "Byte HR", "Hits/Misses", "Time(ms)", "Storage(MB)"
         );
-        println!("{}", "-".repeat(70));
+        println!("{}", "-".repeat(85));
 
         // Sort keys for consistent output
         let mut keys: Vec<_> = self.stats.keys().collect();
@@ -142,14 +163,15 @@ impl SimulationStats {
         for key in keys {
             if let Some(stats) = self.stats.get(key) {
                 println!(
-                    "{:<6} {:<12} {:>9.2}% {:>9.2}% {:>7}/{:<7} {:>8}",
+                    "{:<6} {:<12} {:>9.2}% {:>9.2}% {:>7}/{:<7} {:>10} {:>12.2}",
                     key.algorithm.as_str(),
                     key.mode.as_str(),
                     stats.hit_rate(),
                     stats.byte_hit_rate(),
                     stats.hits,
                     stats.misses,
-                    stats.simulation_time_ms
+                    stats.simulation_time_ms,
+                    stats.peak_storage_bytes as f64 / (1024.0 * 1024.0)
                 );
             }
         }
@@ -259,6 +281,9 @@ impl SimulationStats {
                     bytes_hit: stats.bytes_hit,
                     bytes_miss: stats.bytes_miss,
                     simulation_time_ms: stats.simulation_time_ms,
+                    peak_storage_bytes: stats.peak_storage_bytes,
+                    final_storage_bytes: stats.final_storage_bytes,
+                    estimated_memory_bytes: stats.estimated_memory_bytes,
                 };
                 writer.serialize(row)?;
             }

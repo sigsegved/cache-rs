@@ -21,13 +21,9 @@ struct Args {
     #[arg(short, long, value_name = "DIR")]
     input_dir: Option<PathBuf>,
 
-    /// Memory size in megabytes (for simulation)
-    #[arg(short, long, default_value = "1")]
-    memory_size: u64,
-
-    /// Disk size in megabytes (for simulation)
-    #[arg(short, long, default_value = "50")]
-    disk_size: u64,
+    /// Cache capacity (number of entries)
+    #[arg(short, long, default_value = "10000")]
+    capacity: usize,
 
     /// Algorithms to simulate (lru, lfu, lfuda, slru, gdsf, moka)
     /// If not provided, all algorithms will be used
@@ -44,13 +40,9 @@ enum Commands {
         #[arg(short, long, value_name = "DIR")]
         input_dir: Option<PathBuf>,
 
-        /// Memory size in megabytes
-        #[arg(short, long, default_value = "1")]
-        memory_size: u64,
-
-        /// Disk size in megabytes
-        #[arg(short, long, default_value = "50")]
-        disk_size: u64,
+        /// Cache capacity (number of entries)
+        #[arg(short, long, default_value = "10000")]
+        capacity: usize,
 
         /// Algorithms to simulate (lru, lfu, lfuda, slru, gdsf, moka)
         #[arg(short, long, value_name = "ALGOS", num_args = 1.., value_delimiter = ',')]
@@ -63,10 +55,6 @@ enum Commands {
         /// Number of segments for concurrent caches (default: 16)
         #[arg(long)]
         segments: Option<usize>,
-
-        /// Override cache capacity (number of objects). If not set, calculated from memory/disk.
-        #[arg(short, long)]
-        capacity: Option<usize>,
 
         /// Export results to CSV file
         #[arg(long, value_name = "PATH")]
@@ -165,33 +153,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         Some(Commands::Simulate {
             input_dir,
-            memory_size,
-            disk_size,
+            capacity,
             algorithms,
             mode,
             segments,
-            capacity,
             output_csv,
-        }) => run_simulator(
-            input_dir,
-            memory_size,
-            disk_size,
-            algorithms,
-            mode,
-            segments,
-            capacity,
-            output_csv,
-        ),
+        }) => run_simulator(input_dir, capacity, algorithms, mode, segments, output_csv),
 
         None => {
             // Legacy mode (no subcommand) - default to both modes for comparison
             run_simulator(
                 args.input_dir,
-                args.memory_size,
-                args.disk_size,
+                args.capacity,
                 args.algorithms,
                 "both".to_string(),
-                None,
                 None,
                 None,
             )
@@ -213,15 +188,12 @@ fn parse_modes(mode: &str) -> Vec<models::CacheMode> {
 }
 
 /// Run the simulator with the given parameters
-#[allow(clippy::too_many_arguments)]
 fn run_simulator(
     input_dir: Option<PathBuf>,
-    memory_size: u64,
-    disk_size: u64,
+    capacity: usize,
     algorithms: Option<Vec<String>>,
     mode: String,
     segments: Option<usize>,
-    capacity_override: Option<usize>,
     output_csv: Option<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Determine input directory
@@ -233,10 +205,6 @@ fn run_simulator(
             PathBuf::from("test_data")
         }
     };
-
-    // Convert memory size and disk size to bytes
-    let memory_size_bytes = memory_size * 1024 * 1024;
-    let disk_size_bytes = disk_size * 1024 * 1024;
 
     // Determine which algorithms to use
     let algorithms = match &algorithms {
@@ -272,11 +240,7 @@ fn run_simulator(
     println!("Cache Simulation");
     println!("===============");
     println!("Input directory: {}", input_dir.display());
-    println!("Memory size: {memory_size} MB");
-    println!("Disk size: {disk_size} MB");
-    if let Some(cap) = capacity_override {
-        println!("Capacity override: {cap} objects");
-    }
+    println!("Cache capacity: {} entries", capacity);
     println!(
         "Algorithms: {:?}",
         algorithms.iter().map(|a| a.as_str()).collect::<Vec<_>>()
@@ -293,12 +257,10 @@ fn run_simulator(
     // Create simulation configuration
     let config = models::SimulationConfig {
         input_dir,
-        memory_size: memory_size_bytes as usize,
-        disk_size: disk_size_bytes as usize,
+        capacity,
         algorithms,
         modes,
         segment_count: segments,
-        capacity_override,
     };
 
     run_simulation(config, output_csv)

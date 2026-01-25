@@ -123,19 +123,14 @@ impl fmt::Display for SimulationKey {
 pub struct SimulationConfig {
     /// Directory containing input log files
     pub input_dir: PathBuf,
-    /// Memory size in bytes
-    pub memory_size: usize,
-    /// Disk size in bytes
-    #[allow(dead_code)]
-    pub disk_size: usize,
+    /// Cache capacity in number of entries
+    pub capacity: usize,
     /// Algorithms to simulate
     pub algorithms: Vec<CacheAlgorithm>,
     /// Modes to simulate
     pub modes: Vec<CacheMode>,
     /// Number of segments for concurrent caches (None = auto)
     pub segment_count: Option<usize>,
-    /// Override calculated capacity with explicit value
-    pub capacity_override: Option<usize>,
 }
 
 /// Results of a simulation run
@@ -151,6 +146,9 @@ pub struct SimulationResult {
     pub unique_objects: usize,
     /// Duration of the simulation
     pub duration: Duration,
+    /// Cache capacity used
+    #[allow(dead_code)]
+    pub capacity: usize,
 }
 
 /// Statistics for a single algorithm
@@ -166,6 +164,12 @@ pub struct AlgorithmStats {
     pub bytes_miss: usize,
     /// Simulation time in milliseconds
     pub simulation_time_ms: u64,
+    /// Peak storage usage in bytes (sum of object sizes in cache)
+    pub peak_storage_bytes: usize,
+    /// Final storage usage in bytes
+    pub final_storage_bytes: usize,
+    /// Estimated memory overhead in bytes (cache data structure overhead)
+    pub estimated_memory_bytes: usize,
 }
 
 impl AlgorithmStats {
@@ -207,4 +211,7 @@ pub struct CsvResultRow {
     pub bytes_hit: usize,
     pub bytes_miss: usize,
     pub simulation_time_ms: u64,
+    pub peak_storage_bytes: usize,
+    pub final_storage_bytes: usize,
+    pub estimated_memory_bytes: usize,
 }

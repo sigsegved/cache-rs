@@ -27,39 +27,25 @@ fn main() -> Result<(), String> {
         dir
     };
 
-    // Parse memory size (default: 100 MB)
-    let memory_size_mb = if args.len() > 2 {
-        args[2].parse::<usize>().unwrap_or(100)
+    // Parse capacity (default: 10000 entries)
+    let capacity = if args.len() > 2 {
+        args[2].parse::<usize>().unwrap_or(10000)
     } else {
-        100
+        10000
     };
-
-    // Parse disk size (default: 1000 MB)
-    let disk_size_mb = if args.len() > 3 {
-        args[3].parse::<usize>().unwrap_or(1000)
-    } else {
-        1000
-    };
-
-    // Convert MB to bytes
-    let memory_size = memory_size_mb * 1024 * 1024;
-    let disk_size = disk_size_mb * 1024 * 1024;
 
     println!("Cache Simulation");
     println!("===============");
     println!("Input directory: {input_dir:?}");
-    println!("Memory size: {memory_size_mb} MB");
-    println!("Disk size: {disk_size_mb} MB");
+    println!("Capacity: {capacity} entries");
 
     // Create simulation configuration
     let config = SimulationConfig {
         input_dir,
-        memory_size,
-        disk_size,
+        capacity,
         algorithms: CacheAlgorithm::all(),
         modes: vec![CacheMode::Sequential],
         segment_count: None,
-        capacity_override: None,
     };
 
     // Count log files

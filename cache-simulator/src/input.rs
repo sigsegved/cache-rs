@@ -127,6 +127,7 @@ impl LogReader {
     }
 
     /// Parse a single log file (legacy batch mode)
+    #[allow(dead_code)]
     pub fn parse_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<Request>, LogParseError> {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
@@ -143,6 +144,7 @@ impl LogReader {
     }
 
     /// Parse all log files in the input directory (legacy batch mode)
+    #[allow(dead_code)]
     pub fn parse_all_files(&self) -> Result<Vec<Request>, LogParseError> {
         let log_files = self.get_log_files()?;
         let mut all_requests = Vec::new();
@@ -200,6 +202,7 @@ impl RequestIterator {
     }
 
     /// Reset the iterator to start from the beginning
+    #[allow(dead_code)]
     pub fn reset(&mut self) -> io::Result<()> {
         self.current_file_index = 0;
         self.current_reader = None;
