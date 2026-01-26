@@ -249,7 +249,11 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
                 // SAFETY: node comes from our map
                 self.list.move_to_front(node);
                 let entry = (*node).get_value();
-                entry.touch(); // Update last_accessed timestamp
+                // Update last_accessed timestamp. Note: this requires &mut self,
+                // so the cache itself is not lock-free; any internal atomic fields
+                // are intended for potential read-only monitoring, not concurrent
+                // cache operations.
+                entry.touch();
                 self.metrics.core.record_hit(entry.size);
                 Some(&entry.value)
             }
