@@ -21,7 +21,7 @@ std = []
 concurrent = ["parking_lot"]
 
 [dependencies]
-hashbrown = { version = "0.14", optional = true }
+hashbrown = { version = "0.15", optional = true }
 parking_lot = { version = "0.12", optional = true }
 
 [dev-dependencies]
