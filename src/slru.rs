@@ -1279,4 +1279,40 @@ mod tests {
         assert_eq!(cache.cap().get(), 100);
         assert_eq!(cache.protected_max_size().get(), 30);
     }
+
+    #[test]
+    fn test_slru_record_miss() {
+        use crate::metrics::CacheMetrics;
+
+        let mut cache: SlruCache<String, i32> = SlruCache::new(
+            NonZeroUsize::new(100).unwrap(),
+            NonZeroUsize::new(30).unwrap(),
+        );
+
+        cache.record_miss(100);
+        cache.record_miss(200);
+
+        let metrics = cache.metrics();
+        assert_eq!(metrics.get("cache_misses").unwrap(), &2.0);
+    }
+
+    #[test]
+    fn test_slru_get_mut() {
+        let mut cache: SlruCache<String, i32> = SlruCache::new(
+            NonZeroUsize::new(100).unwrap(),
+            NonZeroUsize::new(30).unwrap(),
+        );
+
+        cache.put("key".to_string(), 10);
+        assert_eq!(cache.get(&"key".to_string()), Some(&10));
+
+        // Modify via get_mut
+        if let Some(val) = cache.get_mut(&"key".to_string()) {
+            *val = 42;
+        }
+        assert_eq!(cache.get(&"key".to_string()), Some(&42));
+
+        // get_mut on missing key returns None
+        assert!(cache.get_mut(&"missing".to_string()).is_none());
+    }
 }

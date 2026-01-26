@@ -18,6 +18,7 @@
 
 #![cfg(feature = "concurrent")]
 
+use cache_rs::metrics::CacheMetrics;
 use cache_rs::{
     ConcurrentGdsfCache, ConcurrentLfuCache, ConcurrentLfudaCache, ConcurrentLruCache,
     ConcurrentSlruCache,
@@ -1621,3 +1622,254 @@ fn test_concurrent_size_tracking_on_remove() {
         assert!(cache.get(&i).is_some(), "Key {} should still exist", i);
     }
 }
+
+// ============================================================================
+// SEGMENT 4: CONSTRUCTOR AND SIZE-LIMIT COVERAGE TESTS
+// ============================================================================
+// These tests ensure coverage for with_max_size, with_limits, current_size,
+// max_size, and clear methods across all concurrent cache implementations.
+
+// ----------------------------------------------------------------------------
+// LRU SIZE-BASED CONSTRUCTORS
+// ----------------------------------------------------------------------------
+
+#[test]
+fn test_concurrent_lru_with_max_size() {
+    let max_size: u64 = 1024 * 1024; // 1MB
+    let cache: ConcurrentLruCache<String, Vec<u8>> = ConcurrentLruCache::with_max_size(max_size);
+
+    assert_eq!(cache.max_size(), max_size);
+    assert_eq!(cache.current_size(), 0);
+
+    // Insert some data with explicit sizes
+    let data = vec![0u8; 1000];
+    cache.put_with_size("key1".to_string(), data.clone(), 1000);
+
+    assert_eq!(cache.current_size(), 1000);
+    assert!(cache.get(&"key1".to_string()).is_some());
+}
+
+#[test]
+fn test_concurrent_lru_with_limits() {
+    let max_entries = NonZeroUsize::new(100).unwrap();
+    let max_size: u64 = 50_000;
+    let cache: ConcurrentLruCache<i32, String> =
+        ConcurrentLruCache::with_limits(max_entries, max_size);
+
+    assert!(cache.max_size() >= max_size); // Distributed across segments
+    assert_eq!(cache.current_size(), 0);
+
+    // Fill with data
+    for i in 0..50 {
+        cache.put_with_size(i, format!("value_{}", i), 100);
+    }
+
+    assert_eq!(cache.current_size(), 5000);
+    assert_eq!(cache.len(), 50);
+
+    // Clear and verify
+    cache.clear();
+    assert_eq!(cache.len(), 0);
+    assert_eq!(cache.current_size(), 0);
+}
+
+// ----------------------------------------------------------------------------
+// LFU SIZE-BASED CONSTRUCTORS
+// ----------------------------------------------------------------------------
+
+#[test]
+fn test_concurrent_lfu_with_max_size() {
+    let max_size: u64 = 1024 * 1024;
+    let cache: ConcurrentLfuCache<String, Vec<u8>> = ConcurrentLfuCache::with_max_size(max_size);
+
+    assert_eq!(cache.max_size(), max_size);
+    assert_eq!(cache.current_size(), 0);
+
+    cache.put_with_size("key1".to_string(), vec![1, 2, 3], 100);
+    assert_eq!(cache.current_size(), 100);
+}
+
+#[test]
+fn test_concurrent_lfu_with_limits() {
+    let max_entries = NonZeroUsize::new(100).unwrap();
+    let max_size: u64 = 50_000;
+    let cache: ConcurrentLfuCache<i32, String> =
+        ConcurrentLfuCache::with_limits(max_entries, max_size);
+
+    for i in 0..50 {
+        cache.put_with_size(i, format!("value_{}", i), 100);
+    }
+
+    assert_eq!(cache.current_size(), 5000);
+
+    cache.clear();
+    assert_eq!(cache.len(), 0);
+    assert_eq!(cache.current_size(), 0);
+}
+
+// ----------------------------------------------------------------------------
+// LFUDA SIZE-BASED CONSTRUCTORS
+// ----------------------------------------------------------------------------
+
+#[test]
+fn test_concurrent_lfuda_with_max_size() {
+    let max_size: u64 = 1024 * 1024;
+    let cache: ConcurrentLfudaCache<String, Vec<u8>> =
+        ConcurrentLfudaCache::with_max_size(max_size);
+
+    assert_eq!(cache.max_size(), max_size);
+    assert_eq!(cache.current_size(), 0);
+
+    cache.put_with_size("key1".to_string(), vec![1, 2, 3], 100);
+    assert_eq!(cache.current_size(), 100);
+}
+
+#[test]
+fn test_concurrent_lfuda_with_limits() {
+    let max_entries = NonZeroUsize::new(100).unwrap();
+    let max_size: u64 = 50_000;
+    let cache: ConcurrentLfudaCache<i32, String> =
+        ConcurrentLfudaCache::with_limits(max_entries, max_size);
+
+    for i in 0..50 {
+        cache.put_with_size(i, format!("value_{}", i), 100);
+    }
+
+    assert_eq!(cache.current_size(), 5000);
+
+    cache.clear();
+    assert_eq!(cache.len(), 0);
+    assert_eq!(cache.current_size(), 0);
+}
+
+// ----------------------------------------------------------------------------
+// GDSF SIZE-BASED CONSTRUCTORS
+// ----------------------------------------------------------------------------
+
+#[test]
+fn test_concurrent_gdsf_with_max_size() {
+    let max_size: u64 = 1024 * 1024;
+    let cache: ConcurrentGdsfCache<String, Vec<u8>> = ConcurrentGdsfCache::with_max_size(max_size);
+
+    assert_eq!(cache.max_size(), max_size);
+    assert_eq!(cache.current_size(), 0);
+
+    // GDSF's put() always requires size as 3rd parameter
+    cache.put("key1".to_string(), vec![1, 2, 3], 100);
+    assert_eq!(cache.current_size(), 100);
+}
+
+#[test]
+fn test_concurrent_gdsf_with_limits() {
+    let max_entries = NonZeroUsize::new(100).unwrap();
+    let max_size: u64 = 50_000;
+    let cache: ConcurrentGdsfCache<i32, String> =
+        ConcurrentGdsfCache::with_limits(max_entries, max_size);
+
+    for i in 0..50 {
+        // GDSF's put() always requires size as 3rd parameter
+        cache.put(i, format!("value_{}", i), 100);
+    }
+
+    assert_eq!(cache.current_size(), 5000);
+
+    cache.clear();
+    assert_eq!(cache.len(), 0);
+    assert_eq!(cache.current_size(), 0);
+}
+
+// ----------------------------------------------------------------------------
+// SLRU SIZE-BASED CONSTRUCTORS
+// ----------------------------------------------------------------------------
+
+#[test]
+fn test_concurrent_slru_with_max_size() {
+    let max_size: u64 = 1024 * 1024;
+    let cache: ConcurrentSlruCache<String, Vec<u8>> = ConcurrentSlruCache::with_max_size(max_size);
+
+    assert_eq!(cache.max_size(), max_size);
+    assert_eq!(cache.current_size(), 0);
+
+    cache.put_with_size("key1".to_string(), vec![1, 2, 3], 100);
+    assert_eq!(cache.current_size(), 100);
+}
+
+#[test]
+fn test_concurrent_slru_with_limits() {
+    let max_entries = NonZeroUsize::new(100).unwrap();
+    let protected_cap = NonZeroUsize::new(20).unwrap();
+    let max_size: u64 = 50_000;
+    let cache: ConcurrentSlruCache<i32, String> =
+        ConcurrentSlruCache::with_limits(max_entries, protected_cap, max_size);
+
+    for i in 0..50 {
+        cache.put_with_size(i, format!("value_{}", i), 100);
+    }
+
+    assert_eq!(cache.current_size(), 5000);
+
+    cache.clear();
+    assert_eq!(cache.len(), 0);
+    assert_eq!(cache.current_size(), 0);
+}
+
+// ----------------------------------------------------------------------------
+// CLEAR OPERATIONS UNDER CONCURRENCY
+// ----------------------------------------------------------------------------
+
+#[test]
+fn test_concurrent_clear_during_operations() {
+    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::with_segments(
+        NonZeroUsize::new(1000).unwrap(),
+        4,
+    ));
+
+    // Pre-fill
+    for i in 0..100 {
+        cache.put(i, i);
+    }
+    assert_eq!(cache.len(), 100);
+
+    let cache_clone = Arc::clone(&cache);
+
+    // Spawn thread to clear while main thread inserts
+    let handle = thread::spawn(move || {
+        for _ in 0..5 {
+            cache_clone.clear();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    });
+
+    // Insert while clear is happening
+    for i in 100..200 {
+        cache.put(i, i);
+    }
+
+    handle.join().unwrap();
+
+    // Cache should be in a valid state (might be empty or have some entries)
+    let len = cache.len();
+    assert!(len <= 1000, "Cache should respect capacity");
+}
+
+// ----------------------------------------------------------------------------
+// RECORD_MISS COVERAGE (only ConcurrentLruCache has record_miss)
+// ----------------------------------------------------------------------------
+
+#[test]
+fn test_concurrent_lru_record_miss() {
+    let cache: ConcurrentLruCache<i32, i32> =
+        ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap());
+
+    // Record some misses
+    cache.record_miss(100);
+    cache.record_miss(200);
+
+    // Check metrics include misses
+    let metrics = cache.metrics();
+    assert!(
+        metrics.get("cache_misses").unwrap_or(&0.0) >= &2.0,
+        "Should have recorded misses"
+    );
+}
+
