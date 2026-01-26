@@ -101,7 +101,7 @@ use core::num::NonZeroUsize;
 use parking_lot::Mutex;
 
 #[cfg(feature = "hashbrown")]
-use hashbrown::hash_map::DefaultHashBuilder;
+use hashbrown::DefaultHashBuilder;
 
 #[cfg(not(feature = "hashbrown"))]
 use std::collections::hash_map::RandomState as DefaultHashBuilder;

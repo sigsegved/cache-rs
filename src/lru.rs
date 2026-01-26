@@ -139,7 +139,7 @@ use core::mem;
 use core::num::NonZeroUsize;
 
 #[cfg(feature = "hashbrown")]
-use hashbrown::hash_map::DefaultHashBuilder;
+use hashbrown::DefaultHashBuilder;
 #[cfg(feature = "hashbrown")]
 use hashbrown::HashMap;
 
