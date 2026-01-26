@@ -1653,10 +1653,11 @@ fn test_concurrent_lru_with_max_size() {
 fn test_concurrent_lru_with_limits() {
     let max_entries = NonZeroUsize::new(100).unwrap();
     let max_size: u64 = 50_000;
+    // Use single segment for deterministic size tracking in tests
     let cache: ConcurrentLruCache<i32, String> =
-        ConcurrentLruCache::with_limits(max_entries, max_size);
+        ConcurrentLruCache::with_limits_and_segments(max_entries, max_size, 1);
 
-    assert!(cache.max_size() >= max_size); // Distributed across segments
+    assert_eq!(cache.max_size(), max_size);
     assert_eq!(cache.current_size(), 0);
 
     // Fill with data
@@ -1693,8 +1694,9 @@ fn test_concurrent_lfu_with_max_size() {
 fn test_concurrent_lfu_with_limits() {
     let max_entries = NonZeroUsize::new(100).unwrap();
     let max_size: u64 = 50_000;
+    // Use single segment for deterministic size tracking in tests
     let cache: ConcurrentLfuCache<i32, String> =
-        ConcurrentLfuCache::with_limits(max_entries, max_size);
+        ConcurrentLfuCache::with_limits_and_segments(max_entries, max_size, 1);
 
     for i in 0..50 {
         cache.put_with_size(i, format!("value_{}", i), 100);
@@ -1728,8 +1730,9 @@ fn test_concurrent_lfuda_with_max_size() {
 fn test_concurrent_lfuda_with_limits() {
     let max_entries = NonZeroUsize::new(100).unwrap();
     let max_size: u64 = 50_000;
+    // Use single segment for deterministic size tracking in tests
     let cache: ConcurrentLfudaCache<i32, String> =
-        ConcurrentLfudaCache::with_limits(max_entries, max_size);
+        ConcurrentLfudaCache::with_limits_and_segments(max_entries, max_size, 1);
 
     for i in 0..50 {
         cache.put_with_size(i, format!("value_{}", i), 100);
@@ -1763,8 +1766,9 @@ fn test_concurrent_gdsf_with_max_size() {
 fn test_concurrent_gdsf_with_limits() {
     let max_entries = NonZeroUsize::new(100).unwrap();
     let max_size: u64 = 50_000;
+    // Use single segment for deterministic size tracking in tests
     let cache: ConcurrentGdsfCache<i32, String> =
-        ConcurrentGdsfCache::with_limits(max_entries, max_size);
+        ConcurrentGdsfCache::with_limits_and_segments(max_entries, max_size, 1);
 
     for i in 0..50 {
         // GDSF's put() always requires size as 3rd parameter
@@ -1799,8 +1803,9 @@ fn test_concurrent_slru_with_limits() {
     let max_entries = NonZeroUsize::new(100).unwrap();
     let protected_cap = NonZeroUsize::new(20).unwrap();
     let max_size: u64 = 50_000;
+    // Use single segment for deterministic size tracking in tests
     let cache: ConcurrentSlruCache<i32, String> =
-        ConcurrentSlruCache::with_limits(max_entries, protected_cap, max_size);
+        ConcurrentSlruCache::with_limits_and_segments(max_entries, protected_cap, max_size, 1);
 
     for i in 0..50 {
         cache.put_with_size(i, format!("value_{}", i), 100);
