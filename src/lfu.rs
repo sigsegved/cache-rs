@@ -425,13 +425,19 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
                     .unwrap_or(1);
                 let old_size = entry.size;
 
-                // Create new CacheEntry with same frequency
-                let new_entry = CacheEntry::with_metadata(
+                // Preserve original timestamps before creating a new CacheEntry
+                let created_at = entry.created_at;
+                let last_accessed = entry.last_accessed;
+
+                // Create new CacheEntry with same frequency, but keep original timestamps
+                let mut new_entry = CacheEntry::with_metadata(
                     key.clone(),
                     value,
                     size,
                     LfuMeta::new(frequency as u64),
                 );
+                new_entry.created_at = created_at;
+                new_entry.last_accessed = last_accessed;
 
                 let old_entry = self
                     .frequency_lists
