@@ -248,9 +248,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
             unsafe {
                 // SAFETY: node comes from our map
                 self.list.move_to_front(node);
-                let entry = (*node).get_value();
-                // Note: timestamp update skipped since we return an immutable reference.
-                // The LRU ordering is maintained by move_to_front().
+                let entry = (*node).get_value_mut();
+                entry.touch(); // Update last_accessed timestamp
                 self.metrics.core.record_hit(entry.size);
                 Some(&entry.value)
             }
