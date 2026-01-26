@@ -1872,4 +1872,3 @@ fn test_concurrent_lru_record_miss() {
         "Should have recorded misses"
     );
 }
-
