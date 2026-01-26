@@ -950,11 +950,13 @@ fn test_clear_during_operations() {
     }
 
     // Clear thread
+    // Note: Use longer sleep times (20ms) for Windows compatibility
+    // Windows has ~15ms timer resolution so shorter sleeps are unreliable
     let cache_clear = Arc::clone(&cache);
     let stop_flag_clear = Arc::clone(&stop_flag);
     handles.push(thread::spawn(move || {
         for _ in 0..10 {
-            thread::sleep(std::time::Duration::from_millis(5));
+            thread::sleep(std::time::Duration::from_millis(20));
             cache_clear.clear();
         }
         stop_flag_clear.store(1, Ordering::Relaxed);
@@ -1845,10 +1847,12 @@ fn test_concurrent_clear_during_operations() {
     let cache_clone = Arc::clone(&cache);
 
     // Spawn thread to clear while main thread inserts
+    // Note: Use longer sleep times (20ms) for Windows compatibility
+    // Windows has ~15ms timer resolution so shorter sleeps are unreliable
     let handle = thread::spawn(move || {
         for _ in 0..5 {
             cache_clone.clear();
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            std::thread::sleep(std::time::Duration::from_millis(20));
         }
     });
 
