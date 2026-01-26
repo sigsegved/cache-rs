@@ -249,11 +249,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
                 // SAFETY: node comes from our map
                 self.list.move_to_front(node);
                 let entry = (*node).get_value();
-                // Update last_accessed timestamp. Note: this requires &mut self,
-                // so the cache itself is not lock-free; any internal atomic fields
-                // are intended for potential read-only monitoring, not concurrent
-                // cache operations.
-                entry.touch();
+                // Note: timestamp update skipped since we return an immutable reference.
+                // The LRU ordering is maintained by move_to_front().
                 self.metrics.core.record_hit(entry.size);
                 Some(&entry.value)
             }

@@ -18,8 +18,8 @@
 //! - `key: K` - User's key type
 //! - `value: V` - User's value type  
 //! - `size: u64` - 8 bytes (content size tracking)
-//! - `last_accessed: AtomicU64` - 8 bytes (atomic for lock-free reads)
-//! - `create_time: AtomicU64` - 8 bytes (atomic for consistency)
+//! - `last_accessed: u64` - 8 bytes (timestamps for monitoring)
+//! - `create_time: u64` - 8 bytes (timestamps for TTL)
 //! - `metadata: Option<M>` - 0-24 bytes depending on algorithm
 //!
 //! Base overhead (all algorithms): ~24 bytes + key + value + optional metadata
@@ -48,14 +48,13 @@
 //!
 //! # Thread Safety
 //!
-//! The `last_accessed` and `create_time` fields use `AtomicU64` for lock-free
-//! timestamp updates. This allows concurrent reads to update access timestamps
-//! without requiring exclusive access to the cache entry.
+//! The single-threaded cache implementations use plain `u64` for timestamps.
+//! For concurrent access, wrap the cache in appropriate synchronization primitives,
+//! or use the concurrent cache implementations which handle synchronization internally.
 
 extern crate alloc;
 
 use core::fmt;
-use core::sync::atomic::{AtomicU64, Ordering};
 
 /// Unified cache entry holding key, value, timestamps, and algorithm-specific metadata.
 ///
@@ -97,12 +96,10 @@ pub struct CacheEntry<K, V, M = ()> {
     pub size: u64,
 
     /// Last access timestamp (nanos since epoch or monotonic clock).
-    /// Atomic to allow lock-free updates during `get()`.
-    last_accessed: AtomicU64,
+    last_accessed: u64,
 
     /// Creation timestamp (nanos since epoch or monotonic clock).
-    /// Atomic for consistency with `last_accessed`.
-    create_time: AtomicU64,
+    create_time: u64,
 
     /// Algorithm-specific metadata (frequency, priority, segment, etc.).
     /// `None` for algorithms that don't need per-entry metadata (e.g., LRU).
@@ -140,8 +137,8 @@ impl<K, V, M> CacheEntry<K, V, M> {
             key,
             value,
             size,
-            last_accessed: AtomicU64::new(now),
-            create_time: AtomicU64::new(now),
+            last_accessed: now,
+            create_time: now,
             metadata: None,
         }
     }
@@ -179,23 +176,20 @@ impl<K, V, M> CacheEntry<K, V, M> {
             key,
             value,
             size,
-            last_accessed: AtomicU64::new(now),
-            create_time: AtomicU64::new(now),
+            last_accessed: now,
+            create_time: now,
             metadata: Some(metadata),
         }
     }
 
     /// Updates the last_accessed timestamp to the current time.
     ///
-    /// This operation is lock-free (uses atomic store with relaxed ordering)
-    /// and can be called from concurrent contexts safely.
-    ///
     /// # Examples
     ///
     /// ```
     /// use cache_rs::entry::CacheEntry;
     ///
-    /// let entry: CacheEntry<&str, i32, ()> = CacheEntry::new("key", 42, 1);
+    /// let mut entry: CacheEntry<&str, i32, ()> = CacheEntry::new("key", 42, 1);
     /// let old_access_time = entry.last_accessed();
     ///
     /// // Simulate some time passing (in real code, time would actually pass)
@@ -204,9 +198,8 @@ impl<K, V, M> CacheEntry<K, V, M> {
     /// // On systems with std, the access time would be updated
     /// ```
     #[inline]
-    pub fn touch(&self) {
-        self.last_accessed
-            .store(Self::now_nanos(), Ordering::Relaxed);
+    pub fn touch(&mut self) {
+        self.last_accessed = Self::now_nanos();
     }
 
     /// Gets the last_accessed timestamp in nanoseconds.
@@ -215,7 +208,7 @@ impl<K, V, M> CacheEntry<K, V, M> {
     /// or 0 in `no_std` environments.
     #[inline]
     pub fn last_accessed(&self) -> u64 {
-        self.last_accessed.load(Ordering::Relaxed)
+        self.last_accessed
     }
 
     /// Gets the creation timestamp in nanoseconds.
@@ -224,7 +217,7 @@ impl<K, V, M> CacheEntry<K, V, M> {
     /// or 0 in `no_std` environments.
     #[inline]
     pub fn create_time(&self) -> u64 {
-        self.create_time.load(Ordering::Relaxed)
+        self.create_time
     }
 
     /// Gets the age of this entry in nanoseconds.
@@ -305,8 +298,8 @@ impl<K: Clone, V: Clone, M: Clone> Clone for CacheEntry<K, V, M> {
             key: self.key.clone(),
             value: self.value.clone(),
             size: self.size,
-            last_accessed: AtomicU64::new(self.last_accessed.load(Ordering::Relaxed)),
-            create_time: AtomicU64::new(self.create_time.load(Ordering::Relaxed)),
+            last_accessed: self.last_accessed,
+            create_time: self.create_time,
             metadata: self.metadata.clone(),
         }
     }
@@ -318,21 +311,15 @@ impl<K: fmt::Debug, V: fmt::Debug, M: fmt::Debug> fmt::Debug for CacheEntry<K, V
             .field("key", &self.key)
             .field("value", &self.value)
             .field("size", &self.size)
-            .field("last_accessed", &self.last_accessed.load(Ordering::Relaxed))
-            .field("create_time", &self.create_time.load(Ordering::Relaxed))
+            .field("last_accessed", &self.last_accessed)
+            .field("create_time", &self.create_time)
             .field("metadata", &self.metadata)
             .finish()
     }
 }
 
-// SAFETY: CacheEntry is Send if all its fields are Send.
-// AtomicU64 is Send, and we require K, V, M to be Send.
-unsafe impl<K: Send, V: Send, M: Send> Send for CacheEntry<K, V, M> {}
-
-// SAFETY: CacheEntry is Sync if all its fields are Sync.
-// AtomicU64 is Sync, and we require K, V, M to be Sync.
-// The atomic fields can be safely accessed from multiple threads.
-unsafe impl<K: Sync, V: Sync, M: Sync> Sync for CacheEntry<K, V, M> {}
+// CacheEntry is automatically Send + Sync when K, V, M are Send + Sync
+// since all fields (including u64 timestamps) are Send + Sync.
 
 #[cfg(test)]
 mod tests {
@@ -368,7 +355,7 @@ mod tests {
 
     #[test]
     fn test_touch_updates_last_accessed() {
-        let entry: CacheEntry<&str, i32, ()> = CacheEntry::new("key", 42, 1);
+        let mut entry: CacheEntry<&str, i32, ()> = CacheEntry::new("key", 42, 1);
         let initial = entry.last_accessed();
         entry.touch();
         let updated = entry.last_accessed();
@@ -394,7 +381,7 @@ mod tests {
 
     #[test]
     fn test_age_and_idle() {
-        let entry: CacheEntry<&str, i32, ()> = CacheEntry::new("key", 42, 1);
+        let mut entry: CacheEntry<&str, i32, ()> = CacheEntry::new("key", 42, 1);
 
         // In no_std mode, timestamps will be 0
         // In std mode, age/idle should be small (just created)
