@@ -742,8 +742,11 @@ fn test_update_is_atomic() {
 
 #[test]
 fn test_remove_consistency() {
+    // Use capacity large enough to hold all items without eviction
+    // With 4 segments and 50 items, ensure each segment can hold at least 50/4 = 12.5 items
+    // Using capacity 200 (50 per segment) ensures no eviction occurs during insert
     let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::with_segments(
-        NonZeroUsize::new(100).unwrap(),
+        NonZeroUsize::new(200).unwrap(),
         4,
     ));
 
@@ -751,6 +754,10 @@ fn test_remove_consistency() {
     for i in 0..50 {
         cache.put(i, i);
     }
+
+    // Verify all items were inserted before attempting removes
+    let initial_count = cache.len();
+    assert_eq!(initial_count, 50, "All 50 items should be inserted");
 
     let successful_removes = Arc::new(AtomicUsize::new(0));
     let mut handles = vec![];
