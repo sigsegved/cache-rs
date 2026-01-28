@@ -148,9 +148,15 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-cargo-registry-v7-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry-v7-
+          key: ${{ runner.os }}-cargo-nightly-v8-${{ hashFiles('**/Cargo.lock') }}
+          # No restore-keys to prevent fallback to stale caches
+
+      - name: Clean and rebuild
+        run: |
+          # Remove any stale registry entries that might cause issues
+          rm -rf ~/.cargo/registry/cache
+          rm -rf ~/.cargo/registry/index
+          cargo clean
 
       - name: Build with nightly
         run: cargo build --all-targets
