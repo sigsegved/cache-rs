@@ -39,9 +39,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-check-stable-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-check-v2-stable-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-check-stable-
+            ${{ runner.os }}-cargo-check-v2-stable-
             ${{ runner.os }}-cargo-stable-
             ${{ runner.os }}-cargo-
 
@@ -96,12 +96,12 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-test-${{ matrix.rust }}-${{ matrix.features }}-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-test-v2-${{ matrix.rust }}-${{ matrix.features }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-test-${{ matrix.rust }}-${{ matrix.features }}-
-            ${{ runner.os }}-cargo-test-${{ matrix.rust }}-
-            ${{ runner.os }}-cargo-${{ matrix.rust }}-
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-test-v2-${{ matrix.rust }}-${{ matrix.features }}-
+            ${{ runner.os }}-cargo-test-v2-${{ matrix.rust }}-
+            ${{ runner.os }}-cargo-v2-${{ matrix.rust }}-
+            ${{ runner.os }}-cargo-v2-
 
       - name: Build all targets (default features)
         if: matrix.features == 'default'
@@ -149,9 +149,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-nightly-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-nightly-v2-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-nightly-
+            ${{ runner.os }}-cargo-nightly-v2-
             ${{ runner.os }}-cargo-
 
       - name: Build with nightly
@@ -184,9 +184,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-no-std-1.74.0-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-no-std-v2-1.74.0-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-no-std-1.74.0-
+            ${{ runner.os }}-cargo-no-std-v2-1.74.0-
             ${{ runner.os }}-cargo-1.74.0-
             ${{ runner.os }}-cargo-
 
@@ -212,9 +212,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-doc-stable-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-doc-v2-stable-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-doc-stable-
+            ${{ runner.os }}-cargo-doc-v2-stable-
             ${{ runner.os }}-cargo-stable-
             ${{ runner.os }}-cargo-
 
@@ -243,9 +243,9 @@ jobs:
             ~/.cargo/git
             ~/.cargo/bin
             target
-          key: ${{ runner.os }}-cargo-audit-stable-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-audit-v2-stable-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-audit-stable-
+            ${{ runner.os }}-cargo-audit-v2-stable-
             ${{ runner.os }}-cargo-stable-
             ${{ runner.os }}-cargo-
 
@@ -278,9 +278,9 @@ jobs:
             ~/.cargo/git
             ~/.cargo/bin
             target
-          key: ${{ runner.os }}-cargo-coverage-stable-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-coverage-v2-stable-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-coverage-stable-
+            ${{ runner.os }}-cargo-coverage-v2-stable-
             ${{ runner.os }}-cargo-stable-
             ${{ runner.os }}-cargo-
 
@@ -329,9 +329,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-release-stable-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-release-v2-stable-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-release-stable-
+            ${{ runner.os }}-cargo-release-v2-stable-
             ${{ runner.os }}-cargo-stable-
             ${{ runner.os }}-cargo-
 
