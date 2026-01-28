@@ -69,10 +69,13 @@
 //!
 //! ```rust,ignore
 //! use cache_rs::concurrent::ConcurrentLfuCache;
+//! use cache_rs::config::ConcurrentLfuCacheConfig;
+//! use std::num::NonZeroUsize;
 //! use std::sync::Arc;
 //! use std::thread;
 //!
-//! let cache = Arc::new(ConcurrentLfuCache::new(10_000));
+//! let config = ConcurrentLfuCacheConfig::new(NonZeroUsize::new(10_000).unwrap());
+//! let cache = Arc::new(ConcurrentLfuCache::from_config(config));
 //!
 //! let handles: Vec<_> = (0..4).map(|i| {
 //!     let cache = Arc::clone(&cache);
@@ -153,55 +156,6 @@ where
             segments: segments.into_boxed_slice(),
             hash_builder: DefaultHashBuilder::default(),
         }
-    }
-
-    /// Creates a concurrent LFU cache with the specified capacity.
-    ///
-    /// This is a convenience constructor with default segment count.
-    /// For more control, use [`ConcurrentLfuCache::from_config`].
-    ///
-    /// # Arguments
-    ///
-    /// * `cap` - The maximum number of entries the cache can hold across all segments.
-    pub fn new(cap: NonZeroUsize) -> Self {
-        Self::from_config(crate::config::ConcurrentLfuCacheConfig::new(cap))
-    }
-
-    /// Creates a concurrent LFU cache with the specified capacity and segment count.
-    ///
-    /// This is a convenience constructor. For more control, use [`ConcurrentLfuCache::from_config`].
-    ///
-    /// # Arguments
-    ///
-    /// * `cap` - The maximum number of entries the cache can hold across all segments.
-    /// * `segments` - The number of segments to use.
-    pub fn with_segments(cap: NonZeroUsize, segments: usize) -> Self {
-        Self::from_config(crate::config::ConcurrentLfuCacheConfig::new(cap).with_segments(segments))
-    }
-
-    /// Creates a concurrent LFU cache with capacity, size limit, and segment count.
-    ///
-    /// This is a convenience constructor. For more control, use [`ConcurrentLfuCache::from_config`].
-    pub fn with_limits_and_segments(cap: NonZeroUsize, max_size: u64, segments: usize) -> Self {
-        Self::from_config(
-            crate::config::ConcurrentLfuCacheConfig::new(cap)
-                .with_max_size(max_size)
-                .with_segments(segments),
-        )
-    }
-
-    /// Creates a concurrent LFU cache with size limit only.
-    ///
-    /// This is a convenience constructor. For more control, use [`ConcurrentLfuCache::from_config`].
-    pub fn with_max_size(max_size: u64) -> Self {
-        // Use a large but reasonable capacity that won't overflow hash tables
-        const MAX_REASONABLE_CAPACITY: usize = 1 << 30; // ~1 billion entries
-        Self::from_config(
-            crate::config::ConcurrentLfuCacheConfig::new(
-                NonZeroUsize::new(MAX_REASONABLE_CAPACITY).unwrap(),
-            )
-            .with_max_size(max_size),
-        )
     }
 }
 
@@ -396,6 +350,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ConcurrentLfuCacheConfig;
 
     extern crate std;
     use std::string::ToString;
@@ -405,8 +360,9 @@ mod tests {
 
     #[test]
     fn test_basic_operations() {
-        let cache: ConcurrentLfuCache<String, i32> =
-            ConcurrentLfuCache::new(NonZeroUsize::new(100).unwrap());
+        let cache: ConcurrentLfuCache<String, i32> = ConcurrentLfuCache::from_config(
+            ConcurrentLfuCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+        );
 
         cache.put("a".to_string(), 1);
         cache.put("b".to_string(), 2);
@@ -418,7 +374,9 @@ mod tests {
     #[test]
     fn test_concurrent_access() {
         let cache: Arc<ConcurrentLfuCache<String, i32>> =
-            Arc::new(ConcurrentLfuCache::new(NonZeroUsize::new(1000).unwrap()));
+            Arc::new(ConcurrentLfuCache::from_config(
+                ConcurrentLfuCacheConfig::new(NonZeroUsize::new(1000).unwrap()),
+            ));
         let num_threads = 8;
         let ops_per_thread = 500;
 
@@ -448,8 +406,9 @@ mod tests {
 
     #[test]
     fn test_capacity() {
-        let cache: ConcurrentLfuCache<String, i32> =
-            ConcurrentLfuCache::new(NonZeroUsize::new(100).unwrap());
+        let cache: ConcurrentLfuCache<String, i32> = ConcurrentLfuCache::from_config(
+            ConcurrentLfuCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+        );
 
         // Capacity is distributed across segments
         let capacity = cache.capacity();
@@ -459,16 +418,18 @@ mod tests {
 
     #[test]
     fn test_segment_count() {
-        let cache: ConcurrentLfuCache<String, i32> =
-            ConcurrentLfuCache::with_segments(NonZeroUsize::new(100).unwrap(), 8);
+        let cache: ConcurrentLfuCache<String, i32> = ConcurrentLfuCache::from_config(
+            ConcurrentLfuCacheConfig::new(NonZeroUsize::new(100).unwrap()).with_segments(8),
+        );
 
         assert_eq!(cache.segment_count(), 8);
     }
 
     #[test]
     fn test_len_and_is_empty() {
-        let cache: ConcurrentLfuCache<String, i32> =
-            ConcurrentLfuCache::new(NonZeroUsize::new(100).unwrap());
+        let cache: ConcurrentLfuCache<String, i32> = ConcurrentLfuCache::from_config(
+            ConcurrentLfuCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+        );
 
         assert!(cache.is_empty());
         assert_eq!(cache.len(), 0);
@@ -483,8 +444,9 @@ mod tests {
 
     #[test]
     fn test_remove() {
-        let cache: ConcurrentLfuCache<String, i32> =
-            ConcurrentLfuCache::new(NonZeroUsize::new(100).unwrap());
+        let cache: ConcurrentLfuCache<String, i32> = ConcurrentLfuCache::from_config(
+            ConcurrentLfuCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+        );
 
         cache.put("key1".to_string(), 1);
         cache.put("key2".to_string(), 2);
@@ -498,8 +460,9 @@ mod tests {
 
     #[test]
     fn test_clear() {
-        let cache: ConcurrentLfuCache<String, i32> =
-            ConcurrentLfuCache::new(NonZeroUsize::new(100).unwrap());
+        let cache: ConcurrentLfuCache<String, i32> = ConcurrentLfuCache::from_config(
+            ConcurrentLfuCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+        );
 
         cache.put("key1".to_string(), 1);
         cache.put("key2".to_string(), 2);
@@ -516,8 +479,9 @@ mod tests {
 
     #[test]
     fn test_contains_key() {
-        let cache: ConcurrentLfuCache<String, i32> =
-            ConcurrentLfuCache::new(NonZeroUsize::new(100).unwrap());
+        let cache: ConcurrentLfuCache<String, i32> = ConcurrentLfuCache::from_config(
+            ConcurrentLfuCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+        );
 
         cache.put("exists".to_string(), 1);
 
@@ -527,8 +491,9 @@ mod tests {
 
     #[test]
     fn test_get_with() {
-        let cache: ConcurrentLfuCache<String, String> =
-            ConcurrentLfuCache::new(NonZeroUsize::new(100).unwrap());
+        let cache: ConcurrentLfuCache<String, String> = ConcurrentLfuCache::from_config(
+            ConcurrentLfuCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+        );
 
         cache.put("key".to_string(), "hello world".to_string());
 
@@ -541,8 +506,9 @@ mod tests {
 
     #[test]
     fn test_frequency_eviction() {
-        let cache: ConcurrentLfuCache<String, i32> =
-            ConcurrentLfuCache::with_segments(NonZeroUsize::new(48).unwrap(), 16);
+        let cache: ConcurrentLfuCache<String, i32> = ConcurrentLfuCache::from_config(
+            ConcurrentLfuCacheConfig::new(NonZeroUsize::new(48).unwrap()).with_segments(16),
+        );
 
         cache.put("a".to_string(), 1);
         cache.put("b".to_string(), 2);
@@ -562,8 +528,9 @@ mod tests {
 
     #[test]
     fn test_eviction_on_capacity() {
-        let cache: ConcurrentLfuCache<String, i32> =
-            ConcurrentLfuCache::with_segments(NonZeroUsize::new(80).unwrap(), 16);
+        let cache: ConcurrentLfuCache<String, i32> = ConcurrentLfuCache::from_config(
+            ConcurrentLfuCacheConfig::new(NonZeroUsize::new(80).unwrap()).with_segments(16),
+        );
 
         // Fill the cache
         for i in 0..10 {
@@ -576,8 +543,9 @@ mod tests {
 
     #[test]
     fn test_metrics() {
-        let cache: ConcurrentLfuCache<String, i32> =
-            ConcurrentLfuCache::new(NonZeroUsize::new(100).unwrap());
+        let cache: ConcurrentLfuCache<String, i32> = ConcurrentLfuCache::from_config(
+            ConcurrentLfuCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+        );
 
         cache.put("a".to_string(), 1);
         cache.put("b".to_string(), 2);
@@ -589,16 +557,18 @@ mod tests {
 
     #[test]
     fn test_algorithm_name() {
-        let cache: ConcurrentLfuCache<String, i32> =
-            ConcurrentLfuCache::new(NonZeroUsize::new(100).unwrap());
+        let cache: ConcurrentLfuCache<String, i32> = ConcurrentLfuCache::from_config(
+            ConcurrentLfuCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+        );
 
         assert_eq!(cache.algorithm_name(), "ConcurrentLFU");
     }
 
     #[test]
     fn test_empty_cache_operations() {
-        let cache: ConcurrentLfuCache<String, i32> =
-            ConcurrentLfuCache::new(NonZeroUsize::new(100).unwrap());
+        let cache: ConcurrentLfuCache<String, i32> = ConcurrentLfuCache::from_config(
+            ConcurrentLfuCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+        );
 
         assert!(cache.is_empty());
         assert_eq!(cache.len(), 0);
@@ -622,8 +592,9 @@ mod tests {
 
     #[test]
     fn test_borrowed_key_lookup() {
-        let cache: ConcurrentLfuCache<String, i32> =
-            ConcurrentLfuCache::new(NonZeroUsize::new(100).unwrap());
+        let cache: ConcurrentLfuCache<String, i32> = ConcurrentLfuCache::from_config(
+            ConcurrentLfuCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+        );
 
         cache.put("test_key".to_string(), 42);
 
@@ -636,8 +607,9 @@ mod tests {
 
     #[test]
     fn test_frequency_tracking() {
-        let cache: ConcurrentLfuCache<String, i32> =
-            ConcurrentLfuCache::new(NonZeroUsize::new(100).unwrap());
+        let cache: ConcurrentLfuCache<String, i32> = ConcurrentLfuCache::from_config(
+            ConcurrentLfuCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+        );
 
         cache.put("key".to_string(), 1);
 

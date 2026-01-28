@@ -78,11 +78,17 @@
 //!
 //! ```rust,ignore
 //! use cache_rs::concurrent::ConcurrentSlruCache;
+//! use cache_rs::config::ConcurrentSlruCacheConfig;
+//! use std::num::NonZeroUsize;
 //! use std::sync::Arc;
 //! use std::thread;
 //!
 //! // Total capacity 10000, protected segment 2000 (20%)
-//! let cache = Arc::new(ConcurrentSlruCache::new(10_000, 2_000));
+//! let config = ConcurrentSlruCacheConfig::new(
+//!     NonZeroUsize::new(10_000).unwrap(),
+//!     NonZeroUsize::new(2_000).unwrap(),
+//! );
+//! let cache = Arc::new(ConcurrentSlruCache::from_config(config));
 //!
 //! // Thread 1: Establish hot items
 //! let cache1 = Arc::clone(&cache);
@@ -173,72 +179,6 @@ where
             segments: segments.into_boxed_slice(),
             hash_builder: DefaultHashBuilder::default(),
         }
-    }
-
-    /// Creates a concurrent SLRU cache with the specified capacities.
-    ///
-    /// This is a convenience constructor with default segment count.
-    /// For more control, use [`ConcurrentSlruCache::from_config`].
-    ///
-    /// # Arguments
-    ///
-    /// * `total_cap` - The maximum total number of entries across all segments.
-    /// * `protected_cap` - The maximum number of entries in protected segments.
-    pub fn new(total_cap: NonZeroUsize, protected_cap: NonZeroUsize) -> Self {
-        Self::from_config(crate::config::ConcurrentSlruCacheConfig::new(
-            total_cap,
-            protected_cap,
-        ))
-    }
-
-    /// Creates a concurrent SLRU cache with the specified capacities and segment count.
-    ///
-    /// This is a convenience constructor. For more control, use [`ConcurrentSlruCache::from_config`].
-    ///
-    /// # Arguments
-    ///
-    /// * `total_cap` - The maximum total number of entries across all segments.
-    /// * `protected_cap` - The maximum number of entries in protected segments.
-    /// * `segments` - The number of segments to use.
-    pub fn with_segments(
-        total_cap: NonZeroUsize,
-        protected_cap: NonZeroUsize,
-        segments: usize,
-    ) -> Self {
-        Self::from_config(
-            crate::config::ConcurrentSlruCacheConfig::new(total_cap, protected_cap)
-                .with_segments(segments),
-        )
-    }
-
-    /// Creates a concurrent SLRU cache with capacity, protected capacity, size limit, and segment count.
-    ///
-    /// This is a convenience constructor. For more control, use [`ConcurrentSlruCache::from_config`].
-    pub fn with_limits_and_segments(
-        total_cap: NonZeroUsize,
-        protected_cap: NonZeroUsize,
-        max_size: u64,
-        segments: usize,
-    ) -> Self {
-        Self::from_config(
-            crate::config::ConcurrentSlruCacheConfig::new(total_cap, protected_cap)
-                .with_max_size(max_size)
-                .with_segments(segments),
-        )
-    }
-
-    /// Creates a concurrent SLRU cache with size limit only.
-    ///
-    /// This is a convenience constructor. For more control, use [`ConcurrentSlruCache::from_config`].
-    pub fn with_max_size(max_size: u64) -> Self {
-        // Use a large but reasonable capacity that won't overflow hash tables
-        const MAX_REASONABLE_CAPACITY: usize = 1 << 30; // ~1 billion entries
-        let default_cap = NonZeroUsize::new(MAX_REASONABLE_CAPACITY).unwrap();
-        let default_protected = NonZeroUsize::new(MAX_REASONABLE_CAPACITY / 5).unwrap();
-        Self::from_config(
-            crate::config::ConcurrentSlruCacheConfig::new(default_cap, default_protected)
-                .with_max_size(max_size),
-        )
     }
 }
 
@@ -438,6 +378,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ConcurrentSlruCacheConfig;
 
     extern crate std;
     use std::string::ToString;
@@ -447,10 +388,11 @@ mod tests {
 
     #[test]
     fn test_basic_operations() {
-        let cache: ConcurrentSlruCache<String, i32> = ConcurrentSlruCache::new(
-            NonZeroUsize::new(100).unwrap(),
-            NonZeroUsize::new(50).unwrap(),
-        );
+        let cache: ConcurrentSlruCache<String, i32> =
+            ConcurrentSlruCache::from_config(ConcurrentSlruCacheConfig::new(
+                NonZeroUsize::new(100).unwrap(),
+                NonZeroUsize::new(50).unwrap(),
+            ));
 
         cache.put("a".to_string(), 1);
         cache.put("b".to_string(), 2);
@@ -461,10 +403,12 @@ mod tests {
 
     #[test]
     fn test_concurrent_access() {
-        let cache: Arc<ConcurrentSlruCache<String, i32>> = Arc::new(ConcurrentSlruCache::new(
-            NonZeroUsize::new(1000).unwrap(),
-            NonZeroUsize::new(500).unwrap(),
-        ));
+        let cache: Arc<ConcurrentSlruCache<String, i32>> = Arc::new(
+            ConcurrentSlruCache::from_config(ConcurrentSlruCacheConfig::new(
+                NonZeroUsize::new(1000).unwrap(),
+                NonZeroUsize::new(500).unwrap(),
+            )),
+        );
         let num_threads = 8;
         let ops_per_thread = 500;
 
@@ -490,10 +434,11 @@ mod tests {
 
     #[test]
     fn test_capacity() {
-        let cache: ConcurrentSlruCache<String, i32> = ConcurrentSlruCache::new(
-            NonZeroUsize::new(100).unwrap(),
-            NonZeroUsize::new(50).unwrap(),
-        );
+        let cache: ConcurrentSlruCache<String, i32> =
+            ConcurrentSlruCache::from_config(ConcurrentSlruCacheConfig::new(
+                NonZeroUsize::new(100).unwrap(),
+                NonZeroUsize::new(50).unwrap(),
+            ));
 
         // Capacity is distributed across segments
         let capacity = cache.capacity();
@@ -503,10 +448,12 @@ mod tests {
 
     #[test]
     fn test_segment_count() {
-        let cache: ConcurrentSlruCache<String, i32> = ConcurrentSlruCache::with_segments(
-            NonZeroUsize::new(100).unwrap(),
-            NonZeroUsize::new(50).unwrap(),
-            8,
+        let cache: ConcurrentSlruCache<String, i32> = ConcurrentSlruCache::from_config(
+            ConcurrentSlruCacheConfig::new(
+                NonZeroUsize::new(100).unwrap(),
+                NonZeroUsize::new(50).unwrap(),
+            )
+            .with_segments(8),
         );
 
         assert_eq!(cache.segment_count(), 8);
@@ -514,10 +461,11 @@ mod tests {
 
     #[test]
     fn test_len_and_is_empty() {
-        let cache: ConcurrentSlruCache<String, i32> = ConcurrentSlruCache::new(
-            NonZeroUsize::new(100).unwrap(),
-            NonZeroUsize::new(50).unwrap(),
-        );
+        let cache: ConcurrentSlruCache<String, i32> =
+            ConcurrentSlruCache::from_config(ConcurrentSlruCacheConfig::new(
+                NonZeroUsize::new(100).unwrap(),
+                NonZeroUsize::new(50).unwrap(),
+            ));
 
         assert!(cache.is_empty());
         assert_eq!(cache.len(), 0);
@@ -532,10 +480,11 @@ mod tests {
 
     #[test]
     fn test_remove() {
-        let cache: ConcurrentSlruCache<String, i32> = ConcurrentSlruCache::new(
-            NonZeroUsize::new(100).unwrap(),
-            NonZeroUsize::new(50).unwrap(),
-        );
+        let cache: ConcurrentSlruCache<String, i32> =
+            ConcurrentSlruCache::from_config(ConcurrentSlruCacheConfig::new(
+                NonZeroUsize::new(100).unwrap(),
+                NonZeroUsize::new(50).unwrap(),
+            ));
 
         cache.put("key1".to_string(), 1);
         cache.put("key2".to_string(), 2);
@@ -549,10 +498,11 @@ mod tests {
 
     #[test]
     fn test_clear() {
-        let cache: ConcurrentSlruCache<String, i32> = ConcurrentSlruCache::new(
-            NonZeroUsize::new(100).unwrap(),
-            NonZeroUsize::new(50).unwrap(),
-        );
+        let cache: ConcurrentSlruCache<String, i32> =
+            ConcurrentSlruCache::from_config(ConcurrentSlruCacheConfig::new(
+                NonZeroUsize::new(100).unwrap(),
+                NonZeroUsize::new(50).unwrap(),
+            ));
 
         cache.put("key1".to_string(), 1);
         cache.put("key2".to_string(), 2);
@@ -569,10 +519,11 @@ mod tests {
 
     #[test]
     fn test_contains_key() {
-        let cache: ConcurrentSlruCache<String, i32> = ConcurrentSlruCache::new(
-            NonZeroUsize::new(100).unwrap(),
-            NonZeroUsize::new(50).unwrap(),
-        );
+        let cache: ConcurrentSlruCache<String, i32> =
+            ConcurrentSlruCache::from_config(ConcurrentSlruCacheConfig::new(
+                NonZeroUsize::new(100).unwrap(),
+                NonZeroUsize::new(50).unwrap(),
+            ));
 
         cache.put("exists".to_string(), 1);
 
@@ -582,10 +533,11 @@ mod tests {
 
     #[test]
     fn test_get_with() {
-        let cache: ConcurrentSlruCache<String, String> = ConcurrentSlruCache::new(
-            NonZeroUsize::new(100).unwrap(),
-            NonZeroUsize::new(50).unwrap(),
-        );
+        let cache: ConcurrentSlruCache<String, String> =
+            ConcurrentSlruCache::from_config(ConcurrentSlruCacheConfig::new(
+                NonZeroUsize::new(100).unwrap(),
+                NonZeroUsize::new(50).unwrap(),
+            ));
 
         cache.put("key".to_string(), "hello world".to_string());
 
@@ -598,10 +550,12 @@ mod tests {
 
     #[test]
     fn test_eviction_on_capacity() {
-        let cache: ConcurrentSlruCache<String, i32> = ConcurrentSlruCache::with_segments(
-            NonZeroUsize::new(80).unwrap(),
-            NonZeroUsize::new(48).unwrap(),
-            16,
+        let cache: ConcurrentSlruCache<String, i32> = ConcurrentSlruCache::from_config(
+            ConcurrentSlruCacheConfig::new(
+                NonZeroUsize::new(80).unwrap(),
+                NonZeroUsize::new(48).unwrap(),
+            )
+            .with_segments(16),
         );
 
         // Fill the cache
@@ -615,10 +569,12 @@ mod tests {
 
     #[test]
     fn test_promotion_to_protected() {
-        let cache: ConcurrentSlruCache<String, i32> = ConcurrentSlruCache::with_segments(
-            NonZeroUsize::new(160).unwrap(),
-            NonZeroUsize::new(80).unwrap(),
-            16,
+        let cache: ConcurrentSlruCache<String, i32> = ConcurrentSlruCache::from_config(
+            ConcurrentSlruCacheConfig::new(
+                NonZeroUsize::new(160).unwrap(),
+                NonZeroUsize::new(80).unwrap(),
+            )
+            .with_segments(16),
         );
 
         cache.put("key".to_string(), 1);
@@ -634,10 +590,11 @@ mod tests {
 
     #[test]
     fn test_metrics() {
-        let cache: ConcurrentSlruCache<String, i32> = ConcurrentSlruCache::new(
-            NonZeroUsize::new(100).unwrap(),
-            NonZeroUsize::new(50).unwrap(),
-        );
+        let cache: ConcurrentSlruCache<String, i32> =
+            ConcurrentSlruCache::from_config(ConcurrentSlruCacheConfig::new(
+                NonZeroUsize::new(100).unwrap(),
+                NonZeroUsize::new(50).unwrap(),
+            ));
 
         cache.put("a".to_string(), 1);
         cache.put("b".to_string(), 2);
@@ -649,20 +606,22 @@ mod tests {
 
     #[test]
     fn test_algorithm_name() {
-        let cache: ConcurrentSlruCache<String, i32> = ConcurrentSlruCache::new(
-            NonZeroUsize::new(100).unwrap(),
-            NonZeroUsize::new(50).unwrap(),
-        );
+        let cache: ConcurrentSlruCache<String, i32> =
+            ConcurrentSlruCache::from_config(ConcurrentSlruCacheConfig::new(
+                NonZeroUsize::new(100).unwrap(),
+                NonZeroUsize::new(50).unwrap(),
+            ));
 
         assert_eq!(cache.algorithm_name(), "ConcurrentSLRU");
     }
 
     #[test]
     fn test_empty_cache_operations() {
-        let cache: ConcurrentSlruCache<String, i32> = ConcurrentSlruCache::new(
-            NonZeroUsize::new(100).unwrap(),
-            NonZeroUsize::new(50).unwrap(),
-        );
+        let cache: ConcurrentSlruCache<String, i32> =
+            ConcurrentSlruCache::from_config(ConcurrentSlruCacheConfig::new(
+                NonZeroUsize::new(100).unwrap(),
+                NonZeroUsize::new(50).unwrap(),
+            ));
 
         assert!(cache.is_empty());
         assert_eq!(cache.len(), 0);
@@ -689,10 +648,11 @@ mod tests {
 
     #[test]
     fn test_borrowed_key_lookup() {
-        let cache: ConcurrentSlruCache<String, i32> = ConcurrentSlruCache::new(
-            NonZeroUsize::new(100).unwrap(),
-            NonZeroUsize::new(50).unwrap(),
-        );
+        let cache: ConcurrentSlruCache<String, i32> =
+            ConcurrentSlruCache::from_config(ConcurrentSlruCacheConfig::new(
+                NonZeroUsize::new(100).unwrap(),
+                NonZeroUsize::new(50).unwrap(),
+            ));
 
         cache.put("test_key".to_string(), 42);
 

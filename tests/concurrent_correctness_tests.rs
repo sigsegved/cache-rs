@@ -18,6 +18,10 @@
 
 #![cfg(feature = "concurrent")]
 
+use cache_rs::config::{
+    ConcurrentGdsfCacheConfig, ConcurrentLfuCacheConfig, ConcurrentLfudaCacheConfig,
+    ConcurrentLruCacheConfig, ConcurrentSlruCacheConfig,
+};
 use cache_rs::metrics::CacheMetrics;
 use cache_rs::{
     ConcurrentGdsfCache, ConcurrentLfuCache, ConcurrentLfudaCache, ConcurrentLruCache,
@@ -42,9 +46,8 @@ use std::thread;
 fn test_concurrent_lru_basic_eviction() {
     // Use 2 segments for concurrent access
     // Note: with 2 segments and capacity 6, each segment has capacity 3
-    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::with_segments(
-        NonZeroUsize::new(6).unwrap(),
-        2,
+    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(NonZeroUsize::new(6).unwrap()).with_segments(2),
     ));
 
     // Fill cache from single thread first (predictable setup)
@@ -71,9 +74,8 @@ fn test_concurrent_lru_basic_eviction() {
 #[test]
 fn test_concurrent_lru_access_prevents_eviction() {
     // Single segment for deterministic LRU behavior
-    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::with_segments(
-        NonZeroUsize::new(3).unwrap(),
-        1,
+    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(NonZeroUsize::new(3).unwrap()).with_segments(1),
     ));
 
     cache.put(1, 10);
@@ -99,9 +101,8 @@ fn test_concurrent_lru_access_prevents_eviction() {
 #[test]
 fn test_concurrent_lru_multi_segment_eviction() {
     // Use 2 segments - keys distributed by hash
-    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::with_segments(
-        NonZeroUsize::new(4).unwrap(),
-        2,
+    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(NonZeroUsize::new(4).unwrap()).with_segments(2),
     ));
     // Each segment has capacity 2
 
@@ -122,9 +123,8 @@ fn test_concurrent_lru_multi_segment_eviction() {
 
 #[test]
 fn test_concurrent_lru_concurrent_writes_maintain_capacity() {
-    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::with_segments(
-        NonZeroUsize::new(20).unwrap(),
-        4,
+    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(NonZeroUsize::new(20).unwrap()).with_segments(4),
     ));
 
     let mut handles = vec![];
@@ -157,9 +157,8 @@ fn test_concurrent_lru_concurrent_writes_maintain_capacity() {
 
 #[test]
 fn test_concurrent_lfu_frequency_based_eviction() {
-    let cache: Arc<ConcurrentLfuCache<i32, i32>> = Arc::new(ConcurrentLfuCache::with_segments(
-        NonZeroUsize::new(3).unwrap(),
-        1,
+    let cache: Arc<ConcurrentLfuCache<i32, i32>> = Arc::new(ConcurrentLfuCache::from_config(
+        ConcurrentLfuCacheConfig::new(NonZeroUsize::new(3).unwrap()).with_segments(1),
     ));
 
     cache.put(1, 10);
@@ -194,9 +193,8 @@ fn test_concurrent_lfu_frequency_based_eviction() {
 
 #[test]
 fn test_concurrent_lfu_frequency_accumulation() {
-    let cache: Arc<ConcurrentLfuCache<String, i32>> = Arc::new(ConcurrentLfuCache::with_segments(
-        NonZeroUsize::new(6).unwrap(),
-        2,
+    let cache: Arc<ConcurrentLfuCache<String, i32>> = Arc::new(ConcurrentLfuCache::from_config(
+        ConcurrentLfuCacheConfig::new(NonZeroUsize::new(6).unwrap()).with_segments(2),
     ));
 
     // Insert items
@@ -237,9 +235,8 @@ fn test_concurrent_lfu_frequency_accumulation() {
 
 #[test]
 fn test_concurrent_lfu_multi_segment_correctness() {
-    let cache: Arc<ConcurrentLfuCache<i32, i32>> = Arc::new(ConcurrentLfuCache::with_segments(
-        NonZeroUsize::new(8).unwrap(),
-        4,
+    let cache: Arc<ConcurrentLfuCache<i32, i32>> = Arc::new(ConcurrentLfuCache::from_config(
+        ConcurrentLfuCacheConfig::new(NonZeroUsize::new(8).unwrap()).with_segments(4),
     ));
 
     // Insert items across segments
@@ -270,9 +267,8 @@ fn test_concurrent_lfu_multi_segment_correctness() {
 #[test]
 fn test_concurrent_lfuda_priority_eviction() {
     // Use larger capacity for more predictable behavior
-    let cache: Arc<ConcurrentLfudaCache<i32, i32>> = Arc::new(ConcurrentLfudaCache::with_segments(
-        NonZeroUsize::new(4).unwrap(),
-        1,
+    let cache: Arc<ConcurrentLfudaCache<i32, i32>> = Arc::new(ConcurrentLfudaCache::from_config(
+        ConcurrentLfudaCacheConfig::new(NonZeroUsize::new(4).unwrap()).with_segments(1),
     ));
 
     cache.put(1, 10);
@@ -311,9 +307,8 @@ fn test_concurrent_lfuda_priority_eviction() {
 
 #[test]
 fn test_concurrent_lfuda_aging_mechanism() {
-    let cache: Arc<ConcurrentLfudaCache<i32, i32>> = Arc::new(ConcurrentLfudaCache::with_segments(
-        NonZeroUsize::new(4).unwrap(),
-        2,
+    let cache: Arc<ConcurrentLfudaCache<i32, i32>> = Arc::new(ConcurrentLfudaCache::from_config(
+        ConcurrentLfudaCacheConfig::new(NonZeroUsize::new(4).unwrap()).with_segments(2),
     ));
 
     // Initial items with high frequency
@@ -342,10 +337,8 @@ fn test_concurrent_lfuda_aging_mechanism() {
 #[test]
 fn test_concurrent_slru_segment_behavior() {
     let protected = NonZeroUsize::new(2).unwrap();
-    let cache: Arc<ConcurrentSlruCache<i32, i32>> = Arc::new(ConcurrentSlruCache::with_segments(
-        NonZeroUsize::new(6).unwrap(),
-        protected,
-        2,
+    let cache: Arc<ConcurrentSlruCache<i32, i32>> = Arc::new(ConcurrentSlruCache::from_config(
+        ConcurrentSlruCacheConfig::new(NonZeroUsize::new(6).unwrap(), protected).with_segments(2),
     ));
 
     // Insert items - they start in probationary
@@ -373,10 +366,8 @@ fn test_concurrent_slru_segment_behavior() {
 #[test]
 fn test_concurrent_slru_promotion_under_concurrency() {
     let protected = NonZeroUsize::new(1).unwrap();
-    let cache: Arc<ConcurrentSlruCache<i32, i32>> = Arc::new(ConcurrentSlruCache::with_segments(
-        NonZeroUsize::new(4).unwrap(),
-        protected,
-        1,
+    let cache: Arc<ConcurrentSlruCache<i32, i32>> = Arc::new(ConcurrentSlruCache::from_config(
+        ConcurrentSlruCacheConfig::new(NonZeroUsize::new(4).unwrap(), protected).with_segments(1),
     ));
 
     cache.put(1, 10);
@@ -417,9 +408,8 @@ fn test_concurrent_slru_promotion_under_concurrency() {
 
 #[test]
 fn test_concurrent_gdsf_size_aware_eviction() {
-    let cache: Arc<ConcurrentGdsfCache<i32, i32>> = Arc::new(ConcurrentGdsfCache::with_segments(
-        NonZeroUsize::new(3).unwrap(),
-        1,
+    let cache: Arc<ConcurrentGdsfCache<i32, i32>> = Arc::new(ConcurrentGdsfCache::from_config(
+        ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(3).unwrap()).with_segments(1),
     ));
 
     // Insert items with different sizes
@@ -443,9 +433,8 @@ fn test_concurrent_gdsf_size_aware_eviction() {
 
 #[test]
 fn test_concurrent_gdsf_frequency_matters() {
-    let cache: Arc<ConcurrentGdsfCache<i32, i32>> = Arc::new(ConcurrentGdsfCache::with_segments(
-        NonZeroUsize::new(3).unwrap(),
-        1,
+    let cache: Arc<ConcurrentGdsfCache<i32, i32>> = Arc::new(ConcurrentGdsfCache::from_config(
+        ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(3).unwrap()).with_segments(1),
     ));
 
     cache.put(1, 10, 1);
@@ -477,9 +466,8 @@ fn test_concurrent_gdsf_frequency_matters() {
 
 #[test]
 fn test_concurrent_gdsf_concurrent_size_tracking() {
-    let cache: Arc<ConcurrentGdsfCache<i32, i32>> = Arc::new(ConcurrentGdsfCache::with_segments(
-        NonZeroUsize::new(10).unwrap(),
-        2,
+    let cache: Arc<ConcurrentGdsfCache<i32, i32>> = Arc::new(ConcurrentGdsfCache::from_config(
+        ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(10).unwrap()).with_segments(2),
     ));
 
     let mut handles = vec![];
@@ -518,9 +506,8 @@ fn test_concurrent_gdsf_concurrent_size_tracking() {
 #[test]
 fn test_capacity_never_exceeded_lru() {
     let capacity = 50;
-    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::with_segments(
-        NonZeroUsize::new(capacity).unwrap(),
-        4,
+    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(NonZeroUsize::new(capacity).unwrap()).with_segments(4),
     ));
 
     let mut handles = vec![];
@@ -555,9 +542,8 @@ fn test_capacity_never_exceeded_lru() {
 #[test]
 fn test_capacity_never_exceeded_lfu() {
     let capacity = 50;
-    let cache: Arc<ConcurrentLfuCache<i32, i32>> = Arc::new(ConcurrentLfuCache::with_segments(
-        NonZeroUsize::new(capacity).unwrap(),
-        4,
+    let cache: Arc<ConcurrentLfuCache<i32, i32>> = Arc::new(ConcurrentLfuCache::from_config(
+        ConcurrentLfuCacheConfig::new(NonZeroUsize::new(capacity).unwrap()).with_segments(4),
     ));
 
     let mut handles = vec![];
@@ -584,10 +570,9 @@ fn test_capacity_never_exceeded_lfu() {
 fn test_capacity_never_exceeded_slru() {
     let capacity = 50;
     let protected = NonZeroUsize::new(20).unwrap();
-    let cache: Arc<ConcurrentSlruCache<i32, i32>> = Arc::new(ConcurrentSlruCache::with_segments(
-        NonZeroUsize::new(capacity).unwrap(),
-        protected,
-        4,
+    let cache: Arc<ConcurrentSlruCache<i32, i32>> = Arc::new(ConcurrentSlruCache::from_config(
+        ConcurrentSlruCacheConfig::new(NonZeroUsize::new(capacity).unwrap(), protected)
+            .with_segments(4),
     ));
 
     let mut handles = vec![];
@@ -613,9 +598,8 @@ fn test_capacity_never_exceeded_slru() {
 #[test]
 fn test_capacity_never_exceeded_lfuda() {
     let capacity = 50;
-    let cache: Arc<ConcurrentLfudaCache<i32, i32>> = Arc::new(ConcurrentLfudaCache::with_segments(
-        NonZeroUsize::new(capacity).unwrap(),
-        4,
+    let cache: Arc<ConcurrentLfudaCache<i32, i32>> = Arc::new(ConcurrentLfudaCache::from_config(
+        ConcurrentLfudaCacheConfig::new(NonZeroUsize::new(capacity).unwrap()).with_segments(4),
     ));
 
     let mut handles = vec![];
@@ -641,9 +625,8 @@ fn test_capacity_never_exceeded_lfuda() {
 #[test]
 fn test_capacity_never_exceeded_gdsf() {
     let capacity = 50;
-    let cache: Arc<ConcurrentGdsfCache<i32, i32>> = Arc::new(ConcurrentGdsfCache::with_segments(
-        NonZeroUsize::new(capacity).unwrap(),
-        4,
+    let cache: Arc<ConcurrentGdsfCache<i32, i32>> = Arc::new(ConcurrentGdsfCache::from_config(
+        ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(capacity).unwrap()).with_segments(4),
     ));
 
     let mut handles = vec![];
@@ -672,9 +655,8 @@ fn test_capacity_never_exceeded_gdsf() {
 
 #[test]
 fn test_get_returns_correct_value() {
-    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::with_segments(
-        NonZeroUsize::new(100).unwrap(),
-        4,
+    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(NonZeroUsize::new(100).unwrap()).with_segments(4),
     ));
 
     // Insert known values
@@ -709,9 +691,8 @@ fn test_get_returns_correct_value() {
 
 #[test]
 fn test_update_is_atomic() {
-    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::with_segments(
-        NonZeroUsize::new(10).unwrap(),
-        2,
+    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(NonZeroUsize::new(10).unwrap()).with_segments(2),
     ));
 
     cache.put(1, 0);
@@ -745,9 +726,8 @@ fn test_remove_consistency() {
     // Use capacity large enough to hold all items without eviction
     // With 4 segments and 50 items, ensure each segment can hold at least 50/4 = 12.5 items
     // Using capacity 200 (50 per segment) ensures no eviction occurs during insert
-    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::with_segments(
-        NonZeroUsize::new(200).unwrap(),
-        4,
+    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(NonZeroUsize::new(200).unwrap()).with_segments(4),
     ));
 
     // Insert items
@@ -794,9 +774,8 @@ fn test_remove_consistency() {
 
 #[test]
 fn test_mixed_operations_lru() {
-    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::with_segments(
-        NonZeroUsize::new(100).unwrap(),
-        4,
+    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(NonZeroUsize::new(100).unwrap()).with_segments(4),
     ));
 
     let mut handles = vec![];
@@ -841,9 +820,8 @@ fn test_mixed_operations_lru() {
 
 #[test]
 fn test_mixed_operations_lfu() {
-    let cache: Arc<ConcurrentLfuCache<i32, i32>> = Arc::new(ConcurrentLfuCache::with_segments(
-        NonZeroUsize::new(100).unwrap(),
-        4,
+    let cache: Arc<ConcurrentLfuCache<i32, i32>> = Arc::new(ConcurrentLfuCache::from_config(
+        ConcurrentLfuCacheConfig::new(NonZeroUsize::new(100).unwrap()).with_segments(4),
     ));
 
     let mut handles = vec![];
@@ -867,10 +845,12 @@ fn test_mixed_operations_lfu() {
 
 #[test]
 fn test_mixed_operations_slru() {
-    let cache: Arc<ConcurrentSlruCache<i32, i32>> = Arc::new(ConcurrentSlruCache::with_segments(
-        NonZeroUsize::new(100).unwrap(),
-        NonZeroUsize::new(40).unwrap(),
-        4,
+    let cache: Arc<ConcurrentSlruCache<i32, i32>> = Arc::new(ConcurrentSlruCache::from_config(
+        ConcurrentSlruCacheConfig::new(
+            NonZeroUsize::new(100).unwrap(),
+            NonZeroUsize::new(40).unwrap(),
+        )
+        .with_segments(4),
     ));
 
     let mut handles = vec![];
@@ -897,9 +877,8 @@ fn test_mixed_operations_slru() {
 
 #[test]
 fn test_mixed_operations_gdsf() {
-    let cache: Arc<ConcurrentGdsfCache<i32, i32>> = Arc::new(ConcurrentGdsfCache::with_segments(
-        NonZeroUsize::new(100).unwrap(),
-        4,
+    let cache: Arc<ConcurrentGdsfCache<i32, i32>> = Arc::new(ConcurrentGdsfCache::from_config(
+        ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(100).unwrap()).with_segments(4),
     ));
 
     let mut handles = vec![];
@@ -928,9 +907,8 @@ fn test_mixed_operations_gdsf() {
 
 #[test]
 fn test_clear_during_operations() {
-    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::with_segments(
-        NonZeroUsize::new(100).unwrap(),
-        4,
+    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(NonZeroUsize::new(100).unwrap()).with_segments(4),
     ));
 
     let stop_flag = Arc::new(AtomicUsize::new(0));
@@ -977,9 +955,8 @@ fn test_clear_during_operations() {
 #[test]
 fn test_size_tracking_concurrent_lru() {
     // Use large enough cache to avoid evictions (which can trigger metrics bug)
-    let cache: Arc<ConcurrentLruCache<i32, String>> = Arc::new(ConcurrentLruCache::with_segments(
-        NonZeroUsize::new(200).unwrap(),
-        4,
+    let cache: Arc<ConcurrentLruCache<i32, String>> = Arc::new(ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(NonZeroUsize::new(200).unwrap()).with_segments(4),
     ));
 
     let mut handles = vec![];
@@ -1011,9 +988,8 @@ fn test_size_tracking_concurrent_lru() {
 #[test]
 fn test_size_tracking_concurrent_lfu() {
     // Use large enough cache to avoid evictions
-    let cache: Arc<ConcurrentLfuCache<i32, String>> = Arc::new(ConcurrentLfuCache::with_segments(
-        NonZeroUsize::new(200).unwrap(),
-        4,
+    let cache: Arc<ConcurrentLfuCache<i32, String>> = Arc::new(ConcurrentLfuCache::from_config(
+        ConcurrentLfuCacheConfig::new(NonZeroUsize::new(200).unwrap()).with_segments(4),
     ));
 
     let mut handles = vec![];
@@ -1042,9 +1018,8 @@ fn test_size_tracking_concurrent_lfu() {
 
 #[test]
 fn test_concurrent_access_empty_cache() {
-    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::with_segments(
-        NonZeroUsize::new(10).unwrap(),
-        2,
+    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(NonZeroUsize::new(10).unwrap()).with_segments(2),
     ));
 
     let mut handles = vec![];
@@ -1068,9 +1043,8 @@ fn test_concurrent_access_empty_cache() {
 
 #[test]
 fn test_concurrent_single_key() {
-    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::with_segments(
-        NonZeroUsize::new(10).unwrap(),
-        2,
+    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(NonZeroUsize::new(10).unwrap()).with_segments(2),
     ));
 
     let put_count = Arc::new(AtomicUsize::new(0));
@@ -1105,9 +1079,8 @@ fn test_concurrent_single_key() {
 
 #[test]
 fn test_concurrent_capacity_one() {
-    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::with_segments(
-        NonZeroUsize::new(1).unwrap(),
-        1,
+    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(NonZeroUsize::new(1).unwrap()).with_segments(1),
     ));
 
     let mut handles = vec![];
@@ -1131,9 +1104,8 @@ fn test_concurrent_capacity_one() {
 
 #[test]
 fn test_contains_key_consistency() {
-    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::with_segments(
-        NonZeroUsize::new(50).unwrap(),
-        4,
+    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(NonZeroUsize::new(50).unwrap()).with_segments(4),
     ));
 
     // Insert known keys
@@ -1173,16 +1145,21 @@ fn test_all_concurrent_caches_len_consistency() {
     let cap = NonZeroUsize::new(20).unwrap();
     let protected = NonZeroUsize::new(8).unwrap();
 
-    let lru: Arc<ConcurrentLruCache<i32, i32>> =
-        Arc::new(ConcurrentLruCache::with_segments(cap, 2));
-    let lfu: Arc<ConcurrentLfuCache<i32, i32>> =
-        Arc::new(ConcurrentLfuCache::with_segments(cap, 2));
-    let lfuda: Arc<ConcurrentLfudaCache<i32, i32>> =
-        Arc::new(ConcurrentLfudaCache::with_segments(cap, 2));
-    let slru: Arc<ConcurrentSlruCache<i32, i32>> =
-        Arc::new(ConcurrentSlruCache::with_segments(cap, protected, 2));
-    let gdsf: Arc<ConcurrentGdsfCache<i32, i32>> =
-        Arc::new(ConcurrentGdsfCache::with_segments(cap, 2));
+    let lru: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(cap).with_segments(2),
+    ));
+    let lfu: Arc<ConcurrentLfuCache<i32, i32>> = Arc::new(ConcurrentLfuCache::from_config(
+        ConcurrentLfuCacheConfig::new(cap).with_segments(2),
+    ));
+    let lfuda: Arc<ConcurrentLfudaCache<i32, i32>> = Arc::new(ConcurrentLfudaCache::from_config(
+        ConcurrentLfudaCacheConfig::new(cap).with_segments(2),
+    ));
+    let slru: Arc<ConcurrentSlruCache<i32, i32>> = Arc::new(ConcurrentSlruCache::from_config(
+        ConcurrentSlruCacheConfig::new(cap, protected).with_segments(2),
+    ));
+    let gdsf: Arc<ConcurrentGdsfCache<i32, i32>> = Arc::new(ConcurrentGdsfCache::from_config(
+        ConcurrentGdsfCacheConfig::new(cap).with_segments(2),
+    ));
 
     // Insert more items than capacity
     for i in 0..100 {
@@ -1205,16 +1182,21 @@ fn test_all_concurrent_caches_clear() {
     let cap = NonZeroUsize::new(20).unwrap();
     let protected = NonZeroUsize::new(8).unwrap();
 
-    let lru: Arc<ConcurrentLruCache<i32, i32>> =
-        Arc::new(ConcurrentLruCache::with_segments(cap, 2));
-    let lfu: Arc<ConcurrentLfuCache<i32, i32>> =
-        Arc::new(ConcurrentLfuCache::with_segments(cap, 2));
-    let lfuda: Arc<ConcurrentLfudaCache<i32, i32>> =
-        Arc::new(ConcurrentLfudaCache::with_segments(cap, 2));
-    let slru: Arc<ConcurrentSlruCache<i32, i32>> =
-        Arc::new(ConcurrentSlruCache::with_segments(cap, protected, 2));
-    let gdsf: Arc<ConcurrentGdsfCache<i32, i32>> =
-        Arc::new(ConcurrentGdsfCache::with_segments(cap, 2));
+    let lru: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(cap).with_segments(2),
+    ));
+    let lfu: Arc<ConcurrentLfuCache<i32, i32>> = Arc::new(ConcurrentLfuCache::from_config(
+        ConcurrentLfuCacheConfig::new(cap).with_segments(2),
+    ));
+    let lfuda: Arc<ConcurrentLfudaCache<i32, i32>> = Arc::new(ConcurrentLfudaCache::from_config(
+        ConcurrentLfudaCacheConfig::new(cap).with_segments(2),
+    ));
+    let slru: Arc<ConcurrentSlruCache<i32, i32>> = Arc::new(ConcurrentSlruCache::from_config(
+        ConcurrentSlruCacheConfig::new(cap, protected).with_segments(2),
+    ));
+    let gdsf: Arc<ConcurrentGdsfCache<i32, i32>> = Arc::new(ConcurrentGdsfCache::from_config(
+        ConcurrentGdsfCacheConfig::new(cap).with_segments(2),
+    ));
 
     // Fill caches
     for i in 0..20 {
@@ -1262,8 +1244,11 @@ fn test_concurrent_lru_size_based_eviction() {
     let max_size: u64 = 100 * 1024; // 100KB
     let segment_count = 2;
 
-    let cache: ConcurrentLruCache<i32, String> =
-        ConcurrentLruCache::with_limits_and_segments(max_entries, max_size, segment_count);
+    let cache: ConcurrentLruCache<i32, String> = ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(max_entries)
+            .with_max_size(max_size)
+            .with_segments(segment_count),
+    );
 
     let object_size: u64 = 10 * 1024; // 10KB each
 
@@ -1323,8 +1308,11 @@ fn test_concurrent_lfu_size_based_eviction() {
     let max_size: u64 = 100 * 1024; // 100KB
     let segment_count = 2;
 
-    let cache: ConcurrentLfuCache<i32, String> =
-        ConcurrentLfuCache::with_limits_and_segments(max_entries, max_size, segment_count);
+    let cache: ConcurrentLfuCache<i32, String> = ConcurrentLfuCache::from_config(
+        ConcurrentLfuCacheConfig::new(max_entries)
+            .with_max_size(max_size)
+            .with_segments(segment_count),
+    );
 
     let object_size: u64 = 10 * 1024; // 10KB each
 
@@ -1380,8 +1368,11 @@ fn test_concurrent_lfuda_size_based_eviction() {
     let max_size: u64 = 100 * 1024; // 100KB
     let segment_count = 2;
 
-    let cache: ConcurrentLfudaCache<i32, String> =
-        ConcurrentLfudaCache::with_limits_and_segments(max_entries, max_size, segment_count);
+    let cache: ConcurrentLfudaCache<i32, String> = ConcurrentLfudaCache::from_config(
+        ConcurrentLfudaCacheConfig::new(max_entries)
+            .with_max_size(max_size)
+            .with_segments(segment_count),
+    );
 
     let object_size: u64 = 10 * 1024; // 10KB each
 
@@ -1437,8 +1428,11 @@ fn test_concurrent_gdsf_size_based_eviction() {
     let max_size: u64 = 100 * 1024; // 100KB
     let segment_count = 2;
 
-    let cache: ConcurrentGdsfCache<i32, String> =
-        ConcurrentGdsfCache::with_limits_and_segments(max_entries, max_size, segment_count);
+    let cache: ConcurrentGdsfCache<i32, String> = ConcurrentGdsfCache::from_config(
+        ConcurrentGdsfCacheConfig::new(max_entries)
+            .with_max_size(max_size)
+            .with_segments(segment_count),
+    );
 
     let object_size: u64 = 10 * 1024; // 10KB each
 
@@ -1496,8 +1490,11 @@ fn test_concurrent_lru_per_segment_size_limit() {
     let segment_count = 2;
     // Each segment gets 50KB
 
-    let cache: ConcurrentLruCache<i32, String> =
-        ConcurrentLruCache::with_limits_and_segments(max_entries, max_size, segment_count);
+    let cache: ConcurrentLruCache<i32, String> = ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(max_entries)
+            .with_max_size(max_size)
+            .with_segments(segment_count),
+    );
 
     // Insert objects that are 20KB each
     // With 50KB per segment, each segment can hold at most 2 objects
@@ -1548,9 +1545,11 @@ fn test_concurrent_size_tracking_accuracy() {
     let max_size: u64 = 1024 * 1024; // 1MB - large enough that we don't trigger eviction
     let segment_count = 4;
 
-    let cache: Arc<ConcurrentLruCache<i32, String>> = Arc::new(
-        ConcurrentLruCache::with_limits_and_segments(max_entries, max_size, segment_count),
-    );
+    let cache: Arc<ConcurrentLruCache<i32, String>> = Arc::new(ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(max_entries)
+            .with_max_size(max_size)
+            .with_segments(segment_count),
+    ));
 
     let item_size: u64 = 100; // 100 bytes each
     let num_items = 100;
@@ -1596,8 +1595,11 @@ fn test_concurrent_size_tracking_on_remove() {
     let max_size: u64 = 100 * 1024;
     let segment_count = 2;
 
-    let cache: ConcurrentLruCache<i32, String> =
-        ConcurrentLruCache::with_limits_and_segments(max_entries, max_size, segment_count);
+    let cache: ConcurrentLruCache<i32, String> = ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(max_entries)
+            .with_max_size(max_size)
+            .with_segments(segment_count),
+    );
 
     let item_size: u64 = 1024; // 1KB each
 
@@ -1645,7 +1647,9 @@ fn test_concurrent_size_tracking_on_remove() {
 #[test]
 fn test_concurrent_lru_with_max_size() {
     let max_size: u64 = 1024 * 1024; // 1MB
-    let cache: ConcurrentLruCache<String, Vec<u8>> = ConcurrentLruCache::with_max_size(max_size);
+    let cache: ConcurrentLruCache<String, Vec<u8>> = ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(NonZeroUsize::new(10000).unwrap()).with_max_size(max_size),
+    );
 
     // Note: with multiple segments, max_size may have slight rounding differences
     // due to division across segments. We verify it's approximately correct.
@@ -1672,8 +1676,11 @@ fn test_concurrent_lru_with_limits() {
     let max_entries = NonZeroUsize::new(100).unwrap();
     let max_size: u64 = 50_000;
     // Use single segment for deterministic size tracking in tests
-    let cache: ConcurrentLruCache<i32, String> =
-        ConcurrentLruCache::with_limits_and_segments(max_entries, max_size, 1);
+    let cache: ConcurrentLruCache<i32, String> = ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(max_entries)
+            .with_max_size(max_size)
+            .with_segments(1),
+    );
 
     assert_eq!(cache.max_size(), max_size);
     assert_eq!(cache.current_size(), 0);
@@ -1699,7 +1706,9 @@ fn test_concurrent_lru_with_limits() {
 #[test]
 fn test_concurrent_lfu_with_max_size() {
     let max_size: u64 = 1024 * 1024;
-    let cache: ConcurrentLfuCache<String, Vec<u8>> = ConcurrentLfuCache::with_max_size(max_size);
+    let cache: ConcurrentLfuCache<String, Vec<u8>> = ConcurrentLfuCache::from_config(
+        ConcurrentLfuCacheConfig::new(NonZeroUsize::new(10000).unwrap()).with_max_size(max_size),
+    );
 
     // Note: with multiple segments, max_size may have slight rounding differences
     let actual_max = cache.max_size();
@@ -1721,8 +1730,11 @@ fn test_concurrent_lfu_with_limits() {
     let max_entries = NonZeroUsize::new(100).unwrap();
     let max_size: u64 = 50_000;
     // Use single segment for deterministic size tracking in tests
-    let cache: ConcurrentLfuCache<i32, String> =
-        ConcurrentLfuCache::with_limits_and_segments(max_entries, max_size, 1);
+    let cache: ConcurrentLfuCache<i32, String> = ConcurrentLfuCache::from_config(
+        ConcurrentLfuCacheConfig::new(max_entries)
+            .with_max_size(max_size)
+            .with_segments(1),
+    );
 
     for i in 0..50 {
         cache.put_with_size(i, format!("value_{}", i), 100);
@@ -1742,8 +1754,9 @@ fn test_concurrent_lfu_with_limits() {
 #[test]
 fn test_concurrent_lfuda_with_max_size() {
     let max_size: u64 = 1024 * 1024;
-    let cache: ConcurrentLfudaCache<String, Vec<u8>> =
-        ConcurrentLfudaCache::with_max_size(max_size);
+    let cache: ConcurrentLfudaCache<String, Vec<u8>> = ConcurrentLfudaCache::from_config(
+        ConcurrentLfudaCacheConfig::new(NonZeroUsize::new(10000).unwrap()).with_max_size(max_size),
+    );
 
     // Note: with multiple segments, max_size may have slight rounding differences
     let actual_max = cache.max_size();
@@ -1765,8 +1778,11 @@ fn test_concurrent_lfuda_with_limits() {
     let max_entries = NonZeroUsize::new(100).unwrap();
     let max_size: u64 = 50_000;
     // Use single segment for deterministic size tracking in tests
-    let cache: ConcurrentLfudaCache<i32, String> =
-        ConcurrentLfudaCache::with_limits_and_segments(max_entries, max_size, 1);
+    let cache: ConcurrentLfudaCache<i32, String> = ConcurrentLfudaCache::from_config(
+        ConcurrentLfudaCacheConfig::new(max_entries)
+            .with_max_size(max_size)
+            .with_segments(1),
+    );
 
     for i in 0..50 {
         cache.put_with_size(i, format!("value_{}", i), 100);
@@ -1786,7 +1802,9 @@ fn test_concurrent_lfuda_with_limits() {
 #[test]
 fn test_concurrent_gdsf_with_max_size() {
     let max_size: u64 = 1024 * 1024;
-    let cache: ConcurrentGdsfCache<String, Vec<u8>> = ConcurrentGdsfCache::with_max_size(max_size);
+    let cache: ConcurrentGdsfCache<String, Vec<u8>> = ConcurrentGdsfCache::from_config(
+        ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(10000).unwrap()).with_max_size(max_size),
+    );
 
     // Note: with multiple segments, max_size may have slight rounding differences
     let actual_max = cache.max_size();
@@ -1809,8 +1827,11 @@ fn test_concurrent_gdsf_with_limits() {
     let max_entries = NonZeroUsize::new(100).unwrap();
     let max_size: u64 = 50_000;
     // Use single segment for deterministic size tracking in tests
-    let cache: ConcurrentGdsfCache<i32, String> =
-        ConcurrentGdsfCache::with_limits_and_segments(max_entries, max_size, 1);
+    let cache: ConcurrentGdsfCache<i32, String> = ConcurrentGdsfCache::from_config(
+        ConcurrentGdsfCacheConfig::new(max_entries)
+            .with_max_size(max_size)
+            .with_segments(1),
+    );
 
     for i in 0..50 {
         // GDSF's put() always requires size as 3rd parameter
@@ -1831,7 +1852,13 @@ fn test_concurrent_gdsf_with_limits() {
 #[test]
 fn test_concurrent_slru_with_max_size() {
     let max_size: u64 = 1024 * 1024;
-    let cache: ConcurrentSlruCache<String, Vec<u8>> = ConcurrentSlruCache::with_max_size(max_size);
+    let cache: ConcurrentSlruCache<String, Vec<u8>> = ConcurrentSlruCache::from_config(
+        ConcurrentSlruCacheConfig::new(
+            NonZeroUsize::new(10000).unwrap(),
+            NonZeroUsize::new(2000).unwrap(),
+        )
+        .with_max_size(max_size),
+    );
 
     // Note: with multiple segments, max_size may have slight rounding differences
     let actual_max = cache.max_size();
@@ -1854,8 +1881,11 @@ fn test_concurrent_slru_with_limits() {
     let protected_cap = NonZeroUsize::new(20).unwrap();
     let max_size: u64 = 50_000;
     // Use single segment for deterministic size tracking in tests
-    let cache: ConcurrentSlruCache<i32, String> =
-        ConcurrentSlruCache::with_limits_and_segments(max_entries, protected_cap, max_size, 1);
+    let cache: ConcurrentSlruCache<i32, String> = ConcurrentSlruCache::from_config(
+        ConcurrentSlruCacheConfig::new(max_entries, protected_cap)
+            .with_max_size(max_size)
+            .with_segments(1),
+    );
 
     for i in 0..50 {
         cache.put_with_size(i, format!("value_{}", i), 100);
@@ -1874,9 +1904,8 @@ fn test_concurrent_slru_with_limits() {
 
 #[test]
 fn test_concurrent_clear_during_operations() {
-    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::with_segments(
-        NonZeroUsize::new(1000).unwrap(),
-        4,
+    let cache: Arc<ConcurrentLruCache<i32, i32>> = Arc::new(ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(NonZeroUsize::new(1000).unwrap()).with_segments(4),
     ));
 
     // Pre-fill
@@ -1915,8 +1944,9 @@ fn test_concurrent_clear_during_operations() {
 
 #[test]
 fn test_concurrent_lru_record_miss() {
-    let cache: ConcurrentLruCache<i32, i32> =
-        ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap());
+    let cache: ConcurrentLruCache<i32, i32> = ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+    );
 
     // Record some misses
     cache.record_miss(100);

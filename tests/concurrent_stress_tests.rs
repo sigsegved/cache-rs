@@ -4,6 +4,10 @@
 
 #![cfg(feature = "concurrent")]
 
+use cache_rs::config::{
+    ConcurrentGdsfCacheConfig, ConcurrentLfuCacheConfig, ConcurrentLfudaCacheConfig,
+    ConcurrentLruCacheConfig, ConcurrentSlruCacheConfig,
+};
 use cache_rs::{
     ConcurrentGdsfCache, ConcurrentLfuCache, ConcurrentLfudaCache, ConcurrentLruCache,
     ConcurrentSlruCache,
@@ -19,8 +23,9 @@ const OPS_PER_THREAD: usize = 10_000;
 /// Test high contention with many threads hammering the same keys
 #[test]
 fn stress_lru_high_contention() {
-    let cache: Arc<ConcurrentLruCache<usize, usize>> =
-        Arc::new(ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap()));
+    let cache: Arc<ConcurrentLruCache<usize, usize>> = Arc::new(ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+    ));
 
     let mut handles = Vec::new();
     for t in 0..NUM_THREADS {
@@ -49,9 +54,11 @@ fn stress_lru_high_contention() {
 #[test]
 fn stress_segment_counts() {
     for segments in [1, 2, 4, 8, 16, 32] {
-        let cache: Arc<ConcurrentLruCache<usize, usize>> = Arc::new(
-            ConcurrentLruCache::with_segments(NonZeroUsize::new(1000).unwrap(), segments),
-        );
+        let cache: Arc<ConcurrentLruCache<usize, usize>> =
+            Arc::new(ConcurrentLruCache::from_config(
+                ConcurrentLruCacheConfig::new(NonZeroUsize::new(1000).unwrap())
+                    .with_segments(segments),
+            ));
 
         let mut handles = Vec::new();
         for t in 0..8 {
@@ -76,8 +83,9 @@ fn stress_segment_counts() {
 /// Test edge case: empty cache operations
 #[test]
 fn stress_empty_cache() {
-    let cache: Arc<ConcurrentLruCache<usize, usize>> =
-        Arc::new(ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap()));
+    let cache: Arc<ConcurrentLruCache<usize, usize>> = Arc::new(ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+    ));
 
     let mut handles = Vec::new();
     for _ in 0..NUM_THREADS {
@@ -100,9 +108,9 @@ fn stress_empty_cache() {
 /// Test edge case: single item cache
 #[test]
 fn stress_single_item_cache() {
-    let cache: Arc<ConcurrentLruCache<usize, usize>> = Arc::new(ConcurrentLruCache::with_segments(
-        NonZeroUsize::new(16).unwrap(), // One item per segment
-        16,
+    let cache: Arc<ConcurrentLruCache<usize, usize>> = Arc::new(ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(NonZeroUsize::new(16).unwrap()) // One item per segment
+            .with_segments(16),
     ));
 
     let mut handles = Vec::new();
@@ -128,8 +136,8 @@ fn stress_single_item_cache() {
 #[test]
 fn stress_capacity_limits() {
     let capacity = 100;
-    let cache: Arc<ConcurrentLruCache<usize, usize>> = Arc::new(ConcurrentLruCache::new(
-        NonZeroUsize::new(capacity).unwrap(),
+    let cache: Arc<ConcurrentLruCache<usize, usize>> = Arc::new(ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(NonZeroUsize::new(capacity).unwrap()),
     ));
 
     let mut handles = Vec::new();
@@ -153,8 +161,9 @@ fn stress_capacity_limits() {
 /// Test concurrent removes
 #[test]
 fn stress_concurrent_removes() {
-    let cache: Arc<ConcurrentLruCache<usize, usize>> =
-        Arc::new(ConcurrentLruCache::new(NonZeroUsize::new(1000).unwrap()));
+    let cache: Arc<ConcurrentLruCache<usize, usize>> = Arc::new(ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(NonZeroUsize::new(1000).unwrap()),
+    ));
 
     // Pre-populate
     for i in 0..1000 {
@@ -194,8 +203,9 @@ fn stress_concurrent_removes() {
 /// Test concurrent clear operations
 #[test]
 fn stress_concurrent_clear() {
-    let cache: Arc<ConcurrentLruCache<usize, usize>> =
-        Arc::new(ConcurrentLruCache::new(NonZeroUsize::new(1000).unwrap()));
+    let cache: Arc<ConcurrentLruCache<usize, usize>> = Arc::new(ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(NonZeroUsize::new(1000).unwrap()),
+    ));
 
     let mut handles = Vec::new();
     for t in 0..NUM_THREADS {
@@ -221,9 +231,11 @@ fn stress_concurrent_clear() {
 /// Test SLRU under stress
 #[test]
 fn stress_slru() {
-    let cache: Arc<ConcurrentSlruCache<usize, usize>> = Arc::new(ConcurrentSlruCache::new(
-        NonZeroUsize::new(1000).unwrap(),
-        NonZeroUsize::new(500).unwrap(),
+    let cache: Arc<ConcurrentSlruCache<usize, usize>> = Arc::new(ConcurrentSlruCache::from_config(
+        ConcurrentSlruCacheConfig::new(
+            NonZeroUsize::new(1000).unwrap(),
+            NonZeroUsize::new(500).unwrap(),
+        ),
     ));
 
     let mut handles = Vec::new();
@@ -251,8 +263,9 @@ fn stress_slru() {
 /// Test LFU under stress
 #[test]
 fn stress_lfu() {
-    let cache: Arc<ConcurrentLfuCache<usize, usize>> =
-        Arc::new(ConcurrentLfuCache::new(NonZeroUsize::new(1000).unwrap()));
+    let cache: Arc<ConcurrentLfuCache<usize, usize>> = Arc::new(ConcurrentLfuCache::from_config(
+        ConcurrentLfuCacheConfig::new(NonZeroUsize::new(1000).unwrap()),
+    ));
 
     let mut handles = Vec::new();
     for t in 0..NUM_THREADS {
@@ -282,7 +295,9 @@ fn stress_lfu() {
 #[test]
 fn stress_lfuda() {
     let cache: Arc<ConcurrentLfudaCache<usize, usize>> =
-        Arc::new(ConcurrentLfudaCache::new(NonZeroUsize::new(1000).unwrap()));
+        Arc::new(ConcurrentLfudaCache::from_config(
+            ConcurrentLfudaCacheConfig::new(NonZeroUsize::new(1000).unwrap()),
+        ));
 
     let mut handles = Vec::new();
     for t in 0..NUM_THREADS {
@@ -306,8 +321,9 @@ fn stress_lfuda() {
 /// Test GDSF under stress with variable sizes
 #[test]
 fn stress_gdsf() {
-    let cache: Arc<ConcurrentGdsfCache<usize, usize>> =
-        Arc::new(ConcurrentGdsfCache::new(NonZeroUsize::new(10000).unwrap()));
+    let cache: Arc<ConcurrentGdsfCache<usize, usize>> = Arc::new(ConcurrentGdsfCache::from_config(
+        ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(10000).unwrap()),
+    ));
 
     let mut handles = Vec::new();
     for t in 0..NUM_THREADS {
@@ -334,8 +350,9 @@ fn stress_gdsf() {
 #[test]
 fn stress_mixed_all_caches() {
     // LRU
-    let lru: Arc<ConcurrentLruCache<String, String>> =
-        Arc::new(ConcurrentLruCache::new(NonZeroUsize::new(500).unwrap()));
+    let lru: Arc<ConcurrentLruCache<String, String>> = Arc::new(ConcurrentLruCache::from_config(
+        ConcurrentLruCacheConfig::new(NonZeroUsize::new(500).unwrap()),
+    ));
 
     let mut handles = Vec::new();
     for t in 0..8 {
@@ -373,7 +390,9 @@ fn stress_mixed_all_caches() {
 #[test]
 fn stress_get_with() {
     let cache: Arc<ConcurrentLruCache<usize, Vec<usize>>> =
-        Arc::new(ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap()));
+        Arc::new(ConcurrentLruCache::from_config(
+            ConcurrentLruCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+        ));
 
     // Pre-populate with vectors
     for i in 0..100 {

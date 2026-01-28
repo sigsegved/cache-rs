@@ -66,10 +66,13 @@
 //!
 //! ```rust,ignore
 //! use cache_rs::concurrent::ConcurrentLruCache;
+//! use cache_rs::config::ConcurrentLruCacheConfig;
+//! use std::num::NonZeroUsize;
 //! use std::sync::Arc;
 //! use std::thread;
 //!
-//! let cache = Arc::new(ConcurrentLruCache::new(10_000));
+//! let config = ConcurrentLruCacheConfig::new(NonZeroUsize::new(10_000).unwrap());
+//! let cache = Arc::new(ConcurrentLruCache::from_config(config));
 //!
 //! let handles: Vec<_> = (0..4).map(|i| {
 //!     let cache = Arc::clone(&cache);
@@ -197,80 +200,6 @@ where
             segments: segments.into_boxed_slice(),
             hash_builder: DefaultHashBuilder::default(),
         }
-    }
-
-    /// Creates a concurrent LRU cache with the specified capacity.
-    ///
-    /// This is a convenience constructor with default segment count.
-    /// For more control, use [`ConcurrentLruCache::from_config`].
-    ///
-    /// # Arguments
-    ///
-    /// * `cap` - The maximum number of entries the cache can hold across all segments.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use cache_rs::ConcurrentLruCache;
-    /// use core::num::NonZeroUsize;
-    ///
-    /// let cache: ConcurrentLruCache<&str, i32> = ConcurrentLruCache::new(
-    ///     NonZeroUsize::new(1000).unwrap(),
-    /// );
-    /// cache.put("key", 42);
-    /// ```
-    pub fn new(cap: NonZeroUsize) -> Self {
-        Self::from_config(crate::config::ConcurrentLruCacheConfig::new(cap))
-    }
-
-    /// Creates a concurrent LRU cache with the specified capacity and segment count.
-    ///
-    /// This is a convenience constructor. For more control, use [`ConcurrentLruCache::from_config`].
-    ///
-    /// # Arguments
-    ///
-    /// * `cap` - The maximum number of entries the cache can hold across all segments.
-    /// * `segments` - The number of segments to use (more = better concurrency, more memory).
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use cache_rs::ConcurrentLruCache;
-    /// use core::num::NonZeroUsize;
-    ///
-    /// // Cache with 32 segments for high concurrency
-    /// let cache: ConcurrentLruCache<&str, i32> = ConcurrentLruCache::with_segments(
-    ///     NonZeroUsize::new(10000).unwrap(),
-    ///     32,
-    /// );
-    /// ```
-    pub fn with_segments(cap: NonZeroUsize, segments: usize) -> Self {
-        Self::from_config(crate::config::ConcurrentLruCacheConfig::new(cap).with_segments(segments))
-    }
-
-    /// Creates a concurrent LRU cache with capacity, size limit, and segment count.
-    ///
-    /// This is a convenience constructor. For more control, use [`ConcurrentLruCache::from_config`].
-    pub fn with_limits_and_segments(cap: NonZeroUsize, max_size: u64, segments: usize) -> Self {
-        Self::from_config(
-            crate::config::ConcurrentLruCacheConfig::new(cap)
-                .with_max_size(max_size)
-                .with_segments(segments),
-        )
-    }
-
-    /// Creates a concurrent LRU cache with size limit only.
-    ///
-    /// This is a convenience constructor. For more control, use [`ConcurrentLruCache::from_config`].
-    pub fn with_max_size(max_size: u64) -> Self {
-        // Use a large but reasonable capacity that won't overflow hash tables
-        const MAX_REASONABLE_CAPACITY: usize = 1 << 30; // ~1 billion entries
-        Self::from_config(
-            crate::config::ConcurrentLruCacheConfig::new(
-                NonZeroUsize::new(MAX_REASONABLE_CAPACITY).unwrap(),
-            )
-            .with_max_size(max_size),
-        )
     }
 }
 
@@ -572,6 +501,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ConcurrentLruCacheConfig;
 
     extern crate std;
     use std::string::ToString;
@@ -581,8 +511,9 @@ mod tests {
 
     #[test]
     fn test_basic_operations() {
-        let cache: ConcurrentLruCache<String, i32> =
-            ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap());
+        let cache: ConcurrentLruCache<String, i32> = ConcurrentLruCache::from_config(
+            ConcurrentLruCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+        );
 
         assert!(cache.is_empty());
         assert_eq!(cache.len(), 0);
@@ -602,8 +533,9 @@ mod tests {
 
     #[test]
     fn test_get_with() {
-        let cache: ConcurrentLruCache<String, String> =
-            ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap());
+        let cache: ConcurrentLruCache<String, String> = ConcurrentLruCache::from_config(
+            ConcurrentLruCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+        );
 
         cache.put("key".to_string(), "hello world".to_string());
 
@@ -616,8 +548,9 @@ mod tests {
 
     #[test]
     fn test_get_mut_with() {
-        let cache: ConcurrentLruCache<String, i32> =
-            ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap());
+        let cache: ConcurrentLruCache<String, i32> = ConcurrentLruCache::from_config(
+            ConcurrentLruCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+        );
 
         cache.put("counter".to_string(), 0);
 
@@ -629,8 +562,9 @@ mod tests {
 
     #[test]
     fn test_remove() {
-        let cache: ConcurrentLruCache<String, i32> =
-            ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap());
+        let cache: ConcurrentLruCache<String, i32> = ConcurrentLruCache::from_config(
+            ConcurrentLruCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+        );
 
         cache.put("a".to_string(), 1);
         cache.put("b".to_string(), 2);
@@ -644,8 +578,9 @@ mod tests {
 
     #[test]
     fn test_clear() {
-        let cache: ConcurrentLruCache<String, i32> =
-            ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap());
+        let cache: ConcurrentLruCache<String, i32> = ConcurrentLruCache::from_config(
+            ConcurrentLruCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+        );
 
         cache.put("a".to_string(), 1);
         cache.put("b".to_string(), 2);
@@ -659,8 +594,9 @@ mod tests {
 
     #[test]
     fn test_contains_key() {
-        let cache: ConcurrentLruCache<String, i32> =
-            ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap());
+        let cache: ConcurrentLruCache<String, i32> = ConcurrentLruCache::from_config(
+            ConcurrentLruCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+        );
 
         cache.put("exists".to_string(), 1);
 
@@ -671,7 +607,9 @@ mod tests {
     #[test]
     fn test_concurrent_access() {
         let cache: Arc<ConcurrentLruCache<String, i32>> =
-            Arc::new(ConcurrentLruCache::new(NonZeroUsize::new(1000).unwrap()));
+            Arc::new(ConcurrentLruCache::from_config(
+                ConcurrentLruCacheConfig::new(NonZeroUsize::new(1000).unwrap()),
+            ));
         let num_threads = 8;
         let ops_per_thread = 1000;
 
@@ -698,7 +636,9 @@ mod tests {
     #[test]
     fn test_concurrent_mixed_operations() {
         let cache: Arc<ConcurrentLruCache<String, i32>> =
-            Arc::new(ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap()));
+            Arc::new(ConcurrentLruCache::from_config(
+                ConcurrentLruCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+            ));
         let num_threads = 8;
         let ops_per_thread = 500;
 
@@ -743,16 +683,18 @@ mod tests {
 
     #[test]
     fn test_segment_count() {
-        let cache: ConcurrentLruCache<String, i32> =
-            ConcurrentLruCache::with_segments(NonZeroUsize::new(100).unwrap(), 8);
+        let cache: ConcurrentLruCache<String, i32> = ConcurrentLruCache::from_config(
+            ConcurrentLruCacheConfig::new(NonZeroUsize::new(100).unwrap()).with_segments(8),
+        );
 
         assert_eq!(cache.segment_count(), 8);
     }
 
     #[test]
     fn test_capacity() {
-        let cache: ConcurrentLruCache<String, i32> =
-            ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap());
+        let cache: ConcurrentLruCache<String, i32> = ConcurrentLruCache::from_config(
+            ConcurrentLruCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+        );
 
         // Capacity is distributed across segments, so it may not be exactly 100
         // It should be close to the requested capacity
@@ -763,8 +705,9 @@ mod tests {
 
     #[test]
     fn test_eviction_on_capacity() {
-        let cache: ConcurrentLruCache<String, i32> =
-            ConcurrentLruCache::with_segments(NonZeroUsize::new(48).unwrap(), 16);
+        let cache: ConcurrentLruCache<String, i32> = ConcurrentLruCache::from_config(
+            ConcurrentLruCacheConfig::new(NonZeroUsize::new(48).unwrap()).with_segments(16),
+        );
 
         cache.put("a".to_string(), 1);
         cache.put("b".to_string(), 2);
@@ -781,8 +724,9 @@ mod tests {
 
     #[test]
     fn test_update_existing_key() {
-        let cache: ConcurrentLruCache<String, i32> =
-            ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap());
+        let cache: ConcurrentLruCache<String, i32> = ConcurrentLruCache::from_config(
+            ConcurrentLruCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+        );
 
         cache.put("key".to_string(), 1);
         assert_eq!(cache.get(&"key".to_string()), Some(1));
@@ -794,8 +738,9 @@ mod tests {
 
     #[test]
     fn test_lru_ordering() {
-        let cache: ConcurrentLruCache<String, i32> =
-            ConcurrentLruCache::with_segments(NonZeroUsize::new(48).unwrap(), 16);
+        let cache: ConcurrentLruCache<String, i32> = ConcurrentLruCache::from_config(
+            ConcurrentLruCacheConfig::new(NonZeroUsize::new(48).unwrap()).with_segments(16),
+        );
 
         cache.put("a".to_string(), 1);
         cache.put("b".to_string(), 2);
@@ -813,8 +758,9 @@ mod tests {
 
     #[test]
     fn test_metrics() {
-        let cache: ConcurrentLruCache<String, i32> =
-            ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap());
+        let cache: ConcurrentLruCache<String, i32> = ConcurrentLruCache::from_config(
+            ConcurrentLruCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+        );
 
         cache.put("a".to_string(), 1);
         cache.put("b".to_string(), 2);
@@ -826,8 +772,9 @@ mod tests {
 
     #[test]
     fn test_record_miss() {
-        let cache: ConcurrentLruCache<String, i32> =
-            ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap());
+        let cache: ConcurrentLruCache<String, i32> = ConcurrentLruCache::from_config(
+            ConcurrentLruCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+        );
 
         cache.record_miss(100);
         cache.record_miss(200);
@@ -839,8 +786,9 @@ mod tests {
 
     #[test]
     fn test_empty_cache_operations() {
-        let cache: ConcurrentLruCache<String, i32> =
-            ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap());
+        let cache: ConcurrentLruCache<String, i32> = ConcurrentLruCache::from_config(
+            ConcurrentLruCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+        );
 
         assert!(cache.is_empty());
         assert_eq!(cache.len(), 0);
@@ -854,8 +802,9 @@ mod tests {
 
     #[test]
     fn test_single_item_cache() {
-        let cache: ConcurrentLruCache<String, i32> =
-            ConcurrentLruCache::with_segments(NonZeroUsize::new(16).unwrap(), 16);
+        let cache: ConcurrentLruCache<String, i32> = ConcurrentLruCache::from_config(
+            ConcurrentLruCacheConfig::new(NonZeroUsize::new(16).unwrap()).with_segments(16),
+        );
 
         cache.put("a".to_string(), 1);
         assert!(!cache.is_empty());
@@ -879,8 +828,9 @@ mod tests {
 
     #[test]
     fn test_borrowed_key_lookup() {
-        let cache: ConcurrentLruCache<String, i32> =
-            ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap());
+        let cache: ConcurrentLruCache<String, i32> = ConcurrentLruCache::from_config(
+            ConcurrentLruCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+        );
 
         cache.put("test_key".to_string(), 42);
 
@@ -893,8 +843,9 @@ mod tests {
 
     #[test]
     fn test_algorithm_name() {
-        let cache: ConcurrentLruCache<String, i32> =
-            ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap());
+        let cache: ConcurrentLruCache<String, i32> = ConcurrentLruCache::from_config(
+            ConcurrentLruCacheConfig::new(NonZeroUsize::new(100).unwrap()),
+        );
 
         assert_eq!(cache.algorithm_name(), "ConcurrentLRU");
     }
