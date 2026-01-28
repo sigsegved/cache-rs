@@ -236,11 +236,15 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
     }
 
     pub(crate) fn with_hasher_and_size(cap: NonZeroUsize, hash_builder: S, max_size: u64) -> Self {
-        let config = GdsfCacheConfig::new(cap).with_max_size(max_size);
-        let map_capacity = config.capacity().get().next_power_of_two();
+        let config = GdsfCacheConfig {
+            capacity: cap,
+            initial_age: 0.0,
+            max_size,
+        };
+        let map_capacity = config.capacity.get().next_power_of_two();
 
         GdsfSegment {
-            global_age: config.initial_age(),
+            global_age: config.initial_age,
             min_priority: 0.0,
             map: HashMap::with_capacity_and_hasher(map_capacity, hash_builder),
             priority_lists: BTreeMap::new(),
@@ -252,7 +256,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
 
     #[inline]
     pub(crate) fn cap(&self) -> NonZeroUsize {
-        self.config.capacity()
+        self.config.capacity
     }
 
     #[inline]
@@ -279,7 +283,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
     /// Returns the maximum content size the cache can hold.
     #[inline]
     pub(crate) fn max_size(&self) -> u64 {
-        self.config.max_size()
+        self.config.max_size
     }
 
     #[inline]
@@ -351,7 +355,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
 
         let entry_ptr = Box::into_raw(boxed_entry);
 
-        let capacity = self.config.capacity();
+        let capacity = self.config.capacity;
         self.priority_lists
             .entry(new_priority_key)
             .or_insert_with(|| List::new(capacity));
@@ -487,8 +491,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
         }
 
         // New entry - check capacity and size limits
-        let capacity = self.config.capacity().get();
-        let max_size = self.config.max_size();
+        let capacity = self.config.capacity.get();
+        let max_size = self.config.max_size;
 
         while self.len() >= capacity
             || (self.current_size + size > max_size && !self.map.is_empty())
@@ -499,7 +503,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
         let priority = self.calculate_priority(1, size);
         let priority_key = (priority * 1000.0) as u64;
 
-        let cap = self.config.capacity();
+        let cap = self.config.capacity;
         let list = self
             .priority_lists
             .entry(priority_key)
@@ -608,7 +612,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
 impl<K, V, S> core::fmt::Debug for GdsfSegment<K, V, S> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("GdsfSegment")
-            .field("capacity", &self.config.capacity())
+            .field("capacity", &self.config.capacity)
             .field("len", &self.map.len())
             .field("global_age", &self.global_age)
             .finish()
@@ -736,12 +740,12 @@ impl<K: Hash + Eq, V: Clone> GdsfCache<K, V, DefaultHashBuilder> {
     /// Creates a new GDSF cache from a configuration.
     ///
     /// This is the **recommended** way to create a GDSF cache. All configuration
-    /// is specified through the [`GdsfCacheConfig`] struct, which uses a builder
-    /// pattern for optional parameters.
+    /// is specified through the [`GdsfCacheConfig`] struct.
     ///
     /// # Arguments
     ///
     /// * `config` - Configuration specifying capacity and optional size limit/initial age
+    /// * `hasher` - Optional custom hash builder. Pass `None` to use the default.
     ///
     /// # Example
     ///
@@ -751,26 +755,29 @@ impl<K: Hash + Eq, V: Clone> GdsfCache<K, V, DefaultHashBuilder> {
     /// use core::num::NonZeroUsize;
     ///
     /// // Simple capacity-only cache
-    /// let config = GdsfCacheConfig::new(NonZeroUsize::new(100).unwrap());
-    /// let mut cache: GdsfCache<&str, i32> = GdsfCache::from_config(config);
+    /// let config = GdsfCacheConfig {
+    ///     capacity: NonZeroUsize::new(100).unwrap(),
+    ///     initial_age: 0.0,
+    ///     max_size: u64::MAX,
+    /// };
+    /// let mut cache: GdsfCache<&str, i32> = GdsfCache::init(config, None);
     /// cache.put("key", 42, 1);
     ///
     /// // Cache with size limit (recommended for GDSF)
-    /// let config = GdsfCacheConfig::new(NonZeroUsize::new(1000).unwrap())
-    ///     .with_max_size(10 * 1024 * 1024);  // 10MB
-    /// let cache: GdsfCache<String, Vec<u8>> = GdsfCache::from_config(config);
+    /// let config = GdsfCacheConfig {
+    ///     capacity: NonZeroUsize::new(1000).unwrap(),
+    ///     initial_age: 0.0,
+    ///     max_size: 10 * 1024 * 1024,  // 10MB
+    /// };
+    /// let cache: GdsfCache<String, Vec<u8>> = GdsfCache::init(config, None);
     /// ```
-    pub fn from_config(config: GdsfCacheConfig) -> Self {
-        Self::with_hasher_and_size(
-            config.capacity(),
-            DefaultHashBuilder::default(),
-            config.max_size(),
-        )
+    pub fn init(config: GdsfCacheConfig, hasher: Option<DefaultHashBuilder>) -> Self {
+        Self::with_hasher_and_size(config.capacity, hasher.unwrap_or_default(), config.max_size)
     }
 
     /// Creates a new GDSF cache with the specified capacity.
     ///
-    /// This is a convenience constructor. For more control, use [`GdsfCache::from_config`].
+    /// This is a convenience constructor. For more control, use [`GdsfCache::init`].
     ///
     /// # Arguments
     ///
@@ -786,12 +793,19 @@ impl<K: Hash + Eq, V: Clone> GdsfCache<K, V, DefaultHashBuilder> {
     /// cache.put("key", 42, 1);
     /// ```
     pub fn new(cap: NonZeroUsize) -> Self {
-        Self::from_config(GdsfCacheConfig::new(cap))
+        Self::init(
+            GdsfCacheConfig {
+                capacity: cap,
+                initial_age: 0.0,
+                max_size: u64::MAX,
+            },
+            None,
+        )
     }
 
     /// Creates a new GDSF cache with both entry count and size limits.
     ///
-    /// This is a convenience constructor. For more control, use [`GdsfCache::from_config`].
+    /// This is a convenience constructor. For more control, use [`GdsfCache::init`].
     ///
     /// # Arguments
     ///
@@ -811,7 +825,14 @@ impl<K: Hash + Eq, V: Clone> GdsfCache<K, V, DefaultHashBuilder> {
     /// );
     /// ```
     pub fn with_limits(cap: NonZeroUsize, max_size: u64) -> Self {
-        Self::from_config(GdsfCacheConfig::new(cap).with_max_size(max_size))
+        Self::init(
+            GdsfCacheConfig {
+                capacity: cap,
+                initial_age: 0.0,
+                max_size,
+            },
+            None,
+        )
     }
 
     /// Creates a new GDSF cache with only a size limit.
@@ -827,9 +848,13 @@ impl<K: Hash + Eq, V: Clone> GdsfCache<K, V, DefaultHashBuilder> {
         // The HashMap will grow dynamically as needed, so we don't need
         // to pre-allocate for billions of entries.
         const DEFAULT_SIZE_BASED_CAPACITY: usize = 16384;
-        Self::from_config(
-            GdsfCacheConfig::new(NonZeroUsize::new(DEFAULT_SIZE_BASED_CAPACITY).unwrap())
-                .with_max_size(max_size),
+        Self::init(
+            GdsfCacheConfig {
+                capacity: NonZeroUsize::new(DEFAULT_SIZE_BASED_CAPACITY).unwrap(),
+                initial_age: 0.0,
+                max_size,
+            },
+            None,
         )
     }
 }
@@ -1044,10 +1069,13 @@ mod tests {
     }
 
     #[test]
-    fn test_gdsf_from_config_constructor() {
-        let config =
-            GdsfCacheConfig::new(NonZeroUsize::new(1000).unwrap()).with_max_size(1024 * 1024);
-        let cache: GdsfCache<String, i32> = GdsfCache::from_config(config);
+    fn test_gdsf_init_constructor() {
+        let config = GdsfCacheConfig {
+            capacity: NonZeroUsize::new(1000).unwrap(),
+            initial_age: 0.0,
+            max_size: 1024 * 1024,
+        };
+        let cache: GdsfCache<String, i32> = GdsfCache::init(config, None);
 
         assert_eq!(cache.current_size(), 0);
         assert_eq!(cache.max_size(), 1024 * 1024);

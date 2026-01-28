@@ -221,8 +221,11 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
 
     /// Creates a new LFU segment with the specified capacity, hash builder, and max size.
     pub(crate) fn with_hasher_and_size(cap: NonZeroUsize, hash_builder: S, max_size: u64) -> Self {
-        let config = LfuCacheConfig::new(cap).with_max_size(max_size);
-        let map_capacity = config.capacity().get().next_power_of_two();
+        let config = LfuCacheConfig {
+            capacity: cap,
+            max_size,
+        };
+        let map_capacity = config.capacity.get().next_power_of_two();
         LfuSegment {
             config,
             min_frequency: 1,
@@ -236,7 +239,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
     /// Returns the maximum number of key-value pairs the segment can hold.
     #[inline]
     pub(crate) fn cap(&self) -> NonZeroUsize {
-        self.config.capacity()
+        self.config.capacity
     }
 
     /// Returns the current number of key-value pairs in the segment.
@@ -260,7 +263,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
     /// Returns the maximum content size the cache can hold.
     #[inline]
     pub(crate) fn max_size(&self) -> u64 {
-        self.config.max_size()
+        self.config.max_size
     }
 
     /// Estimates the size of a key-value pair in bytes for metrics tracking
@@ -325,7 +328,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
         }
 
         // Ensure the new frequency list exists
-        let capacity = self.config.capacity();
+        let capacity = self.config.capacity;
         self.frequency_lists
             .entry(new_frequency)
             .or_insert_with(|| List::new(capacity));
@@ -452,8 +455,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
         let mut evicted = None;
 
         // Evict while entry count limit OR size limit would be exceeded
-        while self.len() >= self.config.capacity().get()
-            || (self.current_size + size > self.config.max_size() && !self.map.is_empty())
+        while self.len() >= self.config.capacity.get()
+            || (self.current_size + size > self.config.max_size && !self.map.is_empty())
         {
             if let Some(min_freq_list) = self.frequency_lists.get_mut(&self.min_frequency) {
                 if let Some(old_entry) = min_freq_list.remove_last() {
@@ -500,7 +503,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
         self.min_frequency = 1;
 
         // Ensure frequency list exists
-        let capacity = self.config.capacity();
+        let capacity = self.config.capacity;
         self.frequency_lists
             .entry(frequency)
             .or_insert_with(|| List::new(capacity));
@@ -585,7 +588,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
 impl<K, V, S> core::fmt::Debug for LfuSegment<K, V, S> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("LfuSegment")
-            .field("capacity", &self.config.capacity())
+            .field("capacity", &self.config.capacity)
             .field("len", &self.map.len())
             .field("min_frequency", &self.min_frequency)
             .finish()
@@ -779,12 +782,12 @@ where
     /// Creates a new LFU cache from a configuration.
     ///
     /// This is the **recommended** way to create an LFU cache. All configuration
-    /// is specified through the [`LfuCacheConfig`] struct, which uses a builder
-    /// pattern for optional parameters.
+    /// is specified through the [`LfuCacheConfig`] struct.
     ///
     /// # Arguments
     ///
     /// * `config` - Configuration specifying capacity and optional size limit
+    /// * `hasher` - Optional custom hash builder (uses default if `None`)
     ///
     /// # Example
     ///
@@ -794,27 +797,31 @@ where
     /// use core::num::NonZeroUsize;
     ///
     /// // Simple capacity-only cache
-    /// let config = LfuCacheConfig::new(NonZeroUsize::new(100).unwrap());
-    /// let mut cache: LfuCache<&str, i32> = LfuCache::from_config(config);
+    /// let config = LfuCacheConfig {
+    ///     capacity: NonZeroUsize::new(100).unwrap(),
+    ///     max_size: u64::MAX,
+    /// };
+    /// let mut cache: LfuCache<&str, i32> = LfuCache::init(config, None);
     /// cache.put("key", 42);
     ///
     /// // Cache with size limit
-    /// let config = LfuCacheConfig::new(NonZeroUsize::new(1000).unwrap())
-    ///     .with_max_size(10 * 1024 * 1024);  // 10MB
-    /// let cache: LfuCache<String, Vec<u8>> = LfuCache::from_config(config);
+    /// let config = LfuCacheConfig {
+    ///     capacity: NonZeroUsize::new(1000).unwrap(),
+    ///     max_size: 10 * 1024 * 1024,  // 10MB
+    /// };
+    /// let cache: LfuCache<String, Vec<u8>> = LfuCache::init(config, None);
     /// ```
-    pub fn from_config(config: LfuCacheConfig) -> LfuCache<K, V, DefaultHashBuilder> {
-        LfuCache::with_hasher_and_size(
-            config.capacity(),
-            DefaultHashBuilder::default(),
-            config.max_size(),
-        )
+    pub fn init(
+        config: LfuCacheConfig,
+        hasher: Option<DefaultHashBuilder>,
+    ) -> LfuCache<K, V, DefaultHashBuilder> {
+        LfuCache::with_hasher_and_size(config.capacity, hasher.unwrap_or_default(), config.max_size)
     }
 
     /// Creates a new LFU cache with the specified capacity.
     ///
     /// This is a convenience constructor that creates a cache with only a capacity limit.
-    /// For more control, use [`LfuCache::from_config`] with an [`LfuCacheConfig`].
+    /// For more control, use [`LfuCache::init`] with an [`LfuCacheConfig`].
     ///
     /// # Arguments
     ///
@@ -830,12 +837,18 @@ where
     /// cache.put("key", 42);
     /// ```
     pub fn new(cap: NonZeroUsize) -> LfuCache<K, V, DefaultHashBuilder> {
-        LfuCache::from_config(LfuCacheConfig::new(cap))
+        LfuCache::init(
+            LfuCacheConfig {
+                capacity: cap,
+                max_size: u64::MAX,
+            },
+            None,
+        )
     }
 
     /// Creates a new LFU cache with both entry count and size limits.
     ///
-    /// This is a convenience constructor. For more control, use [`LfuCache::from_config`].
+    /// This is a convenience constructor. For more control, use [`LfuCache::init`].
     ///
     /// # Arguments
     ///
@@ -855,7 +868,13 @@ where
     /// );
     /// ```
     pub fn with_limits(cap: NonZeroUsize, max_size: u64) -> LfuCache<K, V, DefaultHashBuilder> {
-        LfuCache::from_config(LfuCacheConfig::new(cap).with_max_size(max_size))
+        LfuCache::init(
+            LfuCacheConfig {
+                capacity: cap,
+                max_size,
+            },
+            None,
+        )
     }
 
     /// Creates a new LFU cache with only a size limit.
@@ -871,9 +890,12 @@ where
         // The HashMap will grow dynamically as needed, so we don't need
         // to pre-allocate for billions of entries.
         const DEFAULT_SIZE_BASED_CAPACITY: usize = 16384;
-        LfuCache::from_config(
-            LfuCacheConfig::new(NonZeroUsize::new(DEFAULT_SIZE_BASED_CAPACITY).unwrap())
-                .with_max_size(max_size),
+        LfuCache::init(
+            LfuCacheConfig {
+                capacity: NonZeroUsize::new(DEFAULT_SIZE_BASED_CAPACITY).unwrap(),
+                max_size,
+            },
+            None,
         )
     }
 }
@@ -1164,10 +1186,12 @@ mod tests {
     }
 
     #[test]
-    fn test_lfu_from_config_constructor() {
-        let config =
-            LfuCacheConfig::new(NonZeroUsize::new(1000).unwrap()).with_max_size(1024 * 1024);
-        let cache: LfuCache<String, i32> = LfuCache::from_config(config);
+    fn test_lfu_init_constructor() {
+        let config = LfuCacheConfig {
+            capacity: NonZeroUsize::new(1000).unwrap(),
+            max_size: 1024 * 1024,
+        };
+        let cache: LfuCache<String, i32> = LfuCache::init(config, None);
 
         assert_eq!(cache.current_size(), 0);
         assert_eq!(cache.max_size(), 1024 * 1024);

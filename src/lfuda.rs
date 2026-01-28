@@ -264,8 +264,12 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
 
     /// Creates a new LFUDA segment with the specified capacity, hash builder, and max size.
     pub(crate) fn with_hasher_and_size(cap: NonZeroUsize, hash_builder: S, max_size: u64) -> Self {
-        let config = LfudaCacheConfig::new(cap).with_max_size(max_size);
-        let map_capacity = config.capacity().get().next_power_of_two();
+        let config = LfudaCacheConfig {
+            capacity: cap,
+            initial_age: 0,
+            max_size,
+        };
+        let map_capacity = config.capacity.get().next_power_of_two();
 
         LfudaSegment {
             config,
@@ -281,7 +285,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
     /// Returns the maximum number of key-value pairs the segment can hold.
     #[inline]
     pub(crate) fn cap(&self) -> NonZeroUsize {
-        self.config.capacity()
+        self.config.capacity
     }
 
     /// Returns the current number of key-value pairs in the segment.
@@ -311,7 +315,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
     /// Returns the maximum content size the cache can hold.
     #[inline]
     pub(crate) fn max_size(&self) -> u64 {
-        self.config.max_size()
+        self.config.max_size
     }
 
     /// Returns a reference to the metrics for this segment.
@@ -388,7 +392,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
         }
 
         // Ensure the new priority list exists
-        let capacity = self.config.capacity();
+        let capacity = self.config.capacity;
         self.priority_lists
             .entry(new_priority)
             .or_insert_with(|| List::new(capacity));
@@ -509,8 +513,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
         let priority = frequency + age_at_insertion;
 
         // Evict while entry count limit OR size limit would be exceeded
-        while self.len() >= self.config.capacity().get()
-            || (self.current_size + size > self.config.max_size() && !self.map.is_empty())
+        while self.len() >= self.config.capacity.get()
+            || (self.current_size + size > self.config.max_size && !self.map.is_empty())
         {
             if let Some(min_priority_list) = self.priority_lists.get_mut(&self.min_priority) {
                 if let Some(old_entry) = min_priority_list.remove_last() {
@@ -565,7 +569,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
         };
 
         // Ensure priority list exists
-        let capacity = self.config.capacity();
+        let capacity = self.config.capacity;
         self.priority_lists
             .entry(priority)
             .or_insert_with(|| List::new(capacity));
@@ -656,7 +660,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
 impl<K, V, S> core::fmt::Debug for LfudaSegment<K, V, S> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("LfudaSegment")
-            .field("capacity", &self.config.capacity())
+            .field("capacity", &self.config.capacity)
             .field("len", &self.map.len())
             .field("global_age", &self.global_age)
             .field("min_priority", &self.min_priority)
@@ -886,28 +890,37 @@ where
     /// use core::num::NonZeroUsize;
     ///
     /// // Simple capacity-only cache
-    /// let config = LfudaCacheConfig::new(NonZeroUsize::new(100).unwrap());
-    /// let mut cache: LfudaCache<&str, i32> = LfudaCache::from_config(config);
+    /// let config = LfudaCacheConfig {
+    ///     capacity: NonZeroUsize::new(100).unwrap(),
+    ///     initial_age: 0,
+    ///     max_size: u64::MAX,
+    /// };
+    /// let mut cache: LfudaCache<&str, i32> = LfudaCache::init(config, None);
     /// cache.put("key", 42);
     ///
     /// // Cache with size limit
-    /// let config = LfudaCacheConfig::new(NonZeroUsize::new(1000).unwrap())
-    ///     .with_max_size(10 * 1024 * 1024)  // 10MB
-    ///     .with_initial_age(100);
-    /// let cache: LfudaCache<String, Vec<u8>> = LfudaCache::from_config(config);
+    /// let config = LfudaCacheConfig {
+    ///     capacity: NonZeroUsize::new(1000).unwrap(),
+    ///     initial_age: 100,
+    ///     max_size: 10 * 1024 * 1024,  // 10MB
+    /// };
+    /// let cache: LfudaCache<String, Vec<u8>> = LfudaCache::init(config, None);
     /// ```
-    pub fn from_config(config: LfudaCacheConfig) -> LfudaCache<K, V, DefaultHashBuilder> {
+    pub fn init(
+        config: LfudaCacheConfig,
+        hasher: Option<DefaultHashBuilder>,
+    ) -> LfudaCache<K, V, DefaultHashBuilder> {
         LfudaCache::with_hasher_and_size(
-            config.capacity(),
-            DefaultHashBuilder::default(),
-            config.max_size(),
+            config.capacity,
+            hasher.unwrap_or_default(),
+            config.max_size,
         )
     }
 
     /// Creates a new LFUDA cache with the specified capacity.
     ///
     /// This is a convenience constructor that creates a cache with only a capacity limit.
-    /// For more control, use [`LfudaCache::from_config`] with an [`LfudaCacheConfig`].
+    /// For more control, use [`LfudaCache::init`] with an [`LfudaCacheConfig`].
     ///
     /// # Arguments
     ///
@@ -923,12 +936,19 @@ where
     /// cache.put("key", 42);
     /// ```
     pub fn new(cap: NonZeroUsize) -> LfudaCache<K, V, DefaultHashBuilder> {
-        LfudaCache::from_config(LfudaCacheConfig::new(cap))
+        LfudaCache::init(
+            LfudaCacheConfig {
+                capacity: cap,
+                initial_age: 0,
+                max_size: u64::MAX,
+            },
+            None,
+        )
     }
 
     /// Creates a new LFUDA cache with both entry count and size limits.
     ///
-    /// This is a convenience constructor. For more control, use [`LfudaCache::from_config`].
+    /// This is a convenience constructor. For more control, use [`LfudaCache::init`].
     ///
     /// # Arguments
     ///
@@ -948,7 +968,14 @@ where
     /// );
     /// ```
     pub fn with_limits(cap: NonZeroUsize, max_size: u64) -> LfudaCache<K, V, DefaultHashBuilder> {
-        LfudaCache::from_config(LfudaCacheConfig::new(cap).with_max_size(max_size))
+        LfudaCache::init(
+            LfudaCacheConfig {
+                capacity: cap,
+                initial_age: 0,
+                max_size,
+            },
+            None,
+        )
     }
 
     /// Creates a new LFUDA cache with only a size limit.
@@ -964,9 +991,13 @@ where
         // The HashMap will grow dynamically as needed, so we don't need
         // to pre-allocate for billions of entries.
         const DEFAULT_SIZE_BASED_CAPACITY: usize = 16384;
-        LfudaCache::from_config(
-            LfudaCacheConfig::new(NonZeroUsize::new(DEFAULT_SIZE_BASED_CAPACITY).unwrap())
-                .with_max_size(max_size),
+        LfudaCache::init(
+            LfudaCacheConfig {
+                capacity: NonZeroUsize::new(DEFAULT_SIZE_BASED_CAPACITY).unwrap(),
+                initial_age: 0,
+                max_size,
+            },
+            None,
         )
     }
 }
@@ -1308,10 +1339,13 @@ mod tests {
     }
 
     #[test]
-    fn test_lfuda_from_config_constructor() {
-        let config =
-            LfudaCacheConfig::new(NonZeroUsize::new(1000).unwrap()).with_max_size(1024 * 1024);
-        let cache: LfudaCache<String, i32> = LfudaCache::from_config(config);
+    fn test_lfuda_init_constructor() {
+        let config = LfudaCacheConfig {
+            capacity: NonZeroUsize::new(1000).unwrap(),
+            initial_age: 0,
+            max_size: 1024 * 1024,
+        };
+        let cache: LfudaCache<String, i32> = LfudaCache::init(config, None);
 
         assert_eq!(cache.current_size(), 0);
         assert_eq!(cache.max_size(), 1024 * 1024);

@@ -4,8 +4,9 @@
 //! access patterns and segment configurations.
 
 use cache_rs::config::{
-    ConcurrentGdsfCacheConfig, ConcurrentLfuCacheConfig, ConcurrentLfudaCacheConfig,
-    ConcurrentLruCacheConfig, ConcurrentSlruCacheConfig,
+    ConcurrentCacheConfig, ConcurrentGdsfCacheConfig, ConcurrentLfuCacheConfig,
+    ConcurrentLfudaCacheConfig, ConcurrentLruCacheConfig, ConcurrentSlruCacheConfig,
+    GdsfCacheConfig, LfuCacheConfig, LfudaCacheConfig, LruCacheConfig, SlruCacheConfig,
 };
 use cache_rs::{
     ConcurrentGdsfCache, ConcurrentLfuCache, ConcurrentLfudaCache, ConcurrentLruCache,
@@ -19,6 +20,69 @@ use std::thread;
 const CACHE_SIZE: usize = 10_000;
 const OPS_PER_THREAD: usize = 1_000;
 
+fn lru_config(capacity: usize) -> ConcurrentLruCacheConfig {
+    ConcurrentCacheConfig {
+        base: LruCacheConfig {
+            capacity: NonZeroUsize::new(capacity).unwrap(),
+            max_size: u64::MAX,
+        },
+        segments: 16,
+    }
+}
+
+fn lru_config_with_segments(capacity: usize, segments: usize) -> ConcurrentLruCacheConfig {
+    ConcurrentCacheConfig {
+        base: LruCacheConfig {
+            capacity: NonZeroUsize::new(capacity).unwrap(),
+            max_size: u64::MAX,
+        },
+        segments,
+    }
+}
+
+fn slru_config(capacity: usize, protected: usize) -> ConcurrentSlruCacheConfig {
+    ConcurrentCacheConfig {
+        base: SlruCacheConfig {
+            capacity: NonZeroUsize::new(capacity).unwrap(),
+            protected_capacity: NonZeroUsize::new(protected).unwrap(),
+            max_size: u64::MAX,
+        },
+        segments: 16,
+    }
+}
+
+fn lfu_config(capacity: usize) -> ConcurrentLfuCacheConfig {
+    ConcurrentCacheConfig {
+        base: LfuCacheConfig {
+            capacity: NonZeroUsize::new(capacity).unwrap(),
+            max_size: u64::MAX,
+        },
+        segments: 16,
+    }
+}
+
+fn lfuda_config(capacity: usize) -> ConcurrentLfudaCacheConfig {
+    ConcurrentCacheConfig {
+        base: LfudaCacheConfig {
+            capacity: NonZeroUsize::new(capacity).unwrap(),
+            initial_age: 0,
+            max_size: u64::MAX,
+        },
+        segments: 16,
+    }
+}
+
+fn gdsf_config(capacity: usize) -> ConcurrentGdsfCacheConfig {
+    ConcurrentCacheConfig {
+        base: GdsfCacheConfig {
+            capacity: NonZeroUsize::new(capacity).unwrap(),
+            initial_age: 0.0,
+            max_size: u64::MAX,
+        },
+        segments: 16,
+    }
+}
+
 /// Benchmark concurrent read operations across all cache types
 fn concurrent_reads(c: &mut Criterion) {
     let mut group = c.benchmark_group("Concurrent Reads");
@@ -26,27 +90,19 @@ fn concurrent_reads(c: &mut Criterion) {
 
     // Pre-populate caches
     let lru_cache: Arc<ConcurrentLruCache<usize, usize>> =
-        Arc::new(ConcurrentLruCache::from_config(
-            ConcurrentLruCacheConfig::new(NonZeroUsize::new(CACHE_SIZE).unwrap()),
-        ));
-    let slru_cache: Arc<ConcurrentSlruCache<usize, usize>> = Arc::new(
-        ConcurrentSlruCache::from_config(ConcurrentSlruCacheConfig::new(
-            NonZeroUsize::new(CACHE_SIZE).unwrap(),
-            NonZeroUsize::new(CACHE_SIZE / 2).unwrap(),
-        )),
-    );
+        Arc::new(ConcurrentLruCache::init(lru_config(CACHE_SIZE), None));
+    let slru_cache: Arc<ConcurrentSlruCache<usize, usize>> = Arc::new(ConcurrentSlruCache::init(
+        slru_config(CACHE_SIZE, CACHE_SIZE / 2),
+        None,
+    ));
     let lfu_cache: Arc<ConcurrentLfuCache<usize, usize>> =
-        Arc::new(ConcurrentLfuCache::from_config(
-            ConcurrentLfuCacheConfig::new(NonZeroUsize::new(CACHE_SIZE).unwrap()),
-        ));
+        Arc::new(ConcurrentLfuCache::init(lfu_config(CACHE_SIZE), None));
     let lfuda_cache: Arc<ConcurrentLfudaCache<usize, usize>> =
-        Arc::new(ConcurrentLfudaCache::from_config(
-            ConcurrentLfudaCacheConfig::new(NonZeroUsize::new(CACHE_SIZE).unwrap()),
-        ));
-    let gdsf_cache: Arc<ConcurrentGdsfCache<usize, usize>> =
-        Arc::new(ConcurrentGdsfCache::from_config(
-            ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(CACHE_SIZE * 10).unwrap()),
-        ));
+        Arc::new(ConcurrentLfudaCache::init(lfuda_config(CACHE_SIZE), None));
+    let gdsf_cache: Arc<ConcurrentGdsfCache<usize, usize>> = Arc::new(ConcurrentGdsfCache::init(
+        gdsf_config(CACHE_SIZE * 10),
+        None,
+    ));
 
     // Fill caches
     for i in 0..CACHE_SIZE {
@@ -102,9 +158,7 @@ fn concurrent_writes(c: &mut Criterion) {
 
     group.bench_function("LRU", |b| {
         let cache: Arc<ConcurrentLruCache<usize, usize>> =
-            Arc::new(ConcurrentLruCache::from_config(
-                ConcurrentLruCacheConfig::new(NonZeroUsize::new(CACHE_SIZE).unwrap()),
-            ));
+            Arc::new(ConcurrentLruCache::init(lru_config(CACHE_SIZE), None));
         b.iter(|| {
             let cache = Arc::clone(&cache);
             run_concurrent_writes(cache, 8, OPS_PER_THREAD);
@@ -112,12 +166,10 @@ fn concurrent_writes(c: &mut Criterion) {
     });
 
     group.bench_function("SLRU", |b| {
-        let cache: Arc<ConcurrentSlruCache<usize, usize>> = Arc::new(
-            ConcurrentSlruCache::from_config(ConcurrentSlruCacheConfig::new(
-                NonZeroUsize::new(CACHE_SIZE).unwrap(),
-                NonZeroUsize::new(CACHE_SIZE / 2).unwrap(),
-            )),
-        );
+        let cache: Arc<ConcurrentSlruCache<usize, usize>> = Arc::new(ConcurrentSlruCache::init(
+            slru_config(CACHE_SIZE, CACHE_SIZE / 2),
+            None,
+        ));
         b.iter(|| {
             let cache = Arc::clone(&cache);
             run_concurrent_writes(cache, 8, OPS_PER_THREAD);
@@ -126,9 +178,7 @@ fn concurrent_writes(c: &mut Criterion) {
 
     group.bench_function("LFU", |b| {
         let cache: Arc<ConcurrentLfuCache<usize, usize>> =
-            Arc::new(ConcurrentLfuCache::from_config(
-                ConcurrentLfuCacheConfig::new(NonZeroUsize::new(CACHE_SIZE).unwrap()),
-            ));
+            Arc::new(ConcurrentLfuCache::init(lfu_config(CACHE_SIZE), None));
         b.iter(|| {
             let cache = Arc::clone(&cache);
             run_concurrent_writes(cache, 8, OPS_PER_THREAD);
@@ -137,9 +187,7 @@ fn concurrent_writes(c: &mut Criterion) {
 
     group.bench_function("LFUDA", |b| {
         let cache: Arc<ConcurrentLfudaCache<usize, usize>> =
-            Arc::new(ConcurrentLfudaCache::from_config(
-                ConcurrentLfudaCacheConfig::new(NonZeroUsize::new(CACHE_SIZE).unwrap()),
-            ));
+            Arc::new(ConcurrentLfudaCache::init(lfuda_config(CACHE_SIZE), None));
         b.iter(|| {
             let cache = Arc::clone(&cache);
             run_concurrent_writes(cache, 8, OPS_PER_THREAD);
@@ -147,10 +195,10 @@ fn concurrent_writes(c: &mut Criterion) {
     });
 
     group.bench_function("GDSF", |b| {
-        let cache: Arc<ConcurrentGdsfCache<usize, usize>> =
-            Arc::new(ConcurrentGdsfCache::from_config(
-                ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(CACHE_SIZE * 10).unwrap()),
-            ));
+        let cache: Arc<ConcurrentGdsfCache<usize, usize>> = Arc::new(ConcurrentGdsfCache::init(
+            gdsf_config(CACHE_SIZE * 10),
+            None,
+        ));
         b.iter(|| {
             let cache = Arc::clone(&cache);
             run_concurrent_writes_gdsf(cache, 8, OPS_PER_THREAD);
@@ -167,9 +215,7 @@ fn concurrent_mixed(c: &mut Criterion) {
 
     group.bench_function("LRU", |b| {
         let cache: Arc<ConcurrentLruCache<usize, usize>> =
-            Arc::new(ConcurrentLruCache::from_config(
-                ConcurrentLruCacheConfig::new(NonZeroUsize::new(CACHE_SIZE).unwrap()),
-            ));
+            Arc::new(ConcurrentLruCache::init(lru_config(CACHE_SIZE), None));
         // Pre-populate
         for i in 0..CACHE_SIZE {
             cache.put(i, i);
@@ -181,12 +227,10 @@ fn concurrent_mixed(c: &mut Criterion) {
     });
 
     group.bench_function("SLRU", |b| {
-        let cache: Arc<ConcurrentSlruCache<usize, usize>> = Arc::new(
-            ConcurrentSlruCache::from_config(ConcurrentSlruCacheConfig::new(
-                NonZeroUsize::new(CACHE_SIZE).unwrap(),
-                NonZeroUsize::new(CACHE_SIZE / 2).unwrap(),
-            )),
-        );
+        let cache: Arc<ConcurrentSlruCache<usize, usize>> = Arc::new(ConcurrentSlruCache::init(
+            slru_config(CACHE_SIZE, CACHE_SIZE / 2),
+            None,
+        ));
         for i in 0..CACHE_SIZE {
             cache.put(i, i);
         }
@@ -198,9 +242,7 @@ fn concurrent_mixed(c: &mut Criterion) {
 
     group.bench_function("LFU", |b| {
         let cache: Arc<ConcurrentLfuCache<usize, usize>> =
-            Arc::new(ConcurrentLfuCache::from_config(
-                ConcurrentLfuCacheConfig::new(NonZeroUsize::new(CACHE_SIZE).unwrap()),
-            ));
+            Arc::new(ConcurrentLfuCache::init(lfu_config(CACHE_SIZE), None));
         for i in 0..CACHE_SIZE {
             cache.put(i, i);
         }
@@ -212,9 +254,7 @@ fn concurrent_mixed(c: &mut Criterion) {
 
     group.bench_function("LFUDA", |b| {
         let cache: Arc<ConcurrentLfudaCache<usize, usize>> =
-            Arc::new(ConcurrentLfudaCache::from_config(
-                ConcurrentLfudaCacheConfig::new(NonZeroUsize::new(CACHE_SIZE).unwrap()),
-            ));
+            Arc::new(ConcurrentLfudaCache::init(lfuda_config(CACHE_SIZE), None));
         for i in 0..CACHE_SIZE {
             cache.put(i, i);
         }
@@ -225,10 +265,10 @@ fn concurrent_mixed(c: &mut Criterion) {
     });
 
     group.bench_function("GDSF", |b| {
-        let cache: Arc<ConcurrentGdsfCache<usize, usize>> =
-            Arc::new(ConcurrentGdsfCache::from_config(
-                ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(CACHE_SIZE * 10).unwrap()),
-            ));
+        let cache: Arc<ConcurrentGdsfCache<usize, usize>> = Arc::new(ConcurrentGdsfCache::init(
+            gdsf_config(CACHE_SIZE * 10),
+            None,
+        ));
         for i in 0..CACHE_SIZE {
             cache.put(i, i, ((i % 10) + 1) as u64);
         }
@@ -251,11 +291,9 @@ fn segment_count_comparison(c: &mut Criterion) {
             BenchmarkId::new("segments", segments),
             &segments,
             |b, &seg_count| {
-                let cache: Arc<ConcurrentLruCache<usize, usize>> =
-                    Arc::new(ConcurrentLruCache::from_config(
-                        ConcurrentLruCacheConfig::new(NonZeroUsize::new(CACHE_SIZE).unwrap())
-                            .with_segments(seg_count),
-                    ));
+                let cache: Arc<ConcurrentLruCache<usize, usize>> = Arc::new(
+                    ConcurrentLruCache::init(lru_config_with_segments(CACHE_SIZE, seg_count), None),
+                );
                 // Pre-populate
                 for i in 0..CACHE_SIZE {
                     cache.put(i, i);

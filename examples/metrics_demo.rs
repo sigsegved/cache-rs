@@ -51,9 +51,12 @@ fn main() {
 /// Test LRU cache with standard workload
 fn test_lru_cache(capacity: NonZeroUsize) -> LruCache<&'static str, i32> {
     println!("🔄 Testing LRU Cache...");
-    // Create the config but use capacity directly with the constructor
-    let _config = LruCacheConfig::new(capacity);
-    let mut cache = LruCache::new(capacity);
+    // Create the config with struct literal (fields are public)
+    let config = LruCacheConfig {
+        capacity,
+        max_size: u64::MAX,
+    };
+    let mut cache = LruCache::init(config, None);
 
     // Standard workload
     cache.put("apple", 1);
@@ -80,9 +83,12 @@ fn test_lru_cache(capacity: NonZeroUsize) -> LruCache<&'static str, i32> {
 /// Test LFU cache with standard workload  
 fn test_lfu_cache(capacity: NonZeroUsize) -> LfuCache<&'static str, i32> {
     println!("📊 Testing LFU Cache...");
-    // Create the config but use capacity directly with the constructor
-    let _config = LfuCacheConfig::new(capacity);
-    let mut cache = LfuCache::new(capacity);
+    // Create the config with struct literal
+    let config = LfuCacheConfig {
+        capacity,
+        max_size: u64::MAX,
+    };
+    let mut cache = LfuCache::init(config, None);
 
     // Standard workload
     cache.put("apple", 1);
@@ -110,8 +116,12 @@ fn test_lfu_cache(capacity: NonZeroUsize) -> LfuCache<&'static str, i32> {
 fn test_slru_cache(capacity: NonZeroUsize) -> SlruCache<&'static str, i32> {
     println!("🏟️  Testing SLRU Cache...");
     let protected_capacity = NonZeroUsize::new(2).unwrap();
-    let _config = SlruCacheConfig::new(capacity, protected_capacity);
-    let mut cache = SlruCache::new(capacity, protected_capacity);
+    let config = SlruCacheConfig {
+        capacity,
+        protected_capacity,
+        max_size: u64::MAX,
+    };
+    let mut cache = SlruCache::init(config, None);
 
     // Standard workload
     cache.put("apple", 1);
@@ -138,9 +148,13 @@ fn test_slru_cache(capacity: NonZeroUsize) -> SlruCache<&'static str, i32> {
 /// Test LFUDA cache with standard workload
 fn test_lfuda_cache(capacity: NonZeroUsize) -> LfudaCache<&'static str, i32> {
     println!("⏳ Testing LFUDA Cache...");
-    // Create the config but use capacity directly with the constructor
-    let _config = LfudaCacheConfig::new(capacity);
-    let mut cache = LfudaCache::new(capacity);
+    // Create the config with struct literal
+    let config = LfudaCacheConfig {
+        capacity,
+        initial_age: 0,
+        max_size: u64::MAX,
+    };
+    let mut cache = LfudaCache::init(config, None);
 
     // Standard workload
     cache.put("apple", 1);
@@ -167,9 +181,13 @@ fn test_lfuda_cache(capacity: NonZeroUsize) -> LfudaCache<&'static str, i32> {
 /// Test GDSF cache with standard workload
 fn test_gdsf_cache(capacity: NonZeroUsize) -> GdsfCache<&'static str, i32> {
     println!("⚖️  Testing GDSF Cache...");
-    // Create the config but use capacity directly with the constructor
-    let _config = GdsfCacheConfig::new(capacity);
-    let mut cache = GdsfCache::new(capacity);
+    // Create the config with struct literal
+    let config = GdsfCacheConfig {
+        capacity,
+        initial_age: 0.0,
+        max_size: u64::MAX,
+    };
+    let mut cache = GdsfCache::init(config, None);
 
     // Standard workload (with different sizes)
     cache.put("apple", 1, 10); // Small item

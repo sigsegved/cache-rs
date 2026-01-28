@@ -1,7 +1,6 @@
 //! Configuration for the Greedy Dual-Size Frequency (GDSF) cache.
 //!
-//! This module provides configuration for GDSF caches. Use `GdsfCacheConfig`
-//! as the single entry point for creating GDSF caches.
+//! This module provides configuration for GDSF caches.
 //!
 //! # Examples
 //!
@@ -11,13 +10,20 @@
 //! use core::num::NonZeroUsize;
 //!
 //! // Simple capacity-only config
-//! let config = GdsfCacheConfig::new(NonZeroUsize::new(100).unwrap());
-//! let cache: GdsfCache<String, Vec<u8>> = GdsfCache::from_config(config);
+//! let config = GdsfCacheConfig {
+//!     capacity: NonZeroUsize::new(100).unwrap(),
+//!     initial_age: 0.0,
+//!     max_size: u64::MAX,
+//! };
+//! let cache: GdsfCache<String, Vec<u8>> = GdsfCache::init(config, None);
 //!
-//! // With size limit using builder pattern (recommended for GDSF)
-//! let config = GdsfCacheConfig::new(NonZeroUsize::new(1000).unwrap())
-//!     .with_max_size(10 * 1024 * 1024);  // 10MB
-//! let cache: GdsfCache<String, Vec<u8>> = GdsfCache::from_config(config);
+//! // With size limit (recommended for GDSF)
+//! let config = GdsfCacheConfig {
+//!     capacity: NonZeroUsize::new(1000).unwrap(),
+//!     initial_age: 0.0,
+//!     max_size: 10 * 1024 * 1024,  // 10MB
+//! };
+//! let cache: GdsfCache<String, Vec<u8>> = GdsfCache::init(config, None);
 //! ```
 
 use core::fmt;
@@ -30,16 +36,12 @@ use core::num::NonZeroUsize;
 ///
 /// This makes it ideal for caching variable-sized objects where you want
 /// to favor keeping many small popular items over few large items.
-/// This is the **only** way to configure and create a GDSF cache.
 ///
-/// # Required Parameters
+/// # Fields
 ///
-/// - `capacity`: Maximum number of entries the cache can hold (set in constructor)
-///
-/// # Optional Parameters (Builder Methods)
-///
-/// - `max_size`: Maximum total size of cached content (default: unlimited)
+/// - `capacity`: Maximum number of entries the cache can hold
 /// - `initial_age`: Initial global age value (default: 0.0)
+/// - `max_size`: Maximum total size of cached content (use `u64::MAX` for unlimited)
 ///
 /// # Examples
 ///
@@ -49,100 +51,30 @@ use core::num::NonZeroUsize;
 /// use core::num::NonZeroUsize;
 ///
 /// // Basic configuration with just capacity
-/// let config = GdsfCacheConfig::new(NonZeroUsize::new(100).unwrap());
-/// let cache: GdsfCache<String, Vec<u8>> = GdsfCache::from_config(config);
+/// let config = GdsfCacheConfig {
+///     capacity: NonZeroUsize::new(100).unwrap(),
+///     initial_age: 0.0,
+///     max_size: u64::MAX,
+/// };
+/// let cache: GdsfCache<String, Vec<u8>> = GdsfCache::init(config, None);
 ///
 /// // Full configuration with size limit (recommended for GDSF)
-/// let config = GdsfCacheConfig::new(NonZeroUsize::new(1000).unwrap())
-///     .with_max_size(50 * 1024 * 1024)  // 50MB limit
-///     .with_initial_age(0.0);
-/// let cache: GdsfCache<String, Vec<u8>> = GdsfCache::from_config(config);
+/// let config = GdsfCacheConfig {
+///     capacity: NonZeroUsize::new(1000).unwrap(),
+///     initial_age: 0.0,
+///     max_size: 50 * 1024 * 1024,  // 50MB limit
+/// };
+/// let cache: GdsfCache<String, Vec<u8>> = GdsfCache::init(config, None);
 /// ```
 #[derive(Clone, Copy)]
 pub struct GdsfCacheConfig {
     /// Maximum number of key-value pairs the cache can hold
-    capacity: NonZeroUsize,
+    pub capacity: NonZeroUsize,
     /// Initial global age value
-    initial_age: f64,
-    /// Maximum total size of cached content
-    max_size: u64,
-}
-
-impl GdsfCacheConfig {
-    /// Creates a new GDSF cache configuration with the specified capacity.
-    ///
-    /// The cache will have no size limit by default and initial age of 0.0.
-    /// Use builder methods to customize.
-    ///
-    /// # Arguments
-    ///
-    /// * `capacity` - Maximum number of key-value pairs the cache can hold
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use cache_rs::config::GdsfCacheConfig;
-    /// use core::num::NonZeroUsize;
-    ///
-    /// let config = GdsfCacheConfig::new(NonZeroUsize::new(100).unwrap());
-    /// assert_eq!(config.capacity().get(), 100);
-    /// assert_eq!(config.initial_age(), 0.0);
-    /// assert_eq!(config.max_size(), u64::MAX);
-    /// ```
-    #[must_use]
-    pub fn new(capacity: NonZeroUsize) -> Self {
-        Self {
-            capacity,
-            initial_age: 0.0,
-            max_size: u64::MAX,
-        }
-    }
-
-    /// Sets the maximum total size of cached content.
-    ///
-    /// When both entry count and size limits are set, the cache evicts
-    /// entries when **either** limit would be exceeded.
-    ///
-    /// # Arguments
-    ///
-    /// * `max_size` - Maximum total size in bytes (or your chosen unit)
-    #[must_use]
-    pub fn with_max_size(mut self, max_size: u64) -> Self {
-        self.max_size = max_size;
-        self
-    }
-
-    /// Sets the initial global age value.
-    ///
-    /// This can be useful when restoring cache state or for specific
-    /// algorithm tuning.
-    ///
-    /// # Arguments
-    ///
-    /// * `initial_age` - Initial global age value
-    #[must_use]
-    pub fn with_initial_age(mut self, initial_age: f64) -> Self {
-        self.initial_age = initial_age;
-        self
-    }
-
-    /// Returns the maximum number of key-value pairs the cache can hold.
-    #[inline]
-    pub fn capacity(&self) -> NonZeroUsize {
-        self.capacity
-    }
-
-    /// Returns the initial global age value.
-    #[inline]
-    pub fn initial_age(&self) -> f64 {
-        self.initial_age
-    }
-
-    /// Returns the maximum total size of cached content.
-    #[inline]
-    pub fn max_size(&self) -> u64 {
-        self.max_size
-    }
+    pub initial_age: f64,
+    /// Maximum total size of cached content (sum of entry sizes).
+    /// Use `u64::MAX` for no size limit.
+    pub max_size: u64,
 }
 
 impl fmt::Debug for GdsfCacheConfig {
@@ -161,19 +93,25 @@ mod tests {
 
     #[test]
     fn test_gdsf_config_creation() {
-        let config = GdsfCacheConfig::new(NonZeroUsize::new(100).unwrap());
-        assert_eq!(config.capacity().get(), 100);
-        assert_eq!(config.initial_age(), 0.0);
-        assert_eq!(config.max_size(), u64::MAX);
+        let config = GdsfCacheConfig {
+            capacity: NonZeroUsize::new(100).unwrap(),
+            initial_age: 0.0,
+            max_size: u64::MAX,
+        };
+        assert_eq!(config.capacity.get(), 100);
+        assert_eq!(config.initial_age, 0.0);
+        assert_eq!(config.max_size, u64::MAX);
     }
 
     #[test]
-    fn test_gdsf_config_builder_pattern() {
-        let config = GdsfCacheConfig::new(NonZeroUsize::new(50).unwrap())
-            .with_initial_age(10.5)
-            .with_max_size(1024 * 1024);
-        assert_eq!(config.capacity().get(), 50);
-        assert_eq!(config.initial_age(), 10.5);
-        assert_eq!(config.max_size(), 1024 * 1024);
+    fn test_gdsf_config_with_initial_age() {
+        let config = GdsfCacheConfig {
+            capacity: NonZeroUsize::new(50).unwrap(),
+            initial_age: 10.5,
+            max_size: 1024 * 1024,
+        };
+        assert_eq!(config.capacity.get(), 50);
+        assert_eq!(config.initial_age, 10.5);
+        assert_eq!(config.max_size, 1024 * 1024);
     }
 }

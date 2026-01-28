@@ -94,15 +94,21 @@
 //!
 //! ```rust,ignore
 //! use cache_rs::concurrent::ConcurrentGdsfCache;
-//! use cache_rs::config::ConcurrentGdsfCacheConfig;
+//! use cache_rs::config::{ConcurrentCacheConfig, ConcurrentGdsfCacheConfig, GdsfCacheConfig};
 //! use std::num::NonZeroUsize;
 //! use std::sync::Arc;
 //! use std::thread;
 //!
 //! // 10GB cache distributed across segments
-//! let config = ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(100_000).unwrap())
-//!     .with_max_size(10 * 1024 * 1024 * 1024);
-//! let cache = Arc::new(ConcurrentGdsfCache::from_config(config));
+//! let config: ConcurrentGdsfCacheConfig = ConcurrentCacheConfig {
+//!     base: GdsfCacheConfig {
+//!         capacity: NonZeroUsize::new(100_000).unwrap(),
+//!         initial_age: 0.0,
+//!         max_size: 10 * 1024 * 1024 * 1024,
+//!     },
+//!     segments: 16,
+//! };
+//! let cache = Arc::new(ConcurrentGdsfCache::init(config, None));
 //!
 //! // Simulate CDN edge cache with multiple worker threads
 //! let handles: Vec<_> = (0..4).map(|worker| {
@@ -137,13 +143,19 @@
 //!
 //! ```rust,ignore
 //! use cache_rs::concurrent::ConcurrentGdsfCache;
-//! use cache_rs::config::ConcurrentGdsfCacheConfig;
+//! use cache_rs::config::{ConcurrentCacheConfig, ConcurrentGdsfCacheConfig, GdsfCacheConfig};
 //! use std::num::NonZeroUsize;
 //!
 //! // 10MB cache
-//! let config = ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(10_000).unwrap())
-//!     .with_max_size(10 * 1024 * 1024);
-//! let cache = ConcurrentGdsfCache::from_config(config);
+//! let config: ConcurrentGdsfCacheConfig = ConcurrentCacheConfig {
+//!     base: GdsfCacheConfig {
+//!         capacity: NonZeroUsize::new(10_000).unwrap(),
+//!         initial_age: 0.0,
+//!         max_size: 10 * 1024 * 1024,
+//!     },
+//!     segments: 16,
+//! };
+//! let cache = ConcurrentGdsfCache::init(config, None);
 //!
 //! // Insert small frequently-accessed items
 //! for i in 0..100 {
@@ -196,20 +208,30 @@ where
     /// Creates a new concurrent GDSF cache from a configuration.
     ///
     /// This is the **recommended** way to create a concurrent GDSF cache.
-    pub fn from_config(config: crate::config::ConcurrentGdsfCacheConfig) -> Self {
-        let segment_count = config.segments();
-        let capacity = config.capacity();
-        let max_size = config.max_size();
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The cache configuration specifying capacity, max size, and segments
+    /// * `hasher` - Optional custom hash builder. If `None`, uses the default hash builder.
+    pub fn init(
+        config: crate::config::ConcurrentGdsfCacheConfig,
+        hasher: Option<DefaultHashBuilder>,
+    ) -> Self {
+        let segment_count = config.segments;
+        let capacity = config.base.capacity;
+        let max_size = config.base.max_size;
 
         let segment_capacity = capacity.get() / segment_count;
         let segment_cap = NonZeroUsize::new(segment_capacity.max(1)).unwrap();
         let segment_max_size = max_size / segment_count as u64;
 
+        let hash_builder = hasher.unwrap_or_default();
+
         let segments: Vec<_> = (0..segment_count)
             .map(|_| {
                 Mutex::new(GdsfSegment::with_hasher_and_size(
                     segment_cap,
-                    DefaultHashBuilder::default(),
+                    hash_builder.clone(),
                     segment_max_size,
                 ))
             })
@@ -217,7 +239,7 @@ where
 
         Self {
             segments: segments.into_boxed_slice(),
-            hash_builder: DefaultHashBuilder::default(),
+            hash_builder,
         }
     }
 }
@@ -229,13 +251,18 @@ where
     S: BuildHasher + Clone + Send,
 {
     /// Creates a concurrent GDSF cache with a custom hash builder.
-    pub fn from_config_with_hasher(
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The cache configuration specifying capacity, max size, and segments
+    /// * `hash_builder` - Custom hash builder for key hashing
+    pub fn init_with_hasher(
         config: crate::config::ConcurrentGdsfCacheConfig,
         hash_builder: S,
     ) -> Self {
-        let segment_count = config.segments();
-        let capacity = config.capacity();
-        let max_size = config.max_size();
+        let segment_count = config.segments;
+        let capacity = config.base.capacity;
+        let max_size = config.base.max_size;
 
         let segment_capacity = capacity.get() / segment_count;
         let segment_cap = NonZeroUsize::new(segment_capacity.max(1)).unwrap();
@@ -423,7 +450,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ConcurrentGdsfCacheConfig;
+    use crate::config::{ConcurrentCacheConfig, ConcurrentGdsfCacheConfig, GdsfCacheConfig};
 
     extern crate std;
     use std::string::ToString;
@@ -431,11 +458,21 @@ mod tests {
     use std::thread;
     use std::vec::Vec;
 
+    fn make_config(capacity: usize, segments: usize) -> ConcurrentGdsfCacheConfig {
+        ConcurrentCacheConfig {
+            base: GdsfCacheConfig {
+                capacity: NonZeroUsize::new(capacity).unwrap(),
+                initial_age: 0.0,
+                max_size: u64::MAX,
+            },
+            segments,
+        }
+    }
+
     #[test]
     fn test_basic_operations() {
-        let cache: ConcurrentGdsfCache<String, i32> = ConcurrentGdsfCache::from_config(
-            ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(10000).unwrap()),
-        );
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::init(make_config(10000, 16), None);
 
         cache.put("a".to_string(), 1, 100u64);
         cache.put("b".to_string(), 2, 200u64);
@@ -447,9 +484,7 @@ mod tests {
     #[test]
     fn test_concurrent_access() {
         let cache: Arc<ConcurrentGdsfCache<String, i32>> =
-            Arc::new(ConcurrentGdsfCache::from_config(
-                ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(100000).unwrap()),
-            ));
+            Arc::new(ConcurrentGdsfCache::init(make_config(100000, 16), None));
         let num_threads = 8;
         let ops_per_thread = 500;
 
@@ -476,9 +511,8 @@ mod tests {
 
     #[test]
     fn test_capacity() {
-        let cache: ConcurrentGdsfCache<String, i32> = ConcurrentGdsfCache::from_config(
-            ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(10000).unwrap()),
-        );
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::init(make_config(10000, 16), None);
 
         // Capacity is distributed across segments
         let capacity = cache.capacity();
@@ -488,18 +522,16 @@ mod tests {
 
     #[test]
     fn test_segment_count() {
-        let cache: ConcurrentGdsfCache<String, i32> = ConcurrentGdsfCache::from_config(
-            ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(10000).unwrap()).with_segments(8),
-        );
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::init(make_config(10000, 8), None);
 
         assert_eq!(cache.segment_count(), 8);
     }
 
     #[test]
     fn test_len_and_is_empty() {
-        let cache: ConcurrentGdsfCache<String, i32> = ConcurrentGdsfCache::from_config(
-            ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(10000).unwrap()),
-        );
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::init(make_config(10000, 16), None);
 
         assert!(cache.is_empty());
         assert_eq!(cache.len(), 0);
@@ -514,9 +546,8 @@ mod tests {
 
     #[test]
     fn test_remove() {
-        let cache: ConcurrentGdsfCache<String, i32> = ConcurrentGdsfCache::from_config(
-            ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(10000).unwrap()),
-        );
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::init(make_config(10000, 16), None);
 
         cache.put("key1".to_string(), 1, 100);
         cache.put("key2".to_string(), 2, 200);
@@ -530,9 +561,8 @@ mod tests {
 
     #[test]
     fn test_clear() {
-        let cache: ConcurrentGdsfCache<String, i32> = ConcurrentGdsfCache::from_config(
-            ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(10000).unwrap()),
-        );
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::init(make_config(10000, 16), None);
 
         cache.put("key1".to_string(), 1, 100);
         cache.put("key2".to_string(), 2, 200);
@@ -549,9 +579,8 @@ mod tests {
 
     #[test]
     fn test_contains_key() {
-        let cache: ConcurrentGdsfCache<String, i32> = ConcurrentGdsfCache::from_config(
-            ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(10000).unwrap()),
-        );
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::init(make_config(10000, 16), None);
 
         cache.put("exists".to_string(), 1, 100);
 
@@ -561,9 +590,8 @@ mod tests {
 
     #[test]
     fn test_get_with() {
-        let cache: ConcurrentGdsfCache<String, String> = ConcurrentGdsfCache::from_config(
-            ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(10000).unwrap()),
-        );
+        let cache: ConcurrentGdsfCache<String, String> =
+            ConcurrentGdsfCache::init(make_config(10000, 16), None);
 
         cache.put("key".to_string(), "hello world".to_string(), 100);
 
@@ -576,9 +604,8 @@ mod tests {
 
     #[test]
     fn test_size_aware_eviction() {
-        let cache: ConcurrentGdsfCache<String, i32> = ConcurrentGdsfCache::from_config(
-            ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(1000).unwrap()),
-        );
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::init(make_config(1000, 16), None);
 
         // Add items with different sizes
         cache.put("small".to_string(), 1, 100);
@@ -599,9 +626,8 @@ mod tests {
 
     #[test]
     fn test_eviction_on_capacity() {
-        let cache: ConcurrentGdsfCache<String, i32> = ConcurrentGdsfCache::from_config(
-            ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(5000).unwrap()),
-        );
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::init(make_config(5000, 16), None);
 
         // Fill the cache with various sizes
         for i in 0..20 {
@@ -615,9 +641,8 @@ mod tests {
 
     #[test]
     fn test_metrics() {
-        let cache: ConcurrentGdsfCache<String, i32> = ConcurrentGdsfCache::from_config(
-            ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(10000).unwrap()),
-        );
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::init(make_config(10000, 16), None);
 
         cache.put("a".to_string(), 1, 100);
         cache.put("b".to_string(), 2, 200);
@@ -629,18 +654,16 @@ mod tests {
 
     #[test]
     fn test_algorithm_name() {
-        let cache: ConcurrentGdsfCache<String, i32> = ConcurrentGdsfCache::from_config(
-            ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(10000).unwrap()),
-        );
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::init(make_config(10000, 16), None);
 
         assert_eq!(cache.algorithm_name(), "ConcurrentGDSF");
     }
 
     #[test]
     fn test_empty_cache_operations() {
-        let cache: ConcurrentGdsfCache<String, i32> = ConcurrentGdsfCache::from_config(
-            ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(10000).unwrap()),
-        );
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::init(make_config(10000, 16), None);
 
         assert!(cache.is_empty());
         assert_eq!(cache.len(), 0);
@@ -650,13 +673,11 @@ mod tests {
     }
 
     #[test]
-    fn test_from_config_with_hasher() {
+    fn test_init_with_hasher() {
         let hasher = DefaultHashBuilder::default();
-        let config =
-            crate::config::ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(10000).unwrap())
-                .with_segments(4);
+        let config = make_config(10000, 4);
         let cache: ConcurrentGdsfCache<String, i32, _> =
-            ConcurrentGdsfCache::from_config_with_hasher(config, hasher);
+            ConcurrentGdsfCache::init_with_hasher(config, hasher);
 
         cache.put("test".to_string(), 42, 100);
         assert_eq!(cache.get(&"test".to_string()), Some(42));
@@ -665,9 +686,8 @@ mod tests {
 
     #[test]
     fn test_borrowed_key_lookup() {
-        let cache: ConcurrentGdsfCache<String, i32> = ConcurrentGdsfCache::from_config(
-            ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(10000).unwrap()),
-        );
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::init(make_config(10000, 16), None);
 
         cache.put("test_key".to_string(), 42, 100);
 
@@ -680,9 +700,8 @@ mod tests {
 
     #[test]
     fn test_variable_sizes() {
-        let cache: ConcurrentGdsfCache<String, i32> = ConcurrentGdsfCache::from_config(
-            ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(10000).unwrap()),
-        );
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::init(make_config(10000, 16), None);
 
         // Add items with various sizes
         cache.put("tiny".to_string(), 1, 10);
@@ -700,9 +719,8 @@ mod tests {
 
     #[test]
     fn test_frequency_and_size_interaction() {
-        let cache: ConcurrentGdsfCache<String, i32> = ConcurrentGdsfCache::from_config(
-            ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(5000).unwrap()),
-        );
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::init(make_config(5000, 16), None);
 
         // Add large item
         cache.put("large".to_string(), 1, 3000);
