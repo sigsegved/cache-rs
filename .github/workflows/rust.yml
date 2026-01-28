@@ -40,9 +40,12 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-cargo-registry-v7-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry-v7-
+          key: ${{ runner.os }}-cargo-registry-v9-${{ hashFiles('**/Cargo.lock') }}
+          # No restore-keys to prevent fallback to stale caches
+
+      - name: Clean stale registry (if any)
+        run: |
+          rm -rf ~/.cargo/registry/cache ~/.cargo/registry/index || true
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -98,9 +101,13 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-cargo-registry-v7-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry-v7-
+          key: ${{ runner.os }}-${{ matrix.rust }}-cargo-registry-v9-${{ hashFiles('**/Cargo.lock') }}
+          # No restore-keys to prevent fallback to stale caches
+
+      - name: Clean stale registry (if any)
+        shell: bash
+        run: |
+          rm -rf ~/.cargo/registry/cache ~/.cargo/registry/index || true
 
       - name: Build all targets (default features)
         if: matrix.features == 'default'
@@ -148,7 +155,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-cargo-nightly-v8-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-nightly-v9-${{ hashFiles('**/Cargo.lock') }}
           # No restore-keys to prevent fallback to stale caches
 
       - name: Clean and rebuild
@@ -188,9 +195,12 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-cargo-registry-v7-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry-v7-
+          key: ${{ runner.os }}-cargo-registry-v9-${{ hashFiles('**/Cargo.lock') }}
+          # No restore-keys to prevent fallback to stale caches
+
+      - name: Clean stale registry (if any)
+        run: |
+          rm -rf ~/.cargo/registry/cache ~/.cargo/registry/index || true
 
       - name: Build for no_std target
         run: cargo build --target thumbv6m-none-eabi --no-default-features --features hashbrown
@@ -214,9 +224,12 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-cargo-registry-v7-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry-v7-
+          key: ${{ runner.os }}-cargo-registry-v9-${{ hashFiles('**/Cargo.lock') }}
+          # No restore-keys to prevent fallback to stale caches
+
+      - name: Clean stale registry (if any)
+        run: |
+          rm -rf ~/.cargo/registry/cache ~/.cargo/registry/index || true
 
       - name: Check documentation
         env:
@@ -243,9 +256,12 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ~/.cargo/bin
-          key: ${{ runner.os }}-cargo-audit-v7-stable-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-audit-v7-stable-
+          key: ${{ runner.os }}-cargo-audit-v9-stable-${{ hashFiles('**/Cargo.lock') }}
+          # No restore-keys to prevent fallback to stale caches
+
+      - name: Clean stale registry (if any)
+        run: |
+          rm -rf ~/.cargo/registry/cache ~/.cargo/registry/index || true
 
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked || cargo install cargo-audit --force --locked
@@ -276,9 +292,12 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ~/.cargo/bin
-          key: ${{ runner.os }}-cargo-coverage-v7-stable-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-coverage-v7-stable-
+          key: ${{ runner.os }}-cargo-coverage-v9-stable-${{ hashFiles('**/Cargo.lock') }}
+          # No restore-keys to prevent fallback to stale caches
+
+      - name: Clean stale registry (if any)
+        run: |
+          rm -rf ~/.cargo/registry/cache ~/.cargo/registry/index || true
 
       - name: Install cargo-llvm-cov and cargo-nextest
         run: |
@@ -325,9 +344,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-cargo-registry-v7-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry-v7-
+          key: ${{ runner.os }}-cargo-registry-v9-${{ hashFiles('**/Cargo.lock') }}
+          # No restore-keys to prevent fallback to stale caches
 
       - name: Publish to crates.io
         run: cargo publish
