@@ -6,6 +6,11 @@
 
 extern crate cache_rs;
 
+use cache_rs::config::{
+    ConcurrentCacheConfig, ConcurrentGdsfCacheConfig, ConcurrentLfuCacheConfig,
+    ConcurrentLfudaCacheConfig, ConcurrentLruCacheConfig, ConcurrentSlruCacheConfig,
+    GdsfCacheConfig, LfuCacheConfig, LfudaCacheConfig, LruCacheConfig, SlruCacheConfig,
+};
 use cache_rs::{
     ConcurrentGdsfCache, ConcurrentLfuCache, ConcurrentLfudaCache, ConcurrentLruCache,
     ConcurrentSlruCache,
@@ -14,6 +19,59 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
+
+fn lru_config(capacity: usize, segments: usize) -> ConcurrentLruCacheConfig {
+    ConcurrentCacheConfig {
+        base: LruCacheConfig {
+            capacity: NonZeroUsize::new(capacity).unwrap(),
+            max_size: u64::MAX,
+        },
+        segments,
+    }
+}
+
+fn slru_config(capacity: usize, protected: usize, segments: usize) -> ConcurrentSlruCacheConfig {
+    ConcurrentCacheConfig {
+        base: SlruCacheConfig {
+            capacity: NonZeroUsize::new(capacity).unwrap(),
+            protected_capacity: NonZeroUsize::new(protected).unwrap(),
+            max_size: u64::MAX,
+        },
+        segments,
+    }
+}
+
+fn lfu_config(capacity: usize, segments: usize) -> ConcurrentLfuCacheConfig {
+    ConcurrentCacheConfig {
+        base: LfuCacheConfig {
+            capacity: NonZeroUsize::new(capacity).unwrap(),
+            max_size: u64::MAX,
+        },
+        segments,
+    }
+}
+
+fn lfuda_config(capacity: usize, segments: usize) -> ConcurrentLfudaCacheConfig {
+    ConcurrentCacheConfig {
+        base: LfudaCacheConfig {
+            capacity: NonZeroUsize::new(capacity).unwrap(),
+            initial_age: 0,
+            max_size: u64::MAX,
+        },
+        segments,
+    }
+}
+
+fn gdsf_config(capacity: usize, segments: usize) -> ConcurrentGdsfCacheConfig {
+    ConcurrentCacheConfig {
+        base: GdsfCacheConfig {
+            capacity: NonZeroUsize::new(capacity).unwrap(),
+            initial_age: 0.0,
+            max_size: u64::MAX,
+        },
+        segments,
+    }
+}
 
 fn main() {
     println!("Concurrent Cache Usage Examples");
@@ -40,7 +98,7 @@ fn basic_concurrent_usage() {
     println!("   -----------------------");
 
     // Create a concurrent LRU cache with default settings
-    let cache = Arc::new(ConcurrentLruCache::new(NonZeroUsize::new(1000).unwrap()));
+    let cache = Arc::new(ConcurrentLruCache::init(lru_config(1000, 16), None));
 
     // Spawn multiple threads that read and write concurrently
     let num_threads = 4;
@@ -84,7 +142,8 @@ fn zero_copy_get_with() {
     println!("2. Zero-Copy Access with get_with()");
     println!("   ----------------------------------");
 
-    let cache = ConcurrentLruCache::new(NonZeroUsize::new(100).unwrap());
+    let cache: ConcurrentLruCache<String, Vec<u8>> =
+        ConcurrentLruCache::init(lru_config(100, 16), None);
 
     // Store a large value
     let large_data = vec![1u8; 1024]; // 1KB of data
@@ -116,24 +175,25 @@ fn segment_tuning() {
     println!("3. Segment Count Tuning");
     println!("   ---------------------");
 
-    let capacity = NonZeroUsize::new(10000).unwrap();
-
     // Default: 16 segments (good for most workloads)
-    let default_cache: ConcurrentLruCache<String, i32> = ConcurrentLruCache::new(capacity);
+    let default_cache: ConcurrentLruCache<String, i32> =
+        ConcurrentLruCache::init(lru_config(10000, 16), None);
     println!(
         "   Default cache: {} segments",
         default_cache.segment_count()
     );
 
     // Custom: 32 segments (better for high-contention workloads)
-    let high_concurrency = ConcurrentLruCache::<String, i32>::with_segments(capacity, 32);
+    let high_concurrency: ConcurrentLruCache<String, i32> =
+        ConcurrentLruCache::init(lru_config(10000, 32), None);
     println!(
         "   High-concurrency cache: {} segments",
         high_concurrency.segment_count()
     );
 
     // Custom: 4 segments (lower memory overhead for low-contention)
-    let low_contention = ConcurrentLruCache::<String, i32>::with_segments(capacity, 4);
+    let low_contention: ConcurrentLruCache<String, i32> =
+        ConcurrentLruCache::init(lru_config(10000, 4), None);
     println!(
         "   Low-contention cache: {} segments",
         low_contention.segment_count()
@@ -151,33 +211,31 @@ fn all_concurrent_cache_types() {
     println!("4. All Concurrent Cache Types");
     println!("   ----------------------------");
 
-    let capacity = NonZeroUsize::new(100).unwrap();
-    let protected = NonZeroUsize::new(20).unwrap();
-
     // ConcurrentLruCache - General purpose
-    let lru = ConcurrentLruCache::<String, i32>::new(capacity);
+    let lru: ConcurrentLruCache<String, i32> = ConcurrentLruCache::init(lru_config(100, 16), None);
     lru.put("key".to_string(), 1);
     println!("   ConcurrentLruCache: General purpose, recency-based");
 
     // ConcurrentSlruCache - Scan resistant
-    let slru = ConcurrentSlruCache::<String, i32>::new(capacity, protected);
+    let slru: ConcurrentSlruCache<String, i32> =
+        ConcurrentSlruCache::init(slru_config(100, 20, 16), None);
     slru.put("key".to_string(), 1);
     println!("   ConcurrentSlruCache: Scan resistant, two-segment design");
 
     // ConcurrentLfuCache - Frequency based
-    let lfu = ConcurrentLfuCache::<String, i32>::new(capacity);
+    let lfu: ConcurrentLfuCache<String, i32> = ConcurrentLfuCache::init(lfu_config(100, 16), None);
     lfu.put("key".to_string(), 1);
     println!("   ConcurrentLfuCache: Frequency-based eviction");
 
     // ConcurrentLfudaCache - Adaptive frequency
-    let lfuda = ConcurrentLfudaCache::<String, i32>::new(capacity);
+    let lfuda: ConcurrentLfudaCache<String, i32> =
+        ConcurrentLfudaCache::init(lfuda_config(100, 16), None);
     lfuda.put("key".to_string(), 1);
     println!("   ConcurrentLfudaCache: Frequency + aging for changing patterns");
 
     // ConcurrentGdsfCache - Size-aware (note: put takes size parameter)
-    let gdsf = ConcurrentGdsfCache::<String, Vec<u8>>::new(
-        NonZeroUsize::new(10000).unwrap(), // Capacity in size units
-    );
+    let gdsf: ConcurrentGdsfCache<String, Vec<u8>> =
+        ConcurrentGdsfCache::init(gdsf_config(10000, 16), None);
     gdsf.put("small.txt".to_string(), vec![0u8; 100], 100);
     gdsf.put("large.jpg".to_string(), vec![0u8; 5000], 5000);
     println!("   ConcurrentGdsfCache: Size-aware, for variable-size objects");
@@ -192,10 +250,8 @@ fn throughput_comparison() {
     let num_threads = 8;
 
     for segments in [1, 4, 8, 16, 32] {
-        let cache = Arc::new(ConcurrentLruCache::<i32, i32>::with_segments(
-            NonZeroUsize::new(10000).unwrap(),
-            segments,
-        ));
+        let cache: Arc<ConcurrentLruCache<i32, i32>> =
+            Arc::new(ConcurrentLruCache::init(lru_config(10000, segments), None));
 
         let start = Instant::now();
 

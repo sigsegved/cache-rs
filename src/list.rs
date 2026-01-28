@@ -16,19 +16,19 @@ extern crate alloc;
 ///
 /// Contains a value and pointers to the previous and next entries.
 /// This structure is not meant to be used directly by users of the `List`.
-pub struct Entry<T> {
+pub struct ListEntry<T> {
     /// The value stored in this entry. Uses MaybeUninit to allow for sigil nodes.
     val: mem::MaybeUninit<T>,
     /// Pointer to the previous entry in the list.
-    prev: *mut Entry<T>,
+    prev: *mut ListEntry<T>,
     /// Pointer to the next entry in the list.
-    next: *mut Entry<T>,
+    next: *mut ListEntry<T>,
 }
 
-impl<T> Entry<T> {
+impl<T> ListEntry<T> {
     /// Creates a new entry with the given value.
     fn new(val: T) -> Self {
-        Entry {
+        ListEntry {
             val: mem::MaybeUninit::new(val),
             prev: ptr::null_mut(),
             next: ptr::null_mut(),
@@ -39,7 +39,7 @@ impl<T> Entry<T> {
     ///
     /// Sigil entries are used as head and tail markers in the list.
     fn new_sigil() -> Self {
-        Entry {
+        ListEntry {
             val: mem::MaybeUninit::uninit(),
             prev: ptr::null_mut(),
             next: ptr::null_mut(),
@@ -96,9 +96,9 @@ pub struct List<T> {
     /// Current number of items in the list.
     len: usize,
     /// Pointer to the head sentinel node.
-    head: *mut Entry<T>,
+    head: *mut ListEntry<T>,
     /// Pointer to the tail sentinel node.
-    tail: *mut Entry<T>,
+    tail: *mut ListEntry<T>,
 }
 
 impl<T> List<T> {
@@ -123,8 +123,8 @@ impl<T> List<T> {
     ///
     /// This method sets up the sentinel nodes and links them together.
     fn construct(cap: NonZeroUsize) -> List<T> {
-        let head = Box::into_raw(Box::new(Entry::new_sigil()));
-        let tail = Box::into_raw(Box::new(Entry::new_sigil()));
+        let head = Box::into_raw(Box::new(ListEntry::new_sigil()));
+        let tail = Box::into_raw(Box::new(ListEntry::new_sigil()));
 
         let cache = List {
             cap,
@@ -171,7 +171,7 @@ impl<T> List<T> {
     ///
     /// This method is safe because it properly manages all raw pointer operations
     /// and ensures no memory leaks or dangling pointers.
-    pub fn remove_first(&mut self) -> Option<Box<Entry<T>>> {
+    pub fn remove_first(&mut self) -> Option<Box<ListEntry<T>>> {
         if self.is_empty() {
             return None;
         }
@@ -198,7 +198,7 @@ impl<T> List<T> {
     ///
     /// This method is safe because it properly manages all raw pointer operations
     /// and ensures no memory leaks or dangling pointers.
-    pub fn remove_last(&mut self) -> Option<Box<Entry<T>>> {
+    pub fn remove_last(&mut self) -> Option<Box<ListEntry<T>>> {
         if self.is_empty() {
             return None;
         }
@@ -224,7 +224,7 @@ impl<T> List<T> {
     /// This function is unsafe because it takes a raw pointer parameter.
     /// The caller must ensure that `node` is a valid pointer to a node in the list
     /// (not null, not freed, and actually part of this list).
-    pub unsafe fn remove(&mut self, node: *mut Entry<T>) -> Option<Box<Entry<T>>> {
+    pub unsafe fn remove(&mut self, node: *mut ListEntry<T>) -> Option<Box<ListEntry<T>>> {
         if self.is_empty() || node.is_null() || node == self.head || node == self.tail {
             return None;
         }
@@ -247,7 +247,7 @@ impl<T> List<T> {
     /// This function is unsafe because it dereferences raw pointers.
     /// The caller must ensure that `node` is a valid pointer to a node in the list
     /// (not null, not freed, and actually part of this list).
-    unsafe fn _detach(&mut self, node: *mut Entry<T>) {
+    unsafe fn _detach(&mut self, node: *mut ListEntry<T>) {
         // SAFETY: The caller guarantees that node is a valid entry in the list,
         // which means its prev and next pointers are also valid entries.
         unsafe {
@@ -265,7 +265,7 @@ impl<T> List<T> {
     /// This function is unsafe because it dereferences raw pointers.
     /// The caller must ensure that `node` is a valid pointer to a node that is
     /// not already in the list (e.g., newly allocated or previously detached).
-    pub unsafe fn attach(&mut self, node: *mut Entry<T>) {
+    pub unsafe fn attach(&mut self, node: *mut ListEntry<T>) {
         // SAFETY: head is a valid pointer initialized in `construct`,
         // and the caller guarantees that node is a valid entry not already in the list
         (*node).next = (*self.head).next;
@@ -284,7 +284,7 @@ impl<T> List<T> {
     /// The caller must ensure that `node` is a valid pointer to a node that is
     /// not already in the list (e.g., newly allocated or previously detached).
     #[allow(dead_code)]
-    pub unsafe fn attach_last(&mut self, node: *mut Entry<T>) {
+    pub unsafe fn attach_last(&mut self, node: *mut ListEntry<T>) {
         // SAFETY: tail is a valid pointer initialized in `construct`,
         // and the caller guarantees that node is a valid entry not already in the list
         (*node).next = self.tail;
@@ -303,7 +303,7 @@ impl<T> List<T> {
     /// This function is unsafe because it dereferences raw pointers.
     /// The caller must ensure that `node` is a valid pointer to a node that is
     /// not already in this list.
-    pub unsafe fn attach_from_other_list(&mut self, node: *mut Entry<T>) {
+    pub unsafe fn attach_from_other_list(&mut self, node: *mut ListEntry<T>) {
         self.attach(node);
         self.len += 1;
     }
@@ -319,7 +319,7 @@ impl<T> List<T> {
     /// The caller must ensure that `node` is a valid pointer to a node that is
     /// not already in this list.
     #[allow(dead_code)]
-    pub unsafe fn attach_last_from_other_list(&mut self, node: *mut Entry<T>) {
+    pub unsafe fn attach_last_from_other_list(&mut self, node: *mut ListEntry<T>) {
         self.attach_last(node);
         self.len += 1;
     }
@@ -330,7 +330,7 @@ impl<T> List<T> {
     ///
     /// This function is unsafe because it dereferences raw pointers.
     /// The caller must ensure that `node` points to a valid entry in the list.
-    pub unsafe fn move_to_front(&mut self, node: *mut Entry<T>) {
+    pub unsafe fn move_to_front(&mut self, node: *mut ListEntry<T>) {
         if node.is_null() || node == self.head || node == self.tail {
             return;
         }
@@ -369,13 +369,13 @@ impl<T> List<T> {
     ///
     /// This method is safe because it properly manages all raw pointer operations
     /// and ensures no memory leaks or dangling pointers.
-    pub fn add(&mut self, v: T) -> Option<*mut Entry<T>> {
+    pub fn add(&mut self, v: T) -> Option<*mut ListEntry<T>> {
         if self.len == self.cap().get() {
             return None;
         }
         // SAFETY: Box::into_raw creates a valid raw pointer and we're using NonNull
         // to assert its non-nullness
-        let node = unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(Entry::new(v)))) };
+        let node = unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(ListEntry::new(v)))) };
         // SAFETY: node is a newly allocated entry that is not part of any list yet
         unsafe { self.attach(node.as_ptr()) };
         self.len += 1;
@@ -394,10 +394,10 @@ impl<T> List<T> {
     /// This method is safe because it properly manages all raw pointer operations
     /// and ensures no memory leaks or dangling pointers. However, the caller must
     /// ensure that bypassing the capacity is appropriate.
-    pub fn add_unchecked(&mut self, v: T) -> *mut Entry<T> {
+    pub fn add_unchecked(&mut self, v: T) -> *mut ListEntry<T> {
         // SAFETY: Box::into_raw creates a valid raw pointer and we're using NonNull
         // to assert its non-nullness
-        let node = unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(Entry::new(v)))) };
+        let node = unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(ListEntry::new(v)))) };
         // SAFETY: node is a newly allocated entry that is not part of any list yet
         unsafe { self.attach(node.as_ptr()) };
         self.len += 1;
@@ -436,7 +436,7 @@ impl<T> List<T> {
     /// ```
     pub unsafe fn update(
         &mut self,
-        node: *mut Entry<T>,
+        node: *mut ListEntry<T>,
         v: T,
         capturing: bool,
     ) -> (Option<T>, bool) {
@@ -460,7 +460,7 @@ impl<T> List<T> {
     /// The caller must ensure that the `node` pointer is valid and points to a
     /// non-sigil `Entry` within the list.
     #[allow(dead_code)]
-    pub unsafe fn get_value(&self, node: *mut Entry<T>) -> Option<&T> {
+    pub unsafe fn get_value(&self, node: *mut ListEntry<T>) -> Option<&T> {
         if node.is_null() || node == self.head || node == self.tail {
             None
         } else {
@@ -476,7 +476,7 @@ impl<T> List<T> {
     /// The caller must ensure that the `node` pointer is valid and points to a
     /// non-sigil `Entry` within the list.
     #[allow(dead_code)]
-    pub unsafe fn get_value_mut(&mut self, node: *mut Entry<T>) -> Option<&mut T> {
+    pub unsafe fn get_value_mut(&mut self, node: *mut ListEntry<T>) -> Option<&mut T> {
         if node.is_null() || node == self.head || node == self.tail {
             None
         } else {
@@ -739,7 +739,7 @@ mod tests {
         let mut list = List::<u32>::new(NonZeroUsize::new(3).unwrap());
 
         // Test that attach/attach_last don't increment length (for internal movement)
-        let node = Box::into_raw(Box::new(Entry::new(10)));
+        let node = Box::into_raw(Box::new(ListEntry::new(10)));
         assert_eq!(list.len(), 0);
 
         unsafe {
@@ -755,7 +755,7 @@ mod tests {
         }
 
         // Now test that attach_from_other_list DOES increment length
-        let node2 = Box::into_raw(Box::new(Entry::new(20)));
+        let node2 = Box::into_raw(Box::new(ListEntry::new(20)));
         unsafe {
             list.attach_from_other_list(node2);
         }
@@ -808,7 +808,7 @@ mod tests {
         let mut list = List::<u32>::new(NonZeroUsize::new(3).unwrap());
 
         // Test that attach_last doesn't increment length (for internal movement)
-        let new_node = Box::into_raw(Box::new(Entry::new(20)));
+        let new_node = Box::into_raw(Box::new(ListEntry::new(20)));
         unsafe {
             list.attach_last(new_node);
         }
@@ -816,7 +816,7 @@ mod tests {
         assert_eq!(list.len(), 0, "attach_last should not increment length");
 
         // Now test the cross-list version
-        let new_node2 = Box::into_raw(Box::new(Entry::new(30)));
+        let new_node2 = Box::into_raw(Box::new(ListEntry::new(30)));
         unsafe {
             list.attach_last_from_other_list(new_node2);
         }

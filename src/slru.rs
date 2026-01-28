@@ -1,17 +1,174 @@
-//! Segmented Least Recently Used Cache Implementation.
+//! Segmented Least Recently Used (SLRU) Cache Implementation
 //!
-//! The SLRU (Segmented LRU) cache divides the cache into two segments:
-//! - Probationary segment: Where new entries are initially placed
-//! - Protected segment: Where frequently accessed entries are promoted to
+//! SLRU is a scan-resistant cache algorithm that divides the cache into two segments:
+//! a **probationary segment** for new entries and a **protected segment** for frequently
+//! accessed entries. This design prevents one-time access patterns (scans) from evicting
+//! valuable cached items.
 //!
-//! This implementation provides better performance for scan-resistant workloads
-//! compared to standard LRU, as it protects frequently accessed items from
-//! being evicted by one-time scans through the data.
+//! # How the Algorithm Works
+//!
+//! SLRU uses a two-tier approach to distinguish between items that are accessed once
+//! (scans, sequential reads) versus items accessed repeatedly (working set).
+//!
+//! ## Segment Architecture
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────────────────────┐
+//! │                              SLRU Cache                                      │
+//! │                                                                              │
+//! │  ┌─────────────────────────────────────────────────────────────────────┐    │
+//! │  │                    PROTECTED SEGMENT (20%)                          │    │
+//! │  │          Frequently accessed items - harder to evict                │    │
+//! │  │  ┌─────────────────────────────────────────────────────────────┐   │    │
+//! │  │  │ MRU ◀──▶ [hot_1] ◀──▶ [hot_2] ◀──▶ ... ◀──▶ [demote] LRU  │   │    │
+//! │  │  └─────────────────────────────────────────────────────────────┘   │    │
+//! │  └─────────────────────────────────────────────────────────────────────┘    │
+//! │                              │ demote                   ▲ promote           │
+//! │                              ▼                          │                   │
+//! │  ┌─────────────────────────────────────────────────────────────────────┐    │
+//! │  │                   PROBATIONARY SEGMENT (80%)                        │    │
+//! │  │          New items and demoted items - easier to evict              │    │
+//! │  │  ┌─────────────────────────────────────────────────────────────┐   │    │
+//! │  │  │ MRU ◀──▶ [new_1] ◀──▶ [new_2] ◀──▶ ... ◀──▶ [evict] LRU   │   │    │
+//! │  │  └─────────────────────────────────────────────────────────────┘   │    │
+//! │  └─────────────────────────────────────────────────────────────────────┘    │
+//! │                              ▲                                              │
+//! │                              │ insert                                       │
+//! │                         new items                                           │
+//! └─────────────────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! ## Entry Lifecycle
+//!
+//! 1. **Insert**: New items enter the probationary segment
+//! 2. **First access in probationary**: Item promoted to protected segment
+//! 3. **Protected segment full**: LRU item demoted back to probationary
+//! 4. **Eviction**: Always from the LRU end of the probationary segment
+//!
+//! ## Scan Resistance Example
+//!
+//! ```text
+//! Initial state: Protected=[A, B, C], Probationary=[D, E, F]
+//! (A, B, C are hot items; D, E, F are warm items)
+//!
+//! Sequential scan of X, Y, Z (one-time access):
+//!   put(X) → Protected=[A, B, C], Probationary=[X, D, E]  (F evicted)
+//!   put(Y) → Protected=[A, B, C], Probationary=[Y, X, D]  (E evicted)
+//!   put(Z) → Protected=[A, B, C], Probationary=[Z, Y, X]  (D evicted)
+//!
+//! Hot items A, B, C remain in protected segment!
+//! The scan only displaced probationary items.
+//! ```
+//!
+//! ## Operations
+//!
+//! | Operation | Action | Time |
+//! |-----------|--------|------|
+//! | `get(key)` | Promote to protected if in probationary | O(1) |
+//! | `put(key, value)` | Insert to probationary, may evict | O(1) |
+//! | `remove(key)` | Remove from whichever segment contains it | O(1) |
+//!
+//! # Dual-Limit Capacity
+//!
+//! This implementation supports two independent limits:
+//!
+//! - **`max_entries`**: Maximum total items across both segments
+//! - **`max_size`**: Maximum total size of content
+//!
+//! The protected segment size is configured separately (default: 20% of total).
+//!
+//! # Performance Characteristics
+//!
+//! | Metric | Value |
+//! |--------|-------|
+//! | Get | O(1) |
+//! | Put | O(1) |
+//! | Remove | O(1) |
+//! | Memory per entry | ~90 bytes overhead + key×2 + value |
+//!
+//! Memory overhead includes: two list pointers, location tag, size tracking,
+//! HashMap bucket, and allocator overhead.
+//!
+//! # When to Use SLRU
+//!
+//! **Good for:**
+//! - Mixed workloads with both hot data and sequential scans
+//! - Database buffer pools
+//! - File system caches
+//! - Any scenario where scans shouldn't evict the working set
+//!
+//! **Not ideal for:**
+//! - Pure recency-based access patterns (LRU is simpler)
+//! - Frequency-dominant patterns (LFU/LFUDA is better)
+//! - Very small caches where the two-segment overhead isn't justified
+//!
+//! # Tuning the Protected Ratio
+//!
+//! The protected segment size controls the trade-off:
+//! - **Larger protected**: More scan resistance, but new items evicted faster
+//! - **Smaller protected**: Less scan resistance, but more room for new items
+//!
+//! Default is 20% protected, which works well for most workloads.
+//!
+//! # Thread Safety
+//!
+//! `SlruCache` is **not thread-safe**. For concurrent access, either:
+//! - Wrap with `Mutex` or `RwLock`
+//! - Use `ConcurrentSlruCache` (requires `concurrent` feature)
+//!
+//! # Examples
+//!
+//! ## Basic Usage
+//!
+//! ```
+//! use cache_rs::SlruCache;
+//! use core::num::NonZeroUsize;
+//!
+//! // Total capacity 100, protected segment 20
+//! let mut cache = SlruCache::new(
+//!     NonZeroUsize::new(100).unwrap(),
+//!     NonZeroUsize::new(20).unwrap(),
+//! );
+//!
+//! cache.put("a", 1);  // Enters probationary
+//! cache.get(&"a");    // Promoted to protected!
+//! cache.put("b", 2);  // Enters probationary
+//!
+//! assert_eq!(cache.get(&"a"), Some(&1));  // Still in protected
+//! ```
+//!
+//! ## Scan Resistance Demo
+//!
+//! ```
+//! use cache_rs::SlruCache;
+//! use core::num::NonZeroUsize;
+//!
+//! let mut cache: SlruCache<i32, i32> = SlruCache::new(
+//!     NonZeroUsize::new(10).unwrap(),
+//!     NonZeroUsize::new(3).unwrap(),
+//! );
+//!
+//! // Establish hot items in protected segment
+//! for key in [1, 2, 3] {
+//!     cache.put(key, 100);
+//!     cache.get(&key);  // Promote to protected
+//! }
+//!
+//! // Simulate a scan - these items only enter probationary
+//! for i in 100..120 {
+//!     cache.put(i, i);  // One-time insertions
+//! }
+//!
+//! // Hot items survive the scan!
+//! assert!(cache.get(&1).is_some());
+//! assert!(cache.get(&2).is_some());
+//! assert!(cache.get(&3).is_some());
+//! ```
 
 extern crate alloc;
 
 use crate::config::SlruCacheConfig;
-use crate::list::{Entry, List};
+use crate::list::{List, ListEntry};
 use crate::metrics::{CacheMetrics, SlruCacheMetrics};
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
@@ -22,7 +179,7 @@ use core::mem;
 use core::num::NonZeroUsize;
 
 #[cfg(feature = "hashbrown")]
-use hashbrown::hash_map::DefaultHashBuilder;
+use hashbrown::DefaultHashBuilder;
 #[cfg(feature = "hashbrown")]
 use hashbrown::HashMap;
 
@@ -64,11 +221,18 @@ pub(crate) struct SlruSegment<K, V, S = DefaultHashBuilder> {
     protected: List<(K, V)>,
 
     /// A hash map mapping keys to entries in either the probationary or protected list
+    /// The tuple stores (node pointer, segment location, entry size in bytes)
     #[allow(clippy::type_complexity)]
-    map: HashMap<K, (*mut Entry<(K, V)>, Location), S>,
+    map: HashMap<K, (*mut ListEntry<(K, V)>, Location, u64), S>,
 
     /// Metrics for tracking cache performance and segment behavior
     metrics: SlruCacheMetrics,
+
+    /// Current total size of cached content (sum of entry sizes)
+    current_size: u64,
+
+    /// Maximum content size the cache can hold
+    max_size: u64,
 }
 
 // SAFETY: SlruSegment owns all data and raw pointers point only to nodes owned by
@@ -86,38 +250,49 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruSegment<K, V, S> {
         protected_cap: NonZeroUsize,
         hash_builder: S,
     ) -> Self {
-        let config = SlruCacheConfig::new(total_cap, protected_cap);
+        Self::with_hasher_and_size(total_cap, protected_cap, hash_builder, u64::MAX)
+    }
+
+    /// Creates a new SLRU segment with the specified capacity, hash builder, and max size.
+    pub(crate) fn with_hasher_and_size(
+        total_cap: NonZeroUsize,
+        protected_cap: NonZeroUsize,
+        hash_builder: S,
+        max_size: u64,
+    ) -> Self {
+        let config = SlruCacheConfig {
+            capacity: total_cap,
+            protected_capacity: protected_cap,
+            max_size,
+        };
 
         let probationary_max_size =
-            NonZeroUsize::new(config.capacity().get() - config.protected_capacity().get()).unwrap();
-
-        let max_cache_size_bytes = config.capacity().get() as u64 * 128;
+            NonZeroUsize::new(config.capacity.get() - config.protected_capacity.get()).unwrap();
 
         SlruSegment {
             config,
             probationary: List::new(probationary_max_size),
-            protected: List::new(config.protected_capacity()),
+            protected: List::new(config.protected_capacity),
             map: HashMap::with_capacity_and_hasher(
-                config.capacity().get().next_power_of_two(),
+                config.capacity.get().next_power_of_two(),
                 hash_builder,
             ),
-            metrics: SlruCacheMetrics::new(
-                max_cache_size_bytes,
-                config.protected_capacity().get() as u64,
-            ),
+            metrics: SlruCacheMetrics::new(max_size, config.protected_capacity.get() as u64),
+            current_size: 0,
+            max_size,
         }
     }
 
     /// Returns the maximum number of key-value pairs the segment can hold.
     #[inline]
     pub(crate) fn cap(&self) -> NonZeroUsize {
-        self.config.capacity()
+        self.config.capacity
     }
 
     /// Returns the maximum size of the protected segment.
     #[inline]
     pub(crate) fn protected_max_size(&self) -> NonZeroUsize {
-        self.config.protected_capacity()
+        self.config.protected_capacity
     }
 
     /// Returns the current number of key-value pairs in the segment.
@@ -130,6 +305,18 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruSegment<K, V, S> {
     #[inline]
     pub(crate) fn is_empty(&self) -> bool {
         self.map.is_empty()
+    }
+
+    /// Returns the current total size of cached content.
+    #[inline]
+    pub(crate) fn current_size(&self) -> u64 {
+        self.current_size
+    }
+
+    /// Returns the maximum content size the cache can hold.
+    #[inline]
+    pub(crate) fn max_size(&self) -> u64 {
+        self.max_size
     }
 
     /// Estimates the size of a key-value pair in bytes for metrics tracking
@@ -147,7 +334,10 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruSegment<K, V, S> {
     /// If the protected segment is full, the LRU item from protected is demoted to probationary.
     ///
     /// Returns a raw pointer to the entry in its new location.
-    unsafe fn promote_to_protected(&mut self, node: *mut Entry<(K, V)>) -> *mut Entry<(K, V)> {
+    unsafe fn promote_to_protected(
+        &mut self,
+        node: *mut ListEntry<(K, V)>,
+    ) -> *mut ListEntry<(K, V)> {
         // Remove from probationary list
         let boxed_entry = self
             .probationary
@@ -162,7 +352,11 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruSegment<K, V, S> {
                 if let Some(old_entry) = self.probationary.remove_last() {
                     let old_ptr = Box::into_raw(old_entry);
                     let (old_key, _) = (*old_ptr).get_value();
-                    self.map.remove(old_key);
+                    // Get stored size and update current_size
+                    if let Some((_, _, evicted_size)) = self.map.remove(old_key) {
+                        self.current_size = self.current_size.saturating_sub(evicted_size);
+                        self.metrics.record_probationary_eviction(evicted_size);
+                    }
                     let _ = Box::from_raw(old_ptr);
                 }
             }
@@ -175,7 +369,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruSegment<K, V, S> {
         // Get the key from the entry for updating the map
         let (key_ref, _) = (*entry_ptr).get_value();
 
-        // Update the map with new location and pointer
+        // Update the map with new location and pointer (preserve size)
         if let Some(map_entry) = self.map.get_mut(key_ref) {
             map_entry.0 = entry_ptr;
             map_entry.1 = Location::Protected;
@@ -195,7 +389,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruSegment<K, V, S> {
             let lru_ptr = Box::into_raw(lru_protected);
             let (lru_key, _) = (*lru_ptr).get_value();
 
-            // Update the location and pointer in the map
+            // Update the location and pointer in the map (preserve size)
             if let Some(entry) = self.map.get_mut(lru_key) {
                 entry.0 = lru_ptr;
                 entry.1 = Location::Probationary;
@@ -215,14 +409,12 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruSegment<K, V, S> {
         K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
-        let (node, location) = self.map.get(key).copied()?;
+        let (node, location, size) = self.map.get(key).copied()?;
 
         match location {
             Location::Probationary => unsafe {
                 // SAFETY: node comes from our map, so it's a valid pointer to an entry in our probationary list
-                let (key_ref, value) = (*node).get_value();
-                let object_size = self.estimate_object_size(key_ref, value);
-                self.metrics.record_probationary_hit(object_size);
+                self.metrics.record_probationary_hit(size);
 
                 // Promote from probationary to protected
                 let entry_ptr = self.promote_to_protected(node);
@@ -242,9 +434,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruSegment<K, V, S> {
             },
             Location::Protected => unsafe {
                 // SAFETY: node comes from our map, so it's a valid pointer to an entry in our protected list
-                let (key_ref, value) = (*node).get_value();
-                let object_size = self.estimate_object_size(key_ref, value);
-                self.metrics.record_protected_hit(object_size);
+                self.metrics.record_protected_hit(size);
 
                 // Already protected, just move to MRU position
                 self.protected.move_to_front(node);
@@ -260,14 +450,12 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruSegment<K, V, S> {
         K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
-        let (node, location) = self.map.get(key).copied()?;
+        let (node, location, size) = self.map.get(key).copied()?;
 
         match location {
             Location::Probationary => unsafe {
                 // SAFETY: node comes from our map, so it's a valid pointer to an entry in our probationary list
-                let (key_ref, value) = (*node).get_value();
-                let object_size = self.estimate_object_size(key_ref, value);
-                self.metrics.record_probationary_hit(object_size);
+                self.metrics.record_probationary_hit(size);
 
                 // Promote from probationary to protected
                 let entry_ptr = self.promote_to_protected(node);
@@ -287,9 +475,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruSegment<K, V, S> {
             },
             Location::Protected => unsafe {
                 // SAFETY: node comes from our map, so it's a valid pointer to an entry in our protected list
-                let (key_ref, value) = (*node).get_value();
-                let object_size = self.estimate_object_size(key_ref, value);
-                self.metrics.record_protected_hit(object_size);
+                self.metrics.record_protected_hit(size);
 
                 // Already protected, just move to MRU position
                 self.protected.move_to_front(node);
@@ -314,22 +500,43 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruSegment<K, V, S> {
         V: Clone,
     {
         let object_size = self.estimate_object_size(&key, &value);
+        self.put_with_size(key, value, object_size)
+    }
 
+    /// Insert a key-value pair with explicit size tracking.
+    pub(crate) fn put_with_size(&mut self, key: K, value: V, size: u64) -> Option<(K, V)>
+    where
+        V: Clone,
+    {
         // If key is already in the cache, update it in place
-        if let Some(&(node, location)) = self.map.get(&key) {
+        if let Some(&(node, location, old_size)) = self.map.get(&key) {
             match location {
                 Location::Probationary => unsafe {
                     // SAFETY: node comes from our map
                     self.probationary.move_to_front(node);
                     let old_entry = self.probationary.update(node, (key.clone(), value), true);
-                    self.metrics.core.record_insertion(object_size);
+                    // Update size tracking: subtract old size, add new size
+                    self.current_size = self.current_size.saturating_sub(old_size);
+                    self.current_size += size;
+                    // Update the size in the map
+                    if let Some(map_entry) = self.map.get_mut(&key) {
+                        map_entry.2 = size;
+                    }
+                    self.metrics.core.record_insertion(size);
                     return old_entry.0;
                 },
                 Location::Protected => unsafe {
                     // SAFETY: node comes from our map
                     self.protected.move_to_front(node);
                     let old_entry = self.protected.update(node, (key.clone(), value), true);
-                    self.metrics.core.record_insertion(object_size);
+                    // Update size tracking: subtract old size, add new size
+                    self.current_size = self.current_size.saturating_sub(old_size);
+                    self.current_size += size;
+                    // Update the size in the map
+                    if let Some(map_entry) = self.map.get_mut(&key) {
+                        map_entry.2 = size;
+                    }
+                    self.metrics.core.record_insertion(size);
                     return old_entry.0;
                 },
             }
@@ -345,7 +552,13 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruSegment<K, V, S> {
                     unsafe {
                         let entry_ptr = Box::into_raw(old_entry);
                         let (old_key, old_value) = (*entry_ptr).get_value().clone();
-                        let evicted_size = self.estimate_object_size(&old_key, &old_value);
+                        // Get the stored size from the map before removing
+                        let evicted_size = self
+                            .map
+                            .get(&old_key)
+                            .map(|(_, _, sz)| *sz)
+                            .unwrap_or_else(|| self.estimate_object_size(&old_key, &old_value));
+                        self.current_size = self.current_size.saturating_sub(evicted_size);
                         self.metrics.record_probationary_eviction(evicted_size);
                         self.map.remove(&old_key);
                         evicted = Some((old_key, old_value));
@@ -358,7 +571,13 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruSegment<K, V, S> {
                     unsafe {
                         let entry_ptr = Box::into_raw(old_entry);
                         let (old_key, old_value) = (*entry_ptr).get_value().clone();
-                        let evicted_size = self.estimate_object_size(&old_key, &old_value);
+                        // Get the stored size from the map before removing
+                        let evicted_size = self
+                            .map
+                            .get(&old_key)
+                            .map(|(_, _, sz)| *sz)
+                            .unwrap_or_else(|| self.estimate_object_size(&old_key, &old_value));
+                        self.current_size = self.current_size.saturating_sub(evicted_size);
                         self.metrics.record_protected_eviction(evicted_size);
                         self.map.remove(&old_key);
                         evicted = Some((old_key, old_value));
@@ -372,18 +591,26 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruSegment<K, V, S> {
         if self.len() < self.cap().get() {
             // Total cache has space, allow probationary to exceed its capacity
             let node = self.probationary.add_unchecked((key.clone(), value));
-            self.map.insert(key, (node, Location::Probationary));
+            self.map.insert(key, (node, Location::Probationary, size));
+            self.current_size += size;
         } else {
             // Total cache is full, try to add normally (may fail due to probationary capacity)
             if let Some(node) = self.probationary.add((key.clone(), value.clone())) {
-                self.map.insert(key, (node, Location::Probationary));
+                self.map.insert(key, (node, Location::Probationary, size));
+                self.current_size += size;
             } else {
                 // Probationary is at capacity, need to make space
                 if let Some(old_entry) = self.probationary.remove_last() {
                     unsafe {
                         let entry_ptr = Box::into_raw(old_entry);
                         let (old_key, old_value) = (*entry_ptr).get_value().clone();
-                        let evicted_size = self.estimate_object_size(&old_key, &old_value);
+                        // Get the stored size from the map before removing
+                        let evicted_size = self
+                            .map
+                            .get(&old_key)
+                            .map(|(_, _, sz)| *sz)
+                            .unwrap_or_else(|| self.estimate_object_size(&old_key, &old_value));
+                        self.current_size = self.current_size.saturating_sub(evicted_size);
                         self.metrics.record_probationary_eviction(evicted_size);
                         self.map.remove(&old_key);
                         evicted = Some((old_key, old_value));
@@ -393,13 +620,14 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruSegment<K, V, S> {
 
                 // Try again after making space
                 if let Some(node) = self.probationary.add((key.clone(), value)) {
-                    self.map.insert(key, (node, Location::Probationary));
+                    self.map.insert(key, (node, Location::Probationary, size));
+                    self.current_size += size;
                 }
             }
         }
 
         // Record insertion and update segment sizes
-        self.metrics.core.record_insertion(object_size);
+        self.metrics.core.record_insertion(size);
         self.metrics
             .update_segment_sizes(self.probationary.len() as u64, self.protected.len() as u64);
 
@@ -413,14 +641,16 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruSegment<K, V, S> {
         Q: ?Sized + Hash + Eq,
         V: Clone,
     {
-        let (node, location) = self.map.remove(key)?;
+        let (node, location, removed_size) = self.map.remove(key)?;
 
         match location {
             Location::Probationary => unsafe {
                 // SAFETY: node comes from our map and was just removed
                 let boxed_entry = self.probationary.remove(node)?;
                 let entry_ptr = Box::into_raw(boxed_entry);
-                let value = (*entry_ptr).get_value().1.clone();
+                let (_, v_ref) = (*entry_ptr).get_value();
+                let value = v_ref.clone();
+                self.current_size = self.current_size.saturating_sub(removed_size);
                 let _ = Box::from_raw(entry_ptr);
                 Some(value)
             },
@@ -428,7 +658,9 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruSegment<K, V, S> {
                 // SAFETY: node comes from our map and was just removed
                 let boxed_entry = self.protected.remove(node)?;
                 let entry_ptr = Box::into_raw(boxed_entry);
-                let value = (*entry_ptr).get_value().1.clone();
+                let (_, v_ref) = (*entry_ptr).get_value();
+                let value = v_ref.clone();
+                self.current_size = self.current_size.saturating_sub(removed_size);
                 let _ = Box::from_raw(entry_ptr);
                 Some(value)
             },
@@ -440,6 +672,7 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruSegment<K, V, S> {
         self.map.clear();
         self.probationary.clear();
         self.protected.clear();
+        self.current_size = 0;
     }
 }
 
@@ -447,8 +680,8 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruSegment<K, V, S> {
 impl<K, V, S> core::fmt::Debug for SlruSegment<K, V, S> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SlruSegment")
-            .field("capacity", &self.config.capacity())
-            .field("protected_capacity", &self.config.protected_capacity())
+            .field("capacity", &self.config.capacity)
+            .field("protected_capacity", &self.config.protected_capacity)
             .field("len", &self.map.len())
             .finish()
     }
@@ -519,6 +752,23 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruCache<K, V, S> {
         }
     }
 
+    /// Creates a new SLRU cache with the specified capacity, hash builder, and max size.
+    pub fn with_hasher_and_size(
+        total_cap: NonZeroUsize,
+        protected_cap: NonZeroUsize,
+        hash_builder: S,
+        max_size: u64,
+    ) -> Self {
+        Self {
+            segment: SlruSegment::with_hasher_and_size(
+                total_cap,
+                protected_cap,
+                hash_builder,
+                max_size,
+            ),
+        }
+    }
+
     /// Returns the maximum number of key-value pairs the cache can hold.
     #[inline]
     pub fn cap(&self) -> NonZeroUsize {
@@ -541,6 +791,18 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruCache<K, V, S> {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.segment.is_empty()
+    }
+
+    /// Returns the current total size of cached content.
+    #[inline]
+    pub fn current_size(&self) -> u64 {
+        self.segment.current_size()
+    }
+
+    /// Returns the maximum content size the cache can hold.
+    #[inline]
+    pub fn max_size(&self) -> u64 {
+        self.segment.max_size()
     }
 
     /// Returns a reference to the value corresponding to the key.
@@ -602,6 +864,18 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruCache<K, V, S> {
         self.segment.put(key, value)
     }
 
+    /// Insert a key-value pair with explicit size tracking.
+    ///
+    /// The `size` parameter specifies how much of `max_size` this entry consumes.
+    /// Use `size=1` for count-based caches.
+    #[inline]
+    pub fn put_with_size(&mut self, key: K, value: V, size: u64) -> Option<(K, V)>
+    where
+        V: Clone,
+    {
+        self.segment.put_with_size(key, value, size)
+    }
+
     /// Removes a key from the cache, returning the value at the key if the key was previously in the cache.
     ///
     /// The key may be any borrowed form of the cache's key type, but
@@ -628,22 +902,148 @@ impl<K: Hash + Eq, V> SlruCache<K, V>
 where
     V: Clone,
 {
-    /// Creates a new SLRU cache with the specified capacity and protected capacity.
+    /// Creates a new SLRU cache from a configuration.
     ///
-    /// The total capacity must be greater than the protected capacity.
+    /// This is the **recommended** way to create an SLRU cache. All configuration
+    /// is specified through the [`SlruCacheConfig`] struct.
     ///
-    /// # Panics
+    /// # Arguments
     ///
-    /// Panics if `protected_capacity` is greater than `capacity`.
-    pub fn new(
-        capacity: NonZeroUsize,
-        protected_capacity: NonZeroUsize,
+    /// * `config` - Configuration specifying capacity, protected capacity, and optional size limit
+    /// * `hasher` - Optional custom hash builder. If `None`, uses the default.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::SlruCache;
+    /// use cache_rs::config::SlruCacheConfig;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// // Simple capacity-only cache with 20% protected segment
+    /// let config = SlruCacheConfig {
+    ///     capacity: NonZeroUsize::new(100).unwrap(),
+    ///     protected_capacity: NonZeroUsize::new(20).unwrap(),
+    ///     max_size: u64::MAX,
+    /// };
+    /// let mut cache: SlruCache<&str, i32> = SlruCache::init(config, None);
+    /// cache.put("key", 42);
+    ///
+    /// // Cache with size limit
+    /// let config = SlruCacheConfig {
+    ///     capacity: NonZeroUsize::new(1000).unwrap(),
+    ///     protected_capacity: NonZeroUsize::new(200).unwrap(),
+    ///     max_size: 10 * 1024 * 1024,  // 10MB
+    /// };
+    /// let cache: SlruCache<String, Vec<u8>> = SlruCache::init(config, None);
+    /// ```
+    pub fn init(
+        config: SlruCacheConfig,
+        hasher: Option<DefaultHashBuilder>,
     ) -> SlruCache<K, V, DefaultHashBuilder> {
-        let config = SlruCacheConfig::new(capacity, protected_capacity);
-        SlruCache::with_hasher(
-            config.capacity(),
-            config.protected_capacity(),
-            DefaultHashBuilder::default(),
+        SlruCache::with_hasher_and_size(
+            config.capacity,
+            config.protected_capacity,
+            hasher.unwrap_or_default(),
+            config.max_size,
+        )
+    }
+
+    /// Creates a new SLRU cache with the specified total and protected capacities.
+    ///
+    /// This is a convenience constructor. For more control, use [`SlruCache::init`].
+    ///
+    /// # Arguments
+    ///
+    /// * `total_cap` - The maximum total number of entries (probationary + protected).
+    /// * `protected_cap` - The maximum number of entries in the protected segment.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::SlruCache;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// // Cache with total 100 entries, 20 in protected segment
+    /// let mut cache = SlruCache::new(
+    ///     NonZeroUsize::new(100).unwrap(),
+    ///     NonZeroUsize::new(20).unwrap(),
+    /// );
+    /// cache.put("key", 42);
+    /// ```
+    pub fn new(
+        total_cap: NonZeroUsize,
+        protected_cap: NonZeroUsize,
+    ) -> SlruCache<K, V, DefaultHashBuilder> {
+        SlruCache::init(
+            SlruCacheConfig {
+                capacity: total_cap,
+                protected_capacity: protected_cap,
+                max_size: u64::MAX,
+            },
+            None,
+        )
+    }
+
+    /// Creates a new SLRU cache with entry count and size limits.
+    ///
+    /// This is a convenience constructor. For more control, use [`SlruCache::init`].
+    ///
+    /// # Arguments
+    ///
+    /// * `total_cap` - The maximum total number of entries (probationary + protected).
+    /// * `protected_cap` - The maximum number of entries in the protected segment.
+    /// * `max_size` - The maximum total size in bytes (0 means unlimited).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::SlruCache;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// // Cache with 1000 entries, 200 protected, and 10MB size limit
+    /// let mut cache: SlruCache<String, Vec<u8>> = SlruCache::with_limits(
+    ///     NonZeroUsize::new(1000).unwrap(),
+    ///     NonZeroUsize::new(200).unwrap(),
+    ///     10 * 1024 * 1024,
+    /// );
+    /// ```
+    pub fn with_limits(
+        total_cap: NonZeroUsize,
+        protected_cap: NonZeroUsize,
+        max_size: u64,
+    ) -> SlruCache<K, V, DefaultHashBuilder> {
+        SlruCache::init(
+            SlruCacheConfig {
+                capacity: total_cap,
+                protected_capacity: protected_cap,
+                max_size,
+            },
+            None,
+        )
+    }
+
+    /// Creates a new SLRU cache with only a size limit.
+    ///
+    /// This is a convenience constructor that creates a cache limited by total size
+    /// with very high entry count limits.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_size` - The maximum total size in bytes.
+    pub fn with_max_size(max_size: u64) -> SlruCache<K, V, DefaultHashBuilder> {
+        // Use a reasonable default capacity for size-based caches.
+        // The HashMap will grow dynamically as needed, so we don't need
+        // to pre-allocate for billions of entries.
+        const DEFAULT_SIZE_BASED_CAPACITY: usize = 16384;
+        let default_cap = NonZeroUsize::new(DEFAULT_SIZE_BASED_CAPACITY).unwrap();
+        let default_protected = NonZeroUsize::new(DEFAULT_SIZE_BASED_CAPACITY / 5).unwrap();
+        SlruCache::init(
+            SlruCacheConfig {
+                capacity: default_cap,
+                protected_capacity: default_protected,
+                max_size,
+            },
+            None,
         )
     }
 }
@@ -908,5 +1308,90 @@ mod tests {
         let mut guard = cache.lock().unwrap();
         assert!(guard.len() <= 100);
         guard.clear(); // Clean up for MIRI
+    }
+
+    #[test]
+    fn test_slru_size_aware_tracking() {
+        let mut cache = SlruCache::new(
+            NonZeroUsize::new(10).unwrap(),
+            NonZeroUsize::new(3).unwrap(),
+        );
+
+        assert_eq!(cache.current_size(), 0);
+        assert_eq!(cache.max_size(), u64::MAX);
+
+        cache.put_with_size("a", 1, 100);
+        cache.put_with_size("b", 2, 200);
+        cache.put_with_size("c", 3, 150);
+
+        assert_eq!(cache.current_size(), 450);
+        assert_eq!(cache.len(), 3);
+
+        // Clear should reset size
+        cache.clear();
+        assert_eq!(cache.current_size(), 0);
+    }
+
+    #[test]
+    fn test_slru_init_constructor() {
+        let config = SlruCacheConfig {
+            capacity: NonZeroUsize::new(1000).unwrap(),
+            protected_capacity: NonZeroUsize::new(300).unwrap(),
+            max_size: 1024 * 1024,
+        };
+        let cache: SlruCache<String, i32> = SlruCache::init(config, None);
+
+        assert_eq!(cache.current_size(), 0);
+        assert_eq!(cache.max_size(), 1024 * 1024);
+    }
+
+    #[test]
+    fn test_slru_with_limits_constructor() {
+        let cache: SlruCache<String, String> = SlruCache::with_limits(
+            NonZeroUsize::new(100).unwrap(),
+            NonZeroUsize::new(30).unwrap(),
+            1024 * 1024,
+        );
+
+        assert_eq!(cache.current_size(), 0);
+        assert_eq!(cache.max_size(), 1024 * 1024);
+        assert_eq!(cache.cap().get(), 100);
+        assert_eq!(cache.protected_max_size().get(), 30);
+    }
+
+    #[test]
+    fn test_slru_record_miss() {
+        use crate::metrics::CacheMetrics;
+
+        let mut cache: SlruCache<String, i32> = SlruCache::new(
+            NonZeroUsize::new(100).unwrap(),
+            NonZeroUsize::new(30).unwrap(),
+        );
+
+        cache.record_miss(100);
+        cache.record_miss(200);
+
+        let metrics = cache.metrics();
+        assert_eq!(metrics.get("cache_misses").unwrap(), &2.0);
+    }
+
+    #[test]
+    fn test_slru_get_mut() {
+        let mut cache: SlruCache<String, i32> = SlruCache::new(
+            NonZeroUsize::new(100).unwrap(),
+            NonZeroUsize::new(30).unwrap(),
+        );
+
+        cache.put("key".to_string(), 10);
+        assert_eq!(cache.get(&"key".to_string()), Some(&10));
+
+        // Modify via get_mut
+        if let Some(val) = cache.get_mut(&"key".to_string()) {
+            *val = 42;
+        }
+        assert_eq!(cache.get(&"key".to_string()), Some(&42));
+
+        // get_mut on missing key returns None
+        assert!(cache.get_mut(&"missing".to_string()).is_none());
     }
 }

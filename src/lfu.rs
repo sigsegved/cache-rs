@@ -1,17 +1,153 @@
-//! Least Frequently Used Cache Implementation.
+//! Least Frequently Used (LFU) Cache Implementation
 //!
-//! The LFU (Least Frequently Used) cache evicts the least frequently accessed items
-//! when the cache reaches capacity. This implementation tracks the frequency of
-//! access for each item and maintains items sorted by frequency.
+//! An LFU cache evicts the least frequently accessed item when capacity is reached.
+//! This implementation tracks access frequency for each item and maintains items
+//! organized by their frequency count using a combination of hash map and frequency-indexed lists.
 //!
-//! This implementation provides better performance for workloads where certain
-//! items are accessed more frequently than others over time, as it protects
-//! frequently accessed items from eviction.
+//! # How the Algorithm Works
+//!
+//! LFU is based on the principle that items accessed more frequently in the past
+//! are more likely to be accessed again in the future. Unlike LRU which only considers
+//! recency, LFU considers the total number of accesses.
+//!
+//! ## Data Structure
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────────────────────┐
+//! │                              LFU Cache                                       │
+//! │                                                                              │
+//! │  HashMap<K, *Node>              BTreeMap<Frequency, List>                    │
+//! │  ┌──────────────┐              ┌─────────────────────────────────────────┐   │
+//! │  │ "hot" ──────────────────────│ freq=10: [hot] ◀──▶ [warm]              │   │
+//! │  │ "warm" ─────────────────────│ freq=5:  [item_a] ◀──▶ [item_b]         │   │
+//! │  │ "cold" ─────────────────────│ freq=1:  [cold] ◀──▶ [new_item]  ← LFU  │   │
+//! │  └──────────────┘              └─────────────────────────────────────────┘   │
+//! │                                        ▲                                     │
+//! │                                        │                                     │
+//! │                                   min_frequency=1                            │
+//! └─────────────────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! - **HashMap**: Provides O(1) key lookup, storing pointers to list nodes
+//! - **BTreeMap**: Maps frequency counts to lists of items with that frequency
+//! - **min_frequency**: Tracks the lowest frequency for O(1) eviction
+//!
+//! ## Operations
+//!
+//! | Operation | Action | Time |
+//! |-----------|--------|------|
+//! | `get(key)` | Increment frequency, move to new frequency list | O(1) |
+//! | `put(key, value)` | Insert at frequency 1, evict lowest freq if full | O(1) |
+//! | `remove(key)` | Remove from frequency list, update min_frequency | O(1) |
+//!
+//! ## Access Pattern Example
+//!
+//! ```text
+//! Cache capacity: 3
+//!
+//! put("a", 1)  →  freq_1: [a]
+//! put("b", 2)  →  freq_1: [b, a]
+//! put("c", 3)  →  freq_1: [c, b, a]
+//! get("a")     →  freq_1: [c, b], freq_2: [a]
+//! get("a")     →  freq_1: [c, b], freq_3: [a]
+//! put("d", 4)  →  freq_1: [d, c], freq_3: [a]   // "b" evicted (LFU at freq_1)
+//! ```
+//!
+//! # Dual-Limit Capacity
+//!
+//! This implementation supports two independent limits:
+//!
+//! - **`max_entries`**: Maximum number of items (bounds entry count)
+//! - **`max_size`**: Maximum total size of content (sum of item sizes)
+//!
+//! Eviction occurs when **either** limit would be exceeded.
+//!
+//! # Performance Characteristics
+//!
+//! | Metric | Value |
+//! |--------|-------|
+//! | Get | O(1) |
+//! | Put | O(1) |
+//! | Remove | O(1) |
+//! | Memory per entry | ~100 bytes overhead + key×2 + value |
+//!
+//! Memory overhead includes: list node pointers (16B), `CacheEntry` metadata (32B),
+//! frequency metadata (8B), HashMap bucket (~24B), BTreeMap overhead (~16B).
+//!
+//! # When to Use LFU
+//!
+//! **Good for:**
+//! - Workloads with stable popularity patterns (some items are consistently popular)
+//! - Database query caches where certain queries are repeated frequently
+//! - CDN edge caches with predictable content popularity
+//! - Scenarios requiring excellent scan resistance
+//!
+//! **Not ideal for:**
+//! - Recency-based access patterns (use LRU instead)
+//! - Workloads where popularity changes over time (use LFUDA instead)
+//! - Short-lived caches where frequency counts don't accumulate meaningfully
+//! - "Cache pollution" scenarios where old popular items block new ones
+//!
+//! # The Cache Pollution Problem
+//!
+//! A limitation of pure LFU: items that were popular in the past but are no longer
+//! accessed can persist in the cache indefinitely due to high frequency counts.
+//! For long-running caches with changing popularity, consider [`LfudaCache`](crate::LfudaCache)
+//! which addresses this with dynamic aging.
+//!
+//! # Thread Safety
+//!
+//! `LfuCache` is **not thread-safe**. For concurrent access, either:
+//! - Wrap with `Mutex` or `RwLock`
+//! - Use `ConcurrentLfuCache` (requires `concurrent` feature)
+//!
+//! # Examples
+//!
+//! ## Basic Usage
+//!
+//! ```
+//! use cache_rs::LfuCache;
+//! use core::num::NonZeroUsize;
+//!
+//! let mut cache = LfuCache::new(NonZeroUsize::new(3).unwrap());
+//!
+//! cache.put("a", 1);
+//! cache.put("b", 2);
+//! cache.put("c", 3);
+//!
+//! // Access "a" multiple times - increases its frequency
+//! assert_eq!(cache.get(&"a"), Some(&1));
+//! assert_eq!(cache.get(&"a"), Some(&1));
+//!
+//! // Add new item - "b" or "c" evicted (both at frequency 1)
+//! cache.put("d", 4);
+//!
+//! // "a" survives due to higher frequency
+//! assert_eq!(cache.get(&"a"), Some(&1));
+//! ```
+//!
+//! ## Size-Aware Caching
+//!
+//! ```
+//! use cache_rs::LfuCache;
+//! use core::num::NonZeroUsize;
+//!
+//! // Cache with max 1000 entries and 10MB total size
+//! let mut cache: LfuCache<String, Vec<u8>> = LfuCache::with_limits(
+//!     NonZeroUsize::new(1000).unwrap(),
+//!     10 * 1024 * 1024,
+//! );
+//!
+//! let data = vec![0u8; 1024];  // 1KB
+//! cache.put_with_size("file.bin".to_string(), data.clone(), 1024);
+//! ```
 
 extern crate alloc;
 
 use crate::config::LfuCacheConfig;
-use crate::list::{Entry, List};
+use crate::entry::CacheEntry;
+use crate::list::{List, ListEntry};
+use crate::meta::LfuMeta;
 use crate::metrics::{CacheMetrics, LfuCacheMetrics};
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
@@ -21,11 +157,8 @@ use core::hash::{BuildHasher, Hash};
 use core::mem;
 use core::num::NonZeroUsize;
 
-/// Type alias for the frequency metadata stored in the hash map
-type FrequencyMetadata<K, V> = (usize, *mut Entry<(K, V)>);
-
 #[cfg(feature = "hashbrown")]
-use hashbrown::hash_map::DefaultHashBuilder;
+use hashbrown::DefaultHashBuilder;
 #[cfg(feature = "hashbrown")]
 use hashbrown::HashMap;
 
@@ -40,6 +173,10 @@ use std::collections::HashMap;
 /// `ConcurrentLfuCache` (multi-threaded). All algorithm logic is
 /// implemented here to avoid code duplication.
 ///
+/// Uses `CacheEntry<K, V, LfuMeta>` for unified entry management with built-in
+/// size tracking, timestamps, and frequency metadata. The frequency is stored
+/// only in `LfuMeta` (inside CacheEntry), eliminating duplication.
+///
 /// # Safety
 ///
 /// This struct contains raw pointers in the `map` field. These pointers
@@ -48,21 +185,25 @@ use std::collections::HashMap;
 /// - The node has not been removed from the list
 /// - The segment has not been dropped
 pub(crate) struct LfuSegment<K, V, S = DefaultHashBuilder> {
-    /// Configuration for the LFU cache
+    /// Configuration for the LFU cache (includes capacity and max_size)
     config: LfuCacheConfig,
 
     /// Current minimum frequency in the cache
     min_frequency: usize,
 
-    /// Map from keys to their frequency and list node
-    map: HashMap<K, FrequencyMetadata<K, V>, S>,
+    /// Map from keys to their list node pointer.
+    /// Frequency is stored in CacheEntry.metadata (LfuMeta), not duplicated here.
+    map: HashMap<K, *mut ListEntry<CacheEntry<K, V, LfuMeta>>, S>,
 
     /// Map from frequency to list of items with that frequency
     /// Items within each frequency list are ordered by recency (LRU within frequency)
-    frequency_lists: BTreeMap<usize, List<(K, V)>>,
+    frequency_lists: BTreeMap<usize, List<CacheEntry<K, V, LfuMeta>>>,
 
     /// Metrics for tracking cache performance and frequency distribution
     metrics: LfuCacheMetrics,
+
+    /// Current total size of cached content (sum of entry sizes)
+    current_size: u64,
 }
 
 // SAFETY: LfuSegment owns all data and raw pointers point only to nodes owned by
@@ -75,22 +216,30 @@ unsafe impl<K: Send, V: Send, S: Sync> Sync for LfuSegment<K, V, S> {}
 impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
     /// Creates a new LFU segment with the specified capacity and hash builder.
     pub(crate) fn with_hasher(cap: NonZeroUsize, hash_builder: S) -> Self {
-        let config = LfuCacheConfig::new(cap);
-        let map_capacity = config.capacity().get().next_power_of_two();
-        let max_cache_size_bytes = config.capacity().get() as u64 * 128;
+        Self::with_hasher_and_size(cap, hash_builder, u64::MAX)
+    }
+
+    /// Creates a new LFU segment with the specified capacity, hash builder, and max size.
+    pub(crate) fn with_hasher_and_size(cap: NonZeroUsize, hash_builder: S, max_size: u64) -> Self {
+        let config = LfuCacheConfig {
+            capacity: cap,
+            max_size,
+        };
+        let map_capacity = config.capacity.get().next_power_of_two();
         LfuSegment {
             config,
             min_frequency: 1,
             map: HashMap::with_capacity_and_hasher(map_capacity, hash_builder),
             frequency_lists: BTreeMap::new(),
-            metrics: LfuCacheMetrics::new(max_cache_size_bytes),
+            metrics: LfuCacheMetrics::new(max_size),
+            current_size: 0,
         }
     }
 
     /// Returns the maximum number of key-value pairs the segment can hold.
     #[inline]
     pub(crate) fn cap(&self) -> NonZeroUsize {
-        self.config.capacity()
+        self.config.capacity
     }
 
     /// Returns the current number of key-value pairs in the segment.
@@ -103,6 +252,18 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
     #[inline]
     pub(crate) fn is_empty(&self) -> bool {
         self.map.is_empty()
+    }
+
+    /// Returns the current total size of cached content.
+    #[inline]
+    pub(crate) fn current_size(&self) -> u64 {
+        self.current_size
+    }
+
+    /// Returns the maximum content size the cache can hold.
+    #[inline]
+    pub(crate) fn max_size(&self) -> u64 {
+        self.config.max_size
     }
 
     /// Estimates the size of a key-value pair in bytes for metrics tracking
@@ -121,13 +282,13 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
     ///
     /// # Safety
     ///
-    /// The caller must ensure that `node` is a valid pointer to an Entry that exists
+    /// The caller must ensure that `node` is a valid pointer to a ListEntry that exists
     /// in this cache's frequency lists and has not been freed.
     unsafe fn update_frequency_by_node(
         &mut self,
-        node: *mut Entry<(K, V)>,
+        node: *mut ListEntry<CacheEntry<K, V, LfuMeta>>,
         old_frequency: usize,
-    ) -> *mut Entry<(K, V)>
+    ) -> *mut ListEntry<CacheEntry<K, V, LfuMeta>>
     where
         K: Clone + Hash + Eq,
     {
@@ -138,18 +299,18 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
             .record_frequency_increment(old_frequency, new_frequency);
 
         // SAFETY: node is guaranteed to be valid by the caller's contract
-        let (key_ref, _) = (*node).get_value();
-        let key_cloned = key_ref.clone();
+        let entry = (*node).get_value();
+        let key_cloned = entry.key.clone();
 
-        // Get the current node from the old frequency list
-        let (_, node) = self.map.get(&key_cloned).unwrap();
+        // Get the current node from the map
+        let node = *self.map.get(&key_cloned).unwrap();
 
         // Remove from old frequency list
         let boxed_entry = self
             .frequency_lists
             .get_mut(&old_frequency)
             .unwrap()
-            .remove(*node)
+            .remove(node)
             .unwrap();
 
         // If the old frequency list is now empty and it was the minimum frequency,
@@ -160,11 +321,14 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
             self.min_frequency = new_frequency;
         }
 
-        // Add to new frequency list
+        // Update frequency in the entry's metadata
         let entry_ptr = Box::into_raw(boxed_entry);
+        if let Some(ref mut meta) = (*entry_ptr).get_value_mut().metadata {
+            meta.frequency = new_frequency as u64;
+        }
 
         // Ensure the new frequency list exists
-        let capacity = self.config.capacity();
+        let capacity = self.config.capacity;
         self.frequency_lists
             .entry(new_frequency)
             .or_insert_with(|| List::new(capacity));
@@ -175,9 +339,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
             .unwrap()
             .attach_from_other_list(entry_ptr);
 
-        // Update the map
-        self.map.get_mut(&key_cloned).unwrap().0 = new_frequency;
-        self.map.get_mut(&key_cloned).unwrap().1 = entry_ptr;
+        // Update the map with the new node pointer
+        *self.map.get_mut(&key_cloned).unwrap() = entry_ptr;
 
         // Update metrics with new frequency levels
         self.metrics.update_frequency_levels(&self.frequency_lists);
@@ -191,16 +354,21 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
         K: Borrow<Q> + Clone,
         Q: ?Sized + Hash + Eq,
     {
-        if let Some(&(frequency, node)) = self.map.get(key) {
+        if let Some(&node) = self.map.get(key) {
             unsafe {
                 // SAFETY: node comes from our map, so it's a valid pointer to an entry in our frequency list
-                let (key_ref, value) = (*node).get_value();
-                let object_size = self.estimate_object_size(key_ref, value);
+                let entry = (*node).get_value();
+                let frequency = entry
+                    .metadata
+                    .as_ref()
+                    .map(|m| m.frequency as usize)
+                    .unwrap_or(1);
+                let object_size = entry.size;
                 self.metrics.record_frequency_hit(object_size, frequency);
 
                 let new_node = self.update_frequency_by_node(node, frequency);
-                let (_, value) = (*new_node).get_value();
-                Some(value)
+                let new_entry = (*new_node).get_value();
+                Some(&new_entry.value)
             }
         } else {
             None
@@ -213,16 +381,21 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
         K: Borrow<Q> + Clone,
         Q: ?Sized + Hash + Eq,
     {
-        if let Some(&(frequency, node)) = self.map.get(key) {
+        if let Some(&node) = self.map.get(key) {
             unsafe {
                 // SAFETY: node comes from our map, so it's a valid pointer to an entry in our frequency list
-                let (key_ref, value) = (*node).get_value();
-                let object_size = self.estimate_object_size(key_ref, value);
+                let entry = (*node).get_value();
+                let frequency = entry
+                    .metadata
+                    .as_ref()
+                    .map(|m| m.frequency as usize)
+                    .unwrap_or(1);
+                let object_size = entry.size;
                 self.metrics.record_frequency_hit(object_size, frequency);
 
                 let new_node = self.update_frequency_by_node(node, frequency);
-                let (_, value) = (*new_node).get_value_mut();
-                Some(value)
+                let new_entry = (*new_node).get_value_mut();
+                Some(&mut new_entry.value)
             }
         } else {
             None
@@ -235,38 +408,93 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
         K: Clone,
     {
         let object_size = self.estimate_object_size(&key, &value);
+        self.put_with_size(key, value, object_size)
+    }
 
+    /// Insert a key-value pair with explicit size tracking.
+    pub(crate) fn put_with_size(&mut self, key: K, value: V, size: u64) -> Option<(K, V)>
+    where
+        K: Clone,
+    {
         // If key already exists, update it
-        if let Some(&(frequency, node)) = self.map.get(&key) {
+        if let Some(&node) = self.map.get(&key) {
             unsafe {
                 // SAFETY: node comes from our map, so it's a valid pointer to an entry in our frequency list
-                let old_entry = self.frequency_lists.get_mut(&frequency).unwrap().update(
-                    node,
-                    (key.clone(), value),
-                    true,
+                let entry = (*node).get_value();
+                let frequency = entry
+                    .metadata
+                    .as_ref()
+                    .map(|m| m.frequency as usize)
+                    .unwrap_or(1);
+                let old_size = entry.size;
+
+                // Create new CacheEntry with same frequency
+                let new_entry = CacheEntry::with_metadata(
+                    key.clone(),
+                    value,
+                    size,
+                    LfuMeta::new(frequency as u64),
                 );
 
-                self.metrics.core.record_insertion(object_size);
-                return old_entry.0;
+                let old_entry = self
+                    .frequency_lists
+                    .get_mut(&frequency)
+                    .unwrap()
+                    .update(node, new_entry, true);
+
+                // Update size tracking
+                self.current_size = self.current_size.saturating_sub(old_size);
+                self.current_size += size;
+                self.metrics.core.record_insertion(size);
+
+                // Return old key-value pair
+                return old_entry.0.map(|e| (e.key, e.value));
             }
         }
 
         let mut evicted = None;
 
-        // If at capacity, evict the least frequently used item
-        if self.len() >= self.config.capacity().get() {
+        // Evict while entry count limit OR size limit would be exceeded
+        while self.len() >= self.config.capacity.get()
+            || (self.current_size + size > self.config.max_size && !self.map.is_empty())
+        {
             if let Some(min_freq_list) = self.frequency_lists.get_mut(&self.min_frequency) {
                 if let Some(old_entry) = min_freq_list.remove_last() {
                     unsafe {
                         let entry_ptr = Box::into_raw(old_entry);
-                        let (old_key, old_value) = (*entry_ptr).get_value().clone();
-                        let evicted_size = self.estimate_object_size(&old_key, &old_value);
+                        let cache_entry = (*entry_ptr).get_value();
+                        let old_key = cache_entry.key.clone();
+                        let old_value = cache_entry.value.clone();
+                        let evicted_size = cache_entry.size;
+                        self.current_size = self.current_size.saturating_sub(evicted_size);
                         self.metrics.core.record_eviction(evicted_size);
                         self.map.remove(&old_key);
                         evicted = Some((old_key, old_value));
                         let _ = Box::from_raw(entry_ptr);
                     }
+
+                    // Update min_frequency if the list is now empty
+                    if min_freq_list.is_empty() {
+                        let old_min = self.min_frequency;
+                        self.min_frequency = self
+                            .frequency_lists
+                            .keys()
+                            .find(|&&f| {
+                                f > old_min
+                                    && !self
+                                        .frequency_lists
+                                        .get(&f)
+                                        .map(|l| l.is_empty())
+                                        .unwrap_or(true)
+                            })
+                            .copied()
+                            .unwrap_or(1);
+                    }
+                } else {
+                    break; // No more items in this frequency list
                 }
+            } else {
+                break; // No frequency list at min_frequency
             }
         }
 
@@ -275,21 +503,26 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
         self.min_frequency = 1;
 
         // Ensure frequency list exists
-        let capacity = self.config.capacity();
+        let capacity = self.config.capacity;
         self.frequency_lists
             .entry(frequency)
             .or_insert_with(|| List::new(capacity));
+
+        // Create CacheEntry with LfuMeta
+        let cache_entry =
+            CacheEntry::with_metadata(key.clone(), value, size, LfuMeta::new(frequency as u64));
 
         if let Some(node) = self
             .frequency_lists
             .get_mut(&frequency)
             .unwrap()
-            .add((key.clone(), value))
+            .add(cache_entry)
         {
-            self.map.insert(key, (frequency, node));
+            self.map.insert(key, node);
+            self.current_size += size;
         }
 
-        self.metrics.core.record_insertion(object_size);
+        self.metrics.core.record_insertion(size);
         self.metrics.update_frequency_levels(&self.frequency_lists);
 
         evicted
@@ -302,14 +535,23 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
         Q: ?Sized + Hash + Eq,
         V: Clone,
     {
-        let (frequency, node) = self.map.remove(key)?;
+        let node = self.map.remove(key)?;
 
         unsafe {
             // SAFETY: node comes from our map and was just removed
+            let entry = (*node).get_value();
+            let frequency = entry
+                .metadata
+                .as_ref()
+                .map(|m| m.frequency as usize)
+                .unwrap_or(1);
+            let removed_size = entry.size;
+            let value = entry.value.clone();
+
             let boxed_entry = self.frequency_lists.get_mut(&frequency)?.remove(node)?;
-            let entry_ptr = Box::into_raw(boxed_entry);
-            let value = (*entry_ptr).get_value().1.clone();
-            let _ = Box::from_raw(entry_ptr);
+            let _ = Box::from_raw(Box::into_raw(boxed_entry));
+
+            self.current_size = self.current_size.saturating_sub(removed_size);
 
             // Update min_frequency if necessary
             if self.frequency_lists.get(&frequency).unwrap().is_empty()
@@ -332,6 +574,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
         self.map.clear();
         self.frequency_lists.clear();
         self.min_frequency = 1;
+        self.current_size = 0;
     }
 
     /// Records a cache miss for metrics tracking
@@ -345,7 +588,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
 impl<K, V, S> core::fmt::Debug for LfuSegment<K, V, S> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("LfuSegment")
-            .field("capacity", &self.config.capacity())
+            .field("capacity", &self.config.capacity)
             .field("len", &self.map.len())
             .field("min_frequency", &self.min_frequency)
             .finish()
@@ -407,6 +650,13 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
         }
     }
 
+    /// Creates a new LFU cache with the specified capacity, hash builder, and max size.
+    pub fn with_hasher_and_size(cap: NonZeroUsize, hash_builder: S, max_size: u64) -> Self {
+        Self {
+            segment: LfuSegment::with_hasher_and_size(cap, hash_builder, max_size),
+        }
+    }
+
     /// Returns the maximum number of key-value pairs the cache can hold.
     #[inline]
     pub fn cap(&self) -> NonZeroUsize {
@@ -423,6 +673,18 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.segment.is_empty()
+    }
+
+    /// Returns the current total size of cached content.
+    #[inline]
+    pub fn current_size(&self) -> u64 {
+        self.segment.current_size()
+    }
+
+    /// Returns the maximum content size the cache can hold.
+    #[inline]
+    pub fn max_size(&self) -> u64 {
+        self.segment.max_size()
     }
 
     /// Returns a reference to the value corresponding to the key.
@@ -473,6 +735,18 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
         self.segment.put(key, value)
     }
 
+    /// Insert a key-value pair with explicit size tracking.
+    ///
+    /// The `size` parameter specifies how much of `max_size` this entry consumes.
+    /// Use `size=1` for count-based caches.
+    #[inline]
+    pub fn put_with_size(&mut self, key: K, value: V, size: u64) -> Option<(K, V)>
+    where
+        K: Clone,
+    {
+        self.segment.put_with_size(key, value, size)
+    }
+
     /// Removes a key from the cache, returning the value at the key if the key was previously in the cache.
     ///
     /// The key may be any borrowed form of the cache's key type, but
@@ -505,19 +779,124 @@ impl<K: Hash + Eq, V> LfuCache<K, V>
 where
     V: Clone,
 {
-    /// Creates a new LFU cache with the specified capacity.
+    /// Creates a new LFU cache from a configuration.
     ///
-    /// # Examples
+    /// This is the **recommended** way to create an LFU cache. All configuration
+    /// is specified through the [`LfuCacheConfig`] struct.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Configuration specifying capacity and optional size limit
+    /// * `hasher` - Optional custom hash builder (uses default if `None`)
+    ///
+    /// # Example
     ///
     /// ```
-    /// use cache_rs::lfu::LfuCache;
+    /// use cache_rs::LfuCache;
+    /// use cache_rs::config::LfuCacheConfig;
     /// use core::num::NonZeroUsize;
     ///
-    /// let cache: LfuCache<&str, u32> = LfuCache::new(NonZeroUsize::new(10).unwrap());
+    /// // Simple capacity-only cache
+    /// let config = LfuCacheConfig {
+    ///     capacity: NonZeroUsize::new(100).unwrap(),
+    ///     max_size: u64::MAX,
+    /// };
+    /// let mut cache: LfuCache<&str, i32> = LfuCache::init(config, None);
+    /// cache.put("key", 42);
+    ///
+    /// // Cache with size limit
+    /// let config = LfuCacheConfig {
+    ///     capacity: NonZeroUsize::new(1000).unwrap(),
+    ///     max_size: 10 * 1024 * 1024,  // 10MB
+    /// };
+    /// let cache: LfuCache<String, Vec<u8>> = LfuCache::init(config, None);
+    /// ```
+    pub fn init(
+        config: LfuCacheConfig,
+        hasher: Option<DefaultHashBuilder>,
+    ) -> LfuCache<K, V, DefaultHashBuilder> {
+        LfuCache::with_hasher_and_size(config.capacity, hasher.unwrap_or_default(), config.max_size)
+    }
+
+    /// Creates a new LFU cache with the specified capacity.
+    ///
+    /// This is a convenience constructor that creates a cache with only a capacity limit.
+    /// For more control, use [`LfuCache::init`] with an [`LfuCacheConfig`].
+    ///
+    /// # Arguments
+    ///
+    /// * `cap` - The maximum number of entries the cache can hold.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::LfuCache;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let mut cache = LfuCache::new(NonZeroUsize::new(100).unwrap());
+    /// cache.put("key", 42);
     /// ```
     pub fn new(cap: NonZeroUsize) -> LfuCache<K, V, DefaultHashBuilder> {
-        let config = LfuCacheConfig::new(cap);
-        LfuCache::with_hasher(config.capacity(), DefaultHashBuilder::default())
+        LfuCache::init(
+            LfuCacheConfig {
+                capacity: cap,
+                max_size: u64::MAX,
+            },
+            None,
+        )
+    }
+
+    /// Creates a new LFU cache with both entry count and size limits.
+    ///
+    /// This is a convenience constructor. For more control, use [`LfuCache::init`].
+    ///
+    /// # Arguments
+    ///
+    /// * `cap` - The maximum number of entries the cache can hold.
+    /// * `max_size` - The maximum total size in bytes (0 means unlimited).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::LfuCache;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// // Cache with 1000 entries and 10MB size limit
+    /// let mut cache: LfuCache<String, Vec<u8>> = LfuCache::with_limits(
+    ///     NonZeroUsize::new(1000).unwrap(),
+    ///     10 * 1024 * 1024,
+    /// );
+    /// ```
+    pub fn with_limits(cap: NonZeroUsize, max_size: u64) -> LfuCache<K, V, DefaultHashBuilder> {
+        LfuCache::init(
+            LfuCacheConfig {
+                capacity: cap,
+                max_size,
+            },
+            None,
+        )
+    }
+
+    /// Creates a new LFU cache with only a size limit.
+    ///
+    /// This is a convenience constructor that creates a cache limited by total size
+    /// with a very high entry count limit.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_size` - The maximum total size in bytes.
+    pub fn with_max_size(max_size: u64) -> LfuCache<K, V, DefaultHashBuilder> {
+        // Use a reasonable default capacity for size-based caches.
+        // The HashMap will grow dynamically as needed, so we don't need
+        // to pre-allocate for billions of entries.
+        const DEFAULT_SIZE_BASED_CAPACITY: usize = 16384;
+        LfuCache::init(
+            LfuCacheConfig {
+                capacity: NonZeroUsize::new(DEFAULT_SIZE_BASED_CAPACITY).unwrap(),
+                max_size,
+            },
+            None,
+        )
     }
 }
 
@@ -785,5 +1164,46 @@ mod tests {
         let mut guard = cache.lock().unwrap();
         assert!(guard.len() <= 100);
         guard.clear(); // Clean up for MIRI
+    }
+
+    #[test]
+    fn test_lfu_size_aware_tracking() {
+        let mut cache = LfuCache::new(NonZeroUsize::new(10).unwrap());
+
+        assert_eq!(cache.current_size(), 0);
+        assert_eq!(cache.max_size(), u64::MAX);
+
+        cache.put_with_size("a", 1, 100);
+        cache.put_with_size("b", 2, 200);
+        cache.put_with_size("c", 3, 150);
+
+        assert_eq!(cache.current_size(), 450);
+        assert_eq!(cache.len(), 3);
+
+        // Clear should reset size
+        cache.clear();
+        assert_eq!(cache.current_size(), 0);
+    }
+
+    #[test]
+    fn test_lfu_init_constructor() {
+        let config = LfuCacheConfig {
+            capacity: NonZeroUsize::new(1000).unwrap(),
+            max_size: 1024 * 1024,
+        };
+        let cache: LfuCache<String, i32> = LfuCache::init(config, None);
+
+        assert_eq!(cache.current_size(), 0);
+        assert_eq!(cache.max_size(), 1024 * 1024);
+    }
+
+    #[test]
+    fn test_lfu_with_limits_constructor() {
+        let cache: LfuCache<String, String> =
+            LfuCache::with_limits(NonZeroUsize::new(100).unwrap(), 1024 * 1024);
+
+        assert_eq!(cache.current_size(), 0);
+        assert_eq!(cache.max_size(), 1024 * 1024);
+        assert_eq!(cache.cap().get(), 100);
     }
 }

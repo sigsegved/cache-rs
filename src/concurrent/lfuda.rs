@@ -1,7 +1,7 @@
 //! Concurrent LFUDA Cache Implementation
 //!
-//! Provides a thread-safe LFUDA cache using segmented storage for high-performance
-//! multi-threaded access. This is the concurrent equivalent of [`LfudaCache`][crate::LfudaCache].
+//! A thread-safe LFUDA cache using lock striping (segmented storage) for high-performance
+//! concurrent access. This is the multi-threaded counterpart to [`LfudaCache`](crate::LfudaCache).
 //!
 //! # How It Works
 //!
@@ -10,23 +10,111 @@
 //! priority. Newly inserted items start with priority = age + 1, giving them a fair
 //! chance against long-cached items with high frequency counts.
 //!
+//! The cache partitions keys across multiple independent segments, each with its own
+//! lock and independent aging state.
+//!
+//! ```text
+//! ┌──────────────────────────────────────────────────────────────────────┐
+//! │                     ConcurrentLfudaCache                             │
+//! │                                                                      │
+//! │  hash(key) % N  ──>  Segment Selection                               │
+//! │                                                                      │
+//! │  ┌──────────────┐ ┌──────────────┐     ┌──────────────┐              │
+//! │  │  Segment 0   │ │  Segment 1   │ ... │  Segment N-1 │              │
+//! │  │  age=100     │ │  age=150     │     │  age=120     │              │
+//! │  │  ┌────────┐  │ │  ┌────────┐  │     │  ┌────────┐  │              │
+//! │  │  │ Mutex  │  │ │  │ Mutex  │  │     │  │ Mutex  │  │              │
+//! │  │  └────┬───┘  │ │  └────┬───┘  │     │  └────┬───┘  │              │
+//! │  │       │      │ │       │      │     │       │      │              │
+//! │  │  ┌────▼────┐ │ │  ┌────▼────┐ │     │  ┌────▼────┐ │              │
+//! │  │  │LfudaSeg │ │ │  │LfudaSeg │ │     │  │LfudaSeg │ │              │
+//! │  │  └─────────┘ │ │  └─────────┘ │     │  └─────────┘ │              │
+//! │  └──────────────┘ └──────────────┘     └──────────────┘              │
+//! └──────────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! ## Per-Segment Aging
+//!
+//! Each segment maintains its own global age counter. This means:
+//! - Aging happens independently in each segment
+//! - High-activity segments may age faster than low-activity ones
+//! - Items in different segments are not directly comparable by priority
+//!
+//! This is a deliberate trade-off: global aging would require cross-segment
+//! coordination, hurting concurrency.
+//!
+//! ## Trade-offs
+//!
+//! - **Pros**: Near-linear scaling, adapts to changing popularity per segment
+//! - **Cons**: Aging is local to each segment, not global
+//!
 //! # Performance Characteristics
 //!
-//! - **Time Complexity**: O(1) average for get, put, remove
-//! - **Adaptive**: Handles changing popularity patterns better than LFU
-//! - **Concurrency**: Near-linear scaling up to segment count
+//! | Metric | Value |
+//! |--------|-------|
+//! | Get/Put/Remove | O(1) average |
+//! | Concurrency | Near-linear scaling up to segment count |
+//! | Memory overhead | ~160 bytes per entry + one Mutex per segment |
+//! | Adaptability | Handles changing popularity patterns |
 //!
 //! # When to Use
 //!
-//! Use `ConcurrentLfudaCache` when:
+//! **Use ConcurrentLfudaCache when:**
+//! - Multiple threads need cache access
 //! - Item popularity changes over time
-//! - Long-running applications where old frequently-used items should eventually age out
+//! - Long-running applications where old items should eventually age out
 //! - You need frequency-based eviction with adaptation
+//!
+//! **Consider alternatives when:**
+//! - Single-threaded access only → use `LfudaCache`
+//! - Static popularity patterns → use `ConcurrentLfuCache` (simpler)
+//! - Recency-based access → use `ConcurrentLruCache`
+//! - Need global aging coordination → use `Mutex<LfudaCache>`
 //!
 //! # Thread Safety
 //!
-//! `ConcurrentLfudaCache` implements `Send` and `Sync` and can be safely shared
-//! across threads via `Arc`.
+//! `ConcurrentLfudaCache` is `Send + Sync` and can be shared via `Arc`.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use cache_rs::concurrent::ConcurrentLfudaCache;
+//! use cache_rs::config::ConcurrentLfudaCacheConfig;
+//! use std::num::NonZeroUsize;
+//! use std::sync::Arc;
+//! use std::thread;
+//!
+//! // Create a cache that adapts to changing popularity
+//! let config = ConcurrentLfudaCacheConfig::new(NonZeroUsize::new(10_000).unwrap());
+//! let cache = Arc::new(ConcurrentLfudaCache::init(config, None));
+//!
+//! // Phase 1: Establish initial popularity
+//! for i in 0..1000 {
+//!     cache.put(format!("old-{}", i), i);
+//!     for _ in 0..10 {
+//!         cache.get(&format!("old-{}", i));
+//!     }
+//! }
+//!
+//! // Phase 2: New content arrives, old content ages out
+//! let handles: Vec<_> = (0..4).map(|t| {
+//!     let cache = Arc::clone(&cache);
+//!     thread::spawn(move || {
+//!         for i in 0..5000 {
+//!             let key = format!("new-{}-{}", t, i);
+//!             cache.put(key.clone(), i as i32);
+//!             let _ = cache.get(&key);
+//!         }
+//!     })
+//! }).collect();
+//!
+//! for h in handles {
+//!     h.join().unwrap();
+//! }
+//!
+//! // Old items gradually evicted despite high historical frequency
+//! println!("Cache size: {}", cache.len());
+//! ```
 
 extern crate alloc;
 
@@ -42,12 +130,10 @@ use core::num::NonZeroUsize;
 use parking_lot::Mutex;
 
 #[cfg(feature = "hashbrown")]
-use hashbrown::hash_map::DefaultHashBuilder;
+use hashbrown::DefaultHashBuilder;
 
 #[cfg(not(feature = "hashbrown"))]
 use std::collections::hash_map::RandomState as DefaultHashBuilder;
-
-use super::default_segment_count;
 
 /// A thread-safe LFUDA cache with segmented storage for high concurrency.
 pub struct ConcurrentLfudaCache<K, V, S = DefaultHashBuilder> {
@@ -60,14 +146,42 @@ where
     K: Hash + Eq + Clone + Send,
     V: Clone + Send,
 {
-    /// Creates a new concurrent LFUDA cache with the specified total capacity.
-    pub fn new(capacity: NonZeroUsize) -> Self {
-        Self::with_segments(capacity, default_segment_count())
-    }
+    /// Creates a new concurrent LFUDA cache from a configuration.
+    ///
+    /// This is the **recommended** way to create a concurrent LFUDA cache.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The cache configuration specifying capacity, segments, etc.
+    /// * `hasher` - Optional custom hash builder. If `None`, uses the default.
+    pub fn init(
+        config: crate::config::ConcurrentLfudaCacheConfig,
+        hasher: Option<DefaultHashBuilder>,
+    ) -> Self {
+        let segment_count = config.segments;
+        let capacity = config.base.capacity;
+        let max_size = config.base.max_size;
 
-    /// Creates a new concurrent LFUDA cache with custom segment count.
-    pub fn with_segments(capacity: NonZeroUsize, segment_count: usize) -> Self {
-        Self::with_segments_and_hasher(capacity, segment_count, DefaultHashBuilder::default())
+        let hash_builder = hasher.unwrap_or_default();
+
+        let segment_capacity = capacity.get() / segment_count;
+        let segment_cap = NonZeroUsize::new(segment_capacity.max(1)).unwrap();
+        let segment_max_size = max_size / segment_count as u64;
+
+        let segments: Vec<_> = (0..segment_count)
+            .map(|_| {
+                Mutex::new(LfudaSegment::with_hasher_and_size(
+                    segment_cap,
+                    hash_builder.clone(),
+                    segment_max_size,
+                ))
+            })
+            .collect();
+
+        Self {
+            segments: segments.into_boxed_slice(),
+            hash_builder,
+        }
     }
 }
 
@@ -77,23 +191,30 @@ where
     V: Clone + Send,
     S: BuildHasher + Clone + Send,
 {
-    /// Creates a new concurrent LFUDA cache with custom hasher.
-    pub fn with_segments_and_hasher(
-        capacity: NonZeroUsize,
-        segment_count: usize,
+    /// Creates a concurrent LFUDA cache with a custom hash builder.
+    ///
+    /// Use this method when you need a specific hash builder type that differs
+    /// from the default.
+    pub fn init_with_hasher(
+        config: crate::config::ConcurrentLfudaCacheConfig,
         hash_builder: S,
     ) -> Self {
-        assert!(segment_count > 0, "segment_count must be greater than 0");
-        assert!(
-            capacity.get() >= segment_count,
-            "capacity must be >= segment_count"
-        );
+        let segment_count = config.segments;
+        let capacity = config.base.capacity;
+        let max_size = config.base.max_size;
 
         let segment_capacity = capacity.get() / segment_count;
         let segment_cap = NonZeroUsize::new(segment_capacity.max(1)).unwrap();
+        let segment_max_size = max_size / segment_count as u64;
 
         let segments: Vec<_> = (0..segment_count)
-            .map(|_| Mutex::new(LfudaSegment::with_hasher(segment_cap, hash_builder.clone())))
+            .map(|_| {
+                Mutex::new(LfudaSegment::with_hasher_and_size(
+                    segment_cap,
+                    hash_builder.clone(),
+                    segment_max_size,
+                ))
+            })
             .collect();
 
         Self {
@@ -182,6 +303,13 @@ where
         segment.put(key, value)
     }
 
+    /// Inserts a key-value pair with explicit size tracking.
+    pub fn put_with_size(&self, key: K, value: V, size: u64) -> Option<(K, V)> {
+        let idx = self.segment_index(&key);
+        let mut segment = self.segments[idx].lock();
+        segment.put_with_size(key, value, size)
+    }
+
     /// Removes a key from the cache, returning the value if it existed.
     pub fn remove<Q>(&self, key: &Q) -> Option<V>
     where
@@ -209,6 +337,16 @@ where
         for segment in self.segments.iter() {
             segment.lock().clear();
         }
+    }
+
+    /// Returns the current total size of cached content across all segments.
+    pub fn current_size(&self) -> u64 {
+        self.segments.iter().map(|s| s.lock().current_size()).sum()
+    }
+
+    /// Returns the maximum content size the cache can hold across all segments.
+    pub fn max_size(&self) -> u64 {
+        self.segments.iter().map(|s| s.lock().max_size()).sum()
     }
 }
 
@@ -254,6 +392,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{ConcurrentCacheConfig, ConcurrentLfudaCacheConfig, LfudaCacheConfig};
 
     extern crate std;
     use std::string::ToString;
@@ -261,10 +400,21 @@ mod tests {
     use std::thread;
     use std::vec::Vec;
 
+    fn make_config(capacity: usize, segments: usize) -> ConcurrentLfudaCacheConfig {
+        ConcurrentCacheConfig {
+            base: LfudaCacheConfig {
+                capacity: NonZeroUsize::new(capacity).unwrap(),
+                initial_age: 0,
+                max_size: u64::MAX,
+            },
+            segments,
+        }
+    }
+
     #[test]
     fn test_basic_operations() {
         let cache: ConcurrentLfudaCache<String, i32> =
-            ConcurrentLfudaCache::new(NonZeroUsize::new(100).unwrap());
+            ConcurrentLfudaCache::init(make_config(100, 16), None);
 
         cache.put("a".to_string(), 1);
         cache.put("b".to_string(), 2);
@@ -276,7 +426,7 @@ mod tests {
     #[test]
     fn test_concurrent_access() {
         let cache: Arc<ConcurrentLfudaCache<String, i32>> =
-            Arc::new(ConcurrentLfudaCache::new(NonZeroUsize::new(1000).unwrap()));
+            Arc::new(ConcurrentLfudaCache::init(make_config(1000, 16), None));
         let num_threads = 8;
         let ops_per_thread = 500;
 
@@ -303,7 +453,7 @@ mod tests {
     #[test]
     fn test_capacity() {
         let cache: ConcurrentLfudaCache<String, i32> =
-            ConcurrentLfudaCache::new(NonZeroUsize::new(100).unwrap());
+            ConcurrentLfudaCache::init(make_config(100, 16), None);
 
         // Capacity is distributed across segments
         let capacity = cache.capacity();
@@ -314,7 +464,7 @@ mod tests {
     #[test]
     fn test_segment_count() {
         let cache: ConcurrentLfudaCache<String, i32> =
-            ConcurrentLfudaCache::with_segments(NonZeroUsize::new(100).unwrap(), 8);
+            ConcurrentLfudaCache::init(make_config(100, 8), None);
 
         assert_eq!(cache.segment_count(), 8);
     }
@@ -322,7 +472,7 @@ mod tests {
     #[test]
     fn test_len_and_is_empty() {
         let cache: ConcurrentLfudaCache<String, i32> =
-            ConcurrentLfudaCache::new(NonZeroUsize::new(100).unwrap());
+            ConcurrentLfudaCache::init(make_config(100, 16), None);
 
         assert!(cache.is_empty());
         assert_eq!(cache.len(), 0);
@@ -338,7 +488,7 @@ mod tests {
     #[test]
     fn test_remove() {
         let cache: ConcurrentLfudaCache<String, i32> =
-            ConcurrentLfudaCache::new(NonZeroUsize::new(100).unwrap());
+            ConcurrentLfudaCache::init(make_config(100, 16), None);
 
         cache.put("key1".to_string(), 1);
         cache.put("key2".to_string(), 2);
@@ -353,7 +503,7 @@ mod tests {
     #[test]
     fn test_clear() {
         let cache: ConcurrentLfudaCache<String, i32> =
-            ConcurrentLfudaCache::new(NonZeroUsize::new(100).unwrap());
+            ConcurrentLfudaCache::init(make_config(100, 16), None);
 
         cache.put("key1".to_string(), 1);
         cache.put("key2".to_string(), 2);
@@ -371,7 +521,7 @@ mod tests {
     #[test]
     fn test_contains_key() {
         let cache: ConcurrentLfudaCache<String, i32> =
-            ConcurrentLfudaCache::new(NonZeroUsize::new(100).unwrap());
+            ConcurrentLfudaCache::init(make_config(100, 16), None);
 
         cache.put("exists".to_string(), 1);
 
@@ -382,7 +532,7 @@ mod tests {
     #[test]
     fn test_get_with() {
         let cache: ConcurrentLfudaCache<String, String> =
-            ConcurrentLfudaCache::new(NonZeroUsize::new(100).unwrap());
+            ConcurrentLfudaCache::init(make_config(100, 16), None);
 
         cache.put("key".to_string(), "hello world".to_string());
 
@@ -396,7 +546,7 @@ mod tests {
     #[test]
     fn test_aging_behavior() {
         let cache: ConcurrentLfudaCache<String, i32> =
-            ConcurrentLfudaCache::with_segments(NonZeroUsize::new(48).unwrap(), 16);
+            ConcurrentLfudaCache::init(make_config(48, 16), None);
 
         cache.put("a".to_string(), 1);
         cache.put("b".to_string(), 2);
@@ -417,7 +567,7 @@ mod tests {
     #[test]
     fn test_eviction_on_capacity() {
         let cache: ConcurrentLfudaCache<String, i32> =
-            ConcurrentLfudaCache::with_segments(NonZeroUsize::new(80).unwrap(), 16);
+            ConcurrentLfudaCache::init(make_config(80, 16), None);
 
         // Fill the cache
         for i in 0..10 {
@@ -431,7 +581,7 @@ mod tests {
     #[test]
     fn test_metrics() {
         let cache: ConcurrentLfudaCache<String, i32> =
-            ConcurrentLfudaCache::new(NonZeroUsize::new(100).unwrap());
+            ConcurrentLfudaCache::init(make_config(100, 16), None);
 
         cache.put("a".to_string(), 1);
         cache.put("b".to_string(), 2);
@@ -444,7 +594,7 @@ mod tests {
     #[test]
     fn test_algorithm_name() {
         let cache: ConcurrentLfudaCache<String, i32> =
-            ConcurrentLfudaCache::new(NonZeroUsize::new(100).unwrap());
+            ConcurrentLfudaCache::init(make_config(100, 16), None);
 
         assert_eq!(cache.algorithm_name(), "ConcurrentLFUDA");
     }
@@ -452,7 +602,7 @@ mod tests {
     #[test]
     fn test_empty_cache_operations() {
         let cache: ConcurrentLfudaCache<String, i32> =
-            ConcurrentLfudaCache::new(NonZeroUsize::new(100).unwrap());
+            ConcurrentLfudaCache::init(make_config(100, 16), None);
 
         assert!(cache.is_empty());
         assert_eq!(cache.len(), 0);
@@ -462,14 +612,11 @@ mod tests {
     }
 
     #[test]
-    fn test_with_segments_and_hasher() {
+    fn test_init_with_hasher() {
         let hasher = DefaultHashBuilder::default();
-        let cache: ConcurrentLfudaCache<String, i32> =
-            ConcurrentLfudaCache::with_segments_and_hasher(
-                NonZeroUsize::new(100).unwrap(),
-                4,
-                hasher,
-            );
+        let config = make_config(100, 4);
+        let cache: ConcurrentLfudaCache<String, i32, _> =
+            ConcurrentLfudaCache::init_with_hasher(config, hasher);
 
         cache.put("test".to_string(), 42);
         assert_eq!(cache.get(&"test".to_string()), Some(42));
@@ -479,7 +626,7 @@ mod tests {
     #[test]
     fn test_borrowed_key_lookup() {
         let cache: ConcurrentLfudaCache<String, i32> =
-            ConcurrentLfudaCache::new(NonZeroUsize::new(100).unwrap());
+            ConcurrentLfudaCache::init(make_config(100, 16), None);
 
         cache.put("test_key".to_string(), 42);
 
@@ -493,7 +640,7 @@ mod tests {
     #[test]
     fn test_frequency_with_aging() {
         let cache: ConcurrentLfudaCache<String, i32> =
-            ConcurrentLfudaCache::new(NonZeroUsize::new(100).unwrap());
+            ConcurrentLfudaCache::init(make_config(100, 16), None);
 
         cache.put("key".to_string(), 1);
 
@@ -509,7 +656,7 @@ mod tests {
     #[test]
     fn test_dynamic_aging() {
         let cache: ConcurrentLfudaCache<String, i32> =
-            ConcurrentLfudaCache::with_segments(NonZeroUsize::new(80).unwrap(), 16);
+            ConcurrentLfudaCache::init(make_config(80, 16), None);
 
         // Add items with different access patterns
         for i in 0..5 {

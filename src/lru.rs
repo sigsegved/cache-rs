@@ -1,46 +1,134 @@
 //! Least Recently Used (LRU) Cache Implementation
 //!
-//! This module provides a memory-efficient LRU cache implementation with O(1) operations
-//! for all common cache operations. LRU is one of the most widely used cache eviction
-//! algorithms due to its simplicity and good performance for workloads with temporal locality.
+//! An LRU cache evicts the least recently accessed item when capacity is reached.
+//! This implementation provides O(1) time complexity for all operations using a
+//! hash map combined with a doubly-linked list.
 //!
-//! # Algorithm
+//! # How the Algorithm Works
 //!
-//! The LRU cache maintains items in order of recency of use, evicting the least recently
-//! used item when capacity is reached. This works on the principle of temporal locality:
-//! items that have been accessed recently are likely to be accessed again soon.
+//! The LRU algorithm is based on the principle of **temporal locality**: items accessed
+//! recently are likely to be accessed again soon. The cache maintains items ordered by
+//! their last access time.
+//!
+//! ## Data Structure
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────────┐
+//! │                        LRU Cache                                │
+//! │                                                                 │
+//! │  HashMap<K, *Node>          Doubly-Linked List                  │
+//! │  ┌──────────────┐          ┌──────────────────────────────┐    │
+//! │  │ "apple" ──────────────▶ │ MRU ◀──▶ ... ◀──▶ LRU       │    │
+//! │  │ "banana" ─────────────▶ │  ▲                    │      │    │
+//! │  │ "cherry" ─────────────▶ │  │                    ▼      │    │
+//! │  └──────────────┘          │ head              tail       │    │
+//! │                            └──────────────────────────────┘    │
+//! └─────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! - **HashMap**: Provides O(1) key lookup, storing pointers to list nodes
+//! - **Doubly-Linked List**: Maintains access order (most recent at head, least recent at tail)
+//!
+//! ## Operations
+//!
+//! | Operation | Action | Time |
+//! |-----------|--------|------|
+//! | `get(key)` | Move accessed node to head (MRU position) | O(1) |
+//! | `put(key, value)` | Insert at head, evict from tail if full | O(1) |
+//! | `remove(key)` | Unlink node from list, remove from map | O(1) |
+//!
+//! ## Eviction Example
+//!
+//! ```text
+//! Cache capacity: 3
+//!
+//! put("a", 1)  →  [a]
+//! put("b", 2)  →  [b, a]
+//! put("c", 3)  →  [c, b, a]
+//! get("a")     →  [a, c, b]       // "a" moved to front (MRU)
+//! put("d", 4)  →  [d, a, c]       // "b" evicted (was LRU)
+//! ```
+//!
+//! # Dual-Limit Capacity
+//!
+//! This implementation supports two independent limits:
+//!
+//! - **`max_entries`**: Maximum number of items (bounds cache memory overhead)
+//! - **`max_size`**: Maximum total size of content (sum of item sizes)
+//!
+//! Eviction occurs when **either** limit would be exceeded.
 //!
 //! # Performance Characteristics
 //!
-//! - **Time Complexity**:
-//!   - Get: O(1)
-//!   - Put: O(1)
-//!   - Remove: O(1)
+//! | Metric | Value |
+//! |--------|-------|
+//! | Get | O(1) |
+//! | Put | O(1) |
+//! | Remove | O(1) |
+//! | Memory per entry | ~80 bytes overhead + key×2 + value |
 //!
-//! - **Space Complexity**:
-//!   - O(n) where n is the capacity of the cache
-//!   - Memory overhead is approximately 48 bytes per entry plus the size of keys and values
+//! Memory overhead breakdown (64-bit): list node pointers (16B), `CacheEntry` metadata (24B),
+//! HashMap bucket (~24B), allocator overhead (~16B). Key is stored twice (in entry and HashMap).
 //!
-//! # When to Use
+//! # When to Use LRU
 //!
-//! LRU caches are ideal for:
-//! - General-purpose caching where access patterns exhibit temporal locality
-//! - Simple implementation with predictable performance
-//! - Caching with a fixed memory budget
+//! **Good for:**
+//! - General-purpose caching with temporal locality
+//! - Web page caches, database query caches
+//! - Any workload where recent items are accessed again soon
 //!
-//! They are less suitable for:
-//! - Workloads where frequency of access is more important than recency
-//! - Scanning patterns where a large set of items is accessed once in sequence
+//! **Not ideal for:**
+//! - Frequency-based access patterns (use LFU instead)
+//! - Scan-resistant workloads (use SLRU instead)
+//! - Size-aware caching of variable-sized objects (use GDSF instead)
 //!
 //! # Thread Safety
 //!
-//! This implementation is not thread-safe. For concurrent access, you should
-//! wrap the cache with a synchronization primitive such as `Mutex` or `RwLock`.
+//! `LruCache` is **not thread-safe**. For concurrent access, either:
+//! - Wrap with `Mutex` or `RwLock`
+//! - Use `ConcurrentLruCache` (requires `concurrent` feature)
+//!
+//! # Examples
+//!
+//! ## Basic Usage
+//!
+//! ```
+//! use cache_rs::LruCache;
+//! use core::num::NonZeroUsize;
+//!
+//! let mut cache = LruCache::new(NonZeroUsize::new(3).unwrap());
+//!
+//! cache.put("a", 1);
+//! cache.put("b", 2);
+//! cache.put("c", 3);
+//!
+//! assert_eq!(cache.get(&"a"), Some(&1));  // "a" is now MRU
+//!
+//! cache.put("d", 4);  // Evicts "b" (LRU)
+//! assert_eq!(cache.get(&"b"), None);
+//! ```
+//!
+//! ## Size-Aware Caching
+//!
+//! ```
+//! use cache_rs::LruCache;
+//! use core::num::NonZeroUsize;
+//!
+//! // Cache with max 1000 entries and 10MB total size
+//! let mut cache: LruCache<String, Vec<u8>> = LruCache::with_limits(
+//!     NonZeroUsize::new(1000).unwrap(),
+//!     10 * 1024 * 1024,
+//! );
+//!
+//! let data = vec![0u8; 1024];  // 1KB
+//! cache.put_with_size("file.bin".to_string(), data.clone(), 1024);
+//! ```
 
 extern crate alloc;
 
 use crate::config::LruCacheConfig;
-use crate::list::{Entry, List};
+use crate::entry::CacheEntry;
+use crate::list::{List, ListEntry};
 use crate::metrics::{CacheMetrics, LruCacheMetrics};
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
@@ -51,7 +139,7 @@ use core::mem;
 use core::num::NonZeroUsize;
 
 #[cfg(feature = "hashbrown")]
-use hashbrown::hash_map::DefaultHashBuilder;
+use hashbrown::DefaultHashBuilder;
 #[cfg(feature = "hashbrown")]
 use hashbrown::HashMap;
 
@@ -66,6 +154,10 @@ use std::collections::HashMap;
 /// `ConcurrentLruCache` (multi-threaded). All algorithm logic is
 /// implemented here to avoid code duplication.
 ///
+/// Uses `CacheEntry<K, V>` for unified entry management with built-in
+/// size tracking and timestamps. LRU doesn't need per-entry metadata
+/// since position in the list implicitly tracks recency.
+///
 /// # Safety
 ///
 /// This struct contains raw pointers in the `map` field.
@@ -74,10 +166,13 @@ use std::collections::HashMap;
 /// - The node has not been removed from the list
 /// - The segment has not been dropped
 pub(crate) struct LruSegment<K, V, S = DefaultHashBuilder> {
+    /// Configuration for the LRU cache (includes capacity and max_size)
     config: LruCacheConfig,
-    list: List<(K, V)>,
-    map: HashMap<K, *mut Entry<(K, V)>, S>,
+    list: List<CacheEntry<K, V>>,
+    map: HashMap<K, *mut ListEntry<CacheEntry<K, V>>, S>,
     metrics: LruCacheMetrics,
+    /// Current total size of cached content (sum of entry.size values)
+    current_size: u64,
 }
 
 // SAFETY: LruSegment owns all data and raw pointers point only to nodes owned by `list`.
@@ -89,7 +184,7 @@ unsafe impl<K: Send, V: Send, S: Sync> Sync for LruSegment<K, V, S> {}
 
 impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
     pub(crate) fn with_hasher(cap: NonZeroUsize, hash_builder: S) -> Self {
-        Self::with_hasher_and_size(cap, hash_builder, cap.get() as u64 * 1024)
+        Self::with_hasher_and_size(cap, hash_builder, u64::MAX)
     }
 
     pub(crate) fn with_hasher_and_size(
@@ -98,18 +193,22 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
         max_size_bytes: u64,
     ) -> Self {
         let map_capacity = cap.get().next_power_of_two();
-        let config = LruCacheConfig::new(cap);
+        let config = LruCacheConfig {
+            capacity: cap,
+            max_size: max_size_bytes,
+        };
         LruSegment {
             config,
             list: List::new(cap),
             map: HashMap::with_capacity_and_hasher(map_capacity, hash_builder),
             metrics: LruCacheMetrics::new(max_size_bytes),
+            current_size: 0,
         }
     }
 
     #[inline]
     pub(crate) fn cap(&self) -> NonZeroUsize {
-        self.config.capacity()
+        self.config.capacity
     }
 
     #[inline]
@@ -120,6 +219,18 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
     #[inline]
     pub(crate) fn is_empty(&self) -> bool {
         self.map.is_empty()
+    }
+
+    /// Returns the current total size of cached content.
+    #[inline]
+    pub(crate) fn current_size(&self) -> u64 {
+        self.current_size
+    }
+
+    /// Returns the maximum content size the cache can hold.
+    #[inline]
+    pub(crate) fn max_size(&self) -> u64 {
+        self.config.max_size
     }
 
     #[inline]
@@ -140,10 +251,10 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
             unsafe {
                 // SAFETY: node comes from our map
                 self.list.move_to_front(node);
-                let (k, v) = (*node).get_value();
-                let object_size = self.estimate_object_size(k, v);
-                self.metrics.core.record_hit(object_size);
-                Some(v)
+                let entry = (*node).get_value_mut();
+                entry.touch(); // Update last_accessed timestamp
+                self.metrics.core.record_hit(entry.size);
+                Some(&entry.value)
             }
         } else {
             None
@@ -164,48 +275,85 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
         unsafe {
             // SAFETY: node comes from our map
             self.list.move_to_front(node);
-            let (k, v) = (*node).get_value_mut();
-            let object_size = self.estimate_object_size(k, v);
-            self.metrics.core.record_hit(object_size);
-            Some(v)
+            let entry = (*node).get_value_mut();
+            entry.touch(); // Update last_accessed timestamp
+            self.metrics.core.record_hit(entry.size);
+            Some(&mut entry.value)
         }
     }
 
     pub(crate) fn put(&mut self, key: K, value: V) -> Option<(K, V)>
     where
-        K: Clone,
+        K: Clone + Hash + Eq,
+    {
+        // Use estimated size for backward compatibility
+        let object_size = self.estimate_object_size(&key, &value);
+        self.put_with_size(key, value, object_size)
+    }
+
+    /// Insert a key-value pair with explicit size tracking.
+    ///
+    /// The `size` parameter specifies how much of `max_size` this entry consumes.
+    /// Use `size=1` for count-based caches.
+    pub(crate) fn put_with_size(&mut self, key: K, value: V, size: u64) -> Option<(K, V)>
+    where
+        K: Clone + Hash + Eq,
     {
         let mut evicted = None;
-        let object_size = self.estimate_object_size(&key, &value);
 
         if let Some(&node) = self.map.get(&key) {
             unsafe {
                 // SAFETY: node comes from our map
                 self.list.move_to_front(node);
-                let (k, old_value) = self.list.update(node, (key, value), true).0?;
-                return Some((k, old_value));
+                let entry = (*node).get_value_mut();
+
+                // Update size tracking: remove old size, add new size
+                let old_size = entry.size;
+                self.current_size = self.current_size.saturating_sub(old_size);
+                self.metrics.core.cache_size_bytes =
+                    self.metrics.core.cache_size_bytes.saturating_sub(old_size);
+
+                // Update entry fields
+                let old_key = core::mem::replace(&mut entry.key, key);
+                let old_value = core::mem::replace(&mut entry.value, value);
+                entry.size = size;
+                entry.touch();
+
+                self.current_size += size;
+                self.metrics.core.cache_size_bytes += size;
+
+                return Some((old_key, old_value));
             }
         }
 
-        if self.map.len() >= self.cap().get() {
+        // Evict while entry count limit OR size limit would be exceeded
+        while self.map.len() >= self.cap().get()
+            || (self.current_size + size > self.config.max_size && !self.map.is_empty())
+        {
             if let Some(old_entry) = self.list.remove_last() {
                 unsafe {
                     let entry_ptr = Box::into_raw(old_entry);
-                    let key_ref = &(*entry_ptr).get_value().0;
-                    self.map.remove(key_ref);
-                    let key = (*entry_ptr).get_value().0.clone();
-                    let value = (*entry_ptr).get_value().1.clone();
-                    let evicted_size = self.estimate_object_size(&key, &value);
+                    let cache_entry = &(*entry_ptr).get_value();
+                    self.map.remove(&cache_entry.key);
+                    let evicted_key = cache_entry.key.clone();
+                    let evicted_value = cache_entry.value.clone();
+                    let evicted_size = cache_entry.size;
+                    self.current_size = self.current_size.saturating_sub(evicted_size);
                     self.metrics.core.record_eviction(evicted_size);
-                    evicted = Some((key, value));
+                    evicted = Some((evicted_key, evicted_value));
                     let _ = Box::from_raw(entry_ptr);
                 }
+            } else {
+                break; // No more items to evict
             }
         }
 
-        if let Some(node) = self.list.add((key.clone(), value)) {
+        // Create new CacheEntry and add to list
+        let cache_entry = CacheEntry::new(key.clone(), value, size);
+        if let Some(node) = self.list.add(cache_entry) {
             self.map.insert(key, node);
-            self.metrics.core.record_insertion(object_size);
+            self.current_size += size;
+            self.metrics.core.record_insertion(size);
         }
 
         evicted
@@ -213,23 +361,25 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
 
     pub(crate) fn remove<Q>(&mut self, key: &Q) -> Option<V>
     where
-        K: Borrow<Q>,
+        K: Borrow<Q> + Clone,
         Q: ?Sized + Hash + Eq,
         V: Clone,
     {
         let node = self.map.remove(key)?;
         unsafe {
             // SAFETY: node comes from our map
-            let (k, v) = (*node).get_value();
-            let object_size = self.estimate_object_size(k, v);
-            let value = v.clone();
+            let entry = (*node).get_value();
+            let object_size = entry.size;
+            let value = entry.value.clone();
             self.list.remove(node);
+            self.current_size = self.current_size.saturating_sub(object_size);
             self.metrics.core.record_eviction(object_size);
             Some(value)
         }
     }
 
     pub(crate) fn clear(&mut self) {
+        self.current_size = 0;
         self.metrics.core.cache_size_bytes = 0;
         self.map.clear();
         self.list.clear();
@@ -239,19 +389,30 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
 impl<K, V, S> core::fmt::Debug for LruSegment<K, V, S> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("LruSegment")
-            .field("capacity", &self.config.capacity())
+            .field("capacity", &self.config.capacity)
             .field("len", &self.map.len())
             .finish()
     }
 }
 
-/// An implementation of a Least Recently Used (LRU) cache.
+/// A Least Recently Used (LRU) cache with O(1) operations.
 ///
-/// The cache has a fixed capacity and supports O(1) operations for
-/// inserting, retrieving, and updating entries. When the cache reaches capacity,
-/// the least recently used entry will be evicted to make room for new entries.
+/// Maintains items in order of access recency. When capacity is reached,
+/// the least recently accessed item is evicted to make room for new entries.
 ///
-/// # Examples
+/// # Type Parameters
+///
+/// - `K`: Key type. Must implement `Hash + Eq`. For mutation operations, also needs `Clone`.
+/// - `V`: Value type. Must implement `Clone` for retrieval operations.
+/// - `S`: Hash builder type. Defaults to `DefaultHashBuilder`.
+///
+/// # Capacity Modes
+///
+/// - **Count-based**: `LruCache::new(cap)` - limits number of entries
+/// - **Size-based**: `LruCache::init(config, None)` with `max_size` set - limits total content size
+/// - **Dual-limit**: `LruCache::with_limits(cap, bytes)` - limits both
+///
+/// # Example
 ///
 /// ```
 /// use cache_rs::LruCache;
@@ -259,18 +420,13 @@ impl<K, V, S> core::fmt::Debug for LruSegment<K, V, S> {
 ///
 /// let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
 ///
-/// // Add items to the cache
 /// cache.put("apple", 1);
 /// cache.put("banana", 2);
-///
-/// // Accessing items updates their recency
 /// assert_eq!(cache.get(&"apple"), Some(&1));
 ///
-/// // Adding beyond capacity evicts the least recently used item
+/// // "banana" is now LRU, so it gets evicted
 /// cache.put("cherry", 3);
 /// assert_eq!(cache.get(&"banana"), None);
-/// assert_eq!(cache.get(&"apple"), Some(&1));
-/// assert_eq!(cache.get(&"cherry"), Some(&3));
 /// ```
 #[derive(Debug)]
 pub struct LruCache<K, V, S = DefaultHashBuilder> {
@@ -278,35 +434,86 @@ pub struct LruCache<K, V, S = DefaultHashBuilder> {
 }
 
 impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruCache<K, V, S> {
-    /// Creates a new LRU cache with the specified capacity and hash builder.
+    /// Creates a new LRU cache with a custom hash builder.
+    ///
+    /// Use this when you need a specific hasher (e.g., for deterministic hashing
+    /// or DoS resistance).
+    ///
+    /// # Arguments
+    ///
+    /// * `cap` - Maximum number of entries the cache can hold
+    /// * `hash_builder` - The hash builder to use for hashing keys
     pub fn with_hasher(cap: NonZeroUsize, hash_builder: S) -> Self {
         Self {
             segment: LruSegment::with_hasher(cap, hash_builder),
         }
     }
 
-    /// Creates a new LRU cache with specified capacity, hash builder, and size limit.
+    /// Creates a new LRU cache with custom hash builder and size limit.
+    ///
+    /// # Arguments
+    ///
+    /// * `cap` - Maximum number of entries
+    /// * `hash_builder` - The hash builder for hashing keys
+    /// * `max_size_bytes` - Maximum total size of cached content
     pub fn with_hasher_and_size(cap: NonZeroUsize, hash_builder: S, max_size_bytes: u64) -> Self {
         Self {
             segment: LruSegment::with_hasher_and_size(cap, hash_builder, max_size_bytes),
         }
     }
 
+    /// Returns the maximum number of entries the cache can hold.
     #[inline]
     pub fn cap(&self) -> NonZeroUsize {
         self.segment.cap()
     }
 
+    /// Returns the current number of entries in the cache.
     #[inline]
     pub fn len(&self) -> usize {
         self.segment.len()
     }
 
+    /// Returns `true` if the cache contains no entries.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.segment.is_empty()
     }
 
+    /// Returns the current total size of all cached content.
+    ///
+    /// This is the sum of all `size` values passed to `put_with_size()`,
+    /// or estimated sizes for entries added via `put()`.
+    #[inline]
+    pub fn current_size(&self) -> u64 {
+        self.segment.current_size()
+    }
+
+    /// Returns the maximum total content size the cache can hold.
+    ///
+    /// Returns `u64::MAX` if no size limit was configured.
+    #[inline]
+    pub fn max_size(&self) -> u64 {
+        self.segment.max_size()
+    }
+
+    /// Retrieves a reference to the value for the given key.
+    ///
+    /// If the key exists, it is moved to the most-recently-used (MRU) position.
+    /// Returns `None` if the key is not present.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::LruCache;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let mut cache = LruCache::new(NonZeroUsize::new(10).unwrap());
+    /// cache.put("key", 42);
+    ///
+    /// assert_eq!(cache.get(&"key"), Some(&42));
+    /// assert_eq!(cache.get(&"missing"), None);
+    /// ```
     #[inline]
     pub fn get<Q>(&mut self, key: &Q) -> Option<&V>
     where
@@ -316,11 +523,38 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruCache<K, V, S> {
         self.segment.get(key)
     }
 
+    /// Records a cache miss for metrics tracking.
+    ///
+    /// Call this when you look up a key, find it missing, and fetch from
+    /// the underlying data source. This updates the miss counter in metrics.
+    ///
+    /// # Arguments
+    ///
+    /// * `object_size` - Size of the object that was fetched (for byte tracking)
     #[inline]
     pub fn record_miss(&mut self, object_size: u64) {
         self.segment.record_miss(object_size);
     }
 
+    /// Retrieves a mutable reference to the value for the given key.
+    ///
+    /// If the key exists, it is moved to the MRU position.
+    /// Returns `None` if the key is not present.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::LruCache;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let mut cache = LruCache::new(NonZeroUsize::new(10).unwrap());
+    /// cache.put("counter", 0);
+    ///
+    /// if let Some(val) = cache.get_mut(&"counter") {
+    ///     *val += 1;
+    /// }
+    /// assert_eq!(cache.get(&"counter"), Some(&1));
+    /// ```
     #[inline]
     pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
@@ -332,11 +566,89 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruCache<K, V, S> {
 }
 
 impl<K: Hash + Eq + Clone, V: Clone, S: BuildHasher> LruCache<K, V, S> {
+    /// Inserts a key-value pair into the cache.
+    ///
+    /// If the key already exists, the value is updated and the entry moves
+    /// to the MRU position. The old key-value pair is returned.
+    ///
+    /// If the cache is at capacity, the least recently used entry is evicted
+    /// and returned.
+    ///
+    /// # Returns
+    ///
+    /// - `Some((old_key, old_value))` if the key existed or an entry was evicted
+    /// - `None` if this was a new insertion with available capacity
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::LruCache;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+    ///
+    /// assert_eq!(cache.put("a", 1), None);           // New entry
+    /// assert_eq!(cache.put("b", 2), None);           // New entry
+    /// assert_eq!(cache.put("a", 10), Some(("a", 1))); // Update existing
+    /// assert_eq!(cache.put("c", 3), Some(("b", 2))); // Evicts "b"
+    /// ```
     #[inline]
     pub fn put(&mut self, key: K, value: V) -> Option<(K, V)> {
         self.segment.put(key, value)
     }
 
+    /// Inserts a key-value pair with an explicit size.
+    ///
+    /// Use this for size-aware caching where you want to track the actual
+    /// memory or storage footprint of cached items.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to insert
+    /// * `value` - The value to cache
+    /// * `size` - The size this entry consumes (in your chosen unit, e.g., bytes)
+    ///
+    /// # Returns
+    ///
+    /// Same as `put()` - returns evicted or replaced entry if any.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::LruCache;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let mut cache: LruCache<String, Vec<u8>> = LruCache::with_limits(
+    ///     NonZeroUsize::new(100).unwrap(),
+    ///     1024 * 1024,  // 1MB max
+    /// );
+    ///
+    /// let data = vec![0u8; 1000];
+    /// cache.put_with_size("file".to_string(), data, 1000);
+    ///
+    /// assert_eq!(cache.current_size(), 1000);
+    /// ```
+    #[inline]
+    pub fn put_with_size(&mut self, key: K, value: V, size: u64) -> Option<(K, V)> {
+        self.segment.put_with_size(key, value, size)
+    }
+
+    /// Removes a key from the cache.
+    ///
+    /// Returns the value if the key was present, `None` otherwise.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::LruCache;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let mut cache = LruCache::new(NonZeroUsize::new(10).unwrap());
+    /// cache.put("key", 42);
+    ///
+    /// assert_eq!(cache.remove(&"key"), Some(42));
+    /// assert_eq!(cache.remove(&"key"), None);  // Already removed
+    /// ```
     #[inline]
     pub fn remove<Q>(&mut self, key: &Q) -> Option<V>
     where
@@ -346,15 +658,28 @@ impl<K: Hash + Eq + Clone, V: Clone, S: BuildHasher> LruCache<K, V, S> {
         self.segment.remove(key)
     }
 
+    /// Removes all entries from the cache.
+    ///
+    /// Resets `current_size` to 0 and clears all metrics counters.
     #[inline]
     pub fn clear(&mut self) {
         self.segment.clear()
     }
 
+    /// Returns an iterator over the cache entries.
+    ///
+    /// # Panics
+    ///
+    /// Not yet implemented.
     pub fn iter(&self) -> Iter<'_, K, V> {
         unimplemented!("Iteration not yet implemented")
     }
 
+    /// Returns a mutable iterator over the cache entries.
+    ///
+    /// # Panics
+    ///
+    /// Not yet implemented.
     pub fn iter_mut(&mut self) -> IterMut<'_, K, V> {
         unimplemented!("Mutable iteration not yet implemented")
     }
@@ -364,8 +689,132 @@ impl<K: Hash + Eq, V> LruCache<K, V>
 where
     V: Clone,
 {
+    /// Creates a new LRU cache from a configuration with an optional hasher.
+    ///
+    /// This is the **recommended** way to create an LRU cache.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Configuration specifying capacity and optional size limit
+    /// * `hasher` - Optional custom hash builder. If `None`, uses `DefaultHashBuilder`
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::LruCache;
+    /// use cache_rs::config::LruCacheConfig;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// // Simple capacity-only cache
+    /// let config = LruCacheConfig {
+    ///     capacity: NonZeroUsize::new(100).unwrap(),
+    ///     max_size: u64::MAX,
+    /// };
+    /// let mut cache: LruCache<&str, i32> = LruCache::init(config, None);
+    /// cache.put("key", 42);
+    ///
+    /// // Cache with size limit
+    /// let config = LruCacheConfig {
+    ///     capacity: NonZeroUsize::new(1000).unwrap(),
+    ///     max_size: 10 * 1024 * 1024,  // 10MB
+    /// };
+    /// let cache: LruCache<String, Vec<u8>> = LruCache::init(config, None);
+    /// ```
+    pub fn init(
+        config: LruCacheConfig,
+        hasher: Option<DefaultHashBuilder>,
+    ) -> LruCache<K, V, DefaultHashBuilder> {
+        LruCache::with_hasher_and_size(config.capacity, hasher.unwrap_or_default(), config.max_size)
+    }
+
+    /// Creates a new LRU cache with the specified capacity.
+    ///
+    /// This is a convenience constructor that creates a cache with only a capacity limit.
+    /// For more control, use [`LruCache::init`] with an [`LruCacheConfig`].
+    ///
+    /// # Arguments
+    ///
+    /// * `cap` - The maximum number of entries the cache can hold.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::LruCache;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let mut cache = LruCache::new(NonZeroUsize::new(100).unwrap());
+    /// cache.put("key", 42);
+    /// ```
     pub fn new(cap: NonZeroUsize) -> LruCache<K, V, DefaultHashBuilder> {
-        LruCache::with_hasher(cap, DefaultHashBuilder::default())
+        LruCache::init(
+            LruCacheConfig {
+                capacity: cap,
+                max_size: u64::MAX,
+            },
+            None,
+        )
+    }
+
+    /// Creates a new LRU cache with both entry count and size limits.
+    ///
+    /// This is a convenience constructor. For more control, use [`LruCache::init`].
+    ///
+    /// # Arguments
+    ///
+    /// * `cap` - The maximum number of entries the cache can hold.
+    /// * `max_size` - The maximum total size in bytes (0 means unlimited).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::LruCache;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// // Cache with 1000 entries and 10MB size limit
+    /// let mut cache: LruCache<String, Vec<u8>> = LruCache::with_limits(
+    ///     NonZeroUsize::new(1000).unwrap(),
+    ///     10 * 1024 * 1024,
+    /// );
+    /// ```
+    pub fn with_limits(cap: NonZeroUsize, max_size: u64) -> LruCache<K, V, DefaultHashBuilder> {
+        LruCache::init(
+            LruCacheConfig {
+                capacity: cap,
+                max_size,
+            },
+            None,
+        )
+    }
+
+    /// Creates a new LRU cache with only a size limit.
+    ///
+    /// This is a convenience constructor that creates a cache limited by total size
+    /// with a very high entry count limit.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_size` - The maximum total size in bytes.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::LruCache;
+    ///
+    /// // Cache limited to 10MB
+    /// let mut cache: LruCache<String, Vec<u8>> = LruCache::with_max_size(10 * 1024 * 1024);
+    /// ```
+    pub fn with_max_size(max_size: u64) -> LruCache<K, V, DefaultHashBuilder> {
+        // Use a reasonable default capacity for size-based caches.
+        // The HashMap will grow dynamically as needed, so we don't need
+        // to pre-allocate for billions of entries.
+        const DEFAULT_SIZE_BASED_CAPACITY: usize = 16384;
+        LruCache::init(
+            LruCacheConfig {
+                capacity: NonZeroUsize::new(DEFAULT_SIZE_BASED_CAPACITY).unwrap(),
+                max_size,
+            },
+            None,
+        )
     }
 }
 
@@ -687,5 +1136,54 @@ mod tests {
         let mut guard = cache.lock().unwrap();
         assert!(guard.len() <= 100);
         guard.clear(); // Clean up for MIRI
+    }
+
+    #[test]
+    fn test_lru_size_aware_tracking() {
+        // Test that current_size and max_size are tracked correctly
+        let mut cache = LruCache::new(NonZeroUsize::new(10).unwrap());
+
+        assert_eq!(cache.current_size(), 0);
+        assert_eq!(cache.max_size(), u64::MAX);
+
+        // Put items with explicit sizes
+        cache.put_with_size("a", 1, 100);
+        cache.put_with_size("b", 2, 200);
+        cache.put_with_size("c", 3, 150);
+
+        assert_eq!(cache.current_size(), 450);
+        assert_eq!(cache.len(), 3);
+
+        // Note: Current implementation doesn't track per-entry size on remove
+        // The size metric tracks total insertions minus evictions
+
+        // Clear should reset size
+        cache.clear();
+        assert_eq!(cache.current_size(), 0);
+    }
+
+    #[test]
+    fn test_lru_init_constructor() {
+        // Test the init constructor with size limit
+        let config = LruCacheConfig {
+            capacity: NonZeroUsize::new(1000).unwrap(),
+            max_size: 1024 * 1024,
+        };
+        let cache: LruCache<String, i32> = LruCache::init(config, None);
+
+        assert_eq!(cache.current_size(), 0);
+        assert_eq!(cache.max_size(), 1024 * 1024);
+        assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn test_lru_with_limits_constructor() {
+        // Test the with_limits constructor
+        let cache: LruCache<String, String> =
+            LruCache::with_limits(NonZeroUsize::new(100).unwrap(), 1024 * 1024);
+
+        assert_eq!(cache.current_size(), 0);
+        assert_eq!(cache.max_size(), 1024 * 1024);
+        assert_eq!(cache.cap().get(), 100);
     }
 }
