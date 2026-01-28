@@ -1,4 +1,24 @@
 //! Configuration for the Least Recently Used (LRU) cache.
+//!
+//! This module provides configuration for LRU caches. Use `LruCacheConfig`
+//! as the single entry point for creating LRU caches.
+//!
+//! # Examples
+//!
+//! ```
+//! use cache_rs::config::LruCacheConfig;
+//! use cache_rs::LruCache;
+//! use core::num::NonZeroUsize;
+//!
+//! // Simple capacity-only config
+//! let config = LruCacheConfig::new(NonZeroUsize::new(100).unwrap());
+//! let cache: LruCache<String, i32> = LruCache::from_config(config);
+//!
+//! // With size limit using builder pattern
+//! let config = LruCacheConfig::new(NonZeroUsize::new(1000).unwrap())
+//!     .with_max_size(10 * 1024 * 1024);  // 10MB
+//! let cache: LruCache<String, Vec<u8>> = LruCache::from_config(config);
+//! ```
 
 use core::fmt;
 use core::num::NonZeroUsize;
@@ -6,18 +26,32 @@ use core::num::NonZeroUsize;
 /// Configuration for an LRU (Least Recently Used) cache.
 ///
 /// LRU evicts the least recently accessed items when the cache reaches capacity.
+/// This is the **only** way to configure and create an LRU cache, ensuring
+/// all mandatory parameters are provided.
+///
+/// # Required Parameters
+///
+/// - `capacity`: Maximum number of entries the cache can hold (set in constructor)
+///
+/// # Optional Parameters (Builder Methods)
+///
+/// - `max_size`: Maximum total size of cached content (default: unlimited)
 ///
 /// # Examples
 ///
 /// ```
-/// use cache_rs::config::lru::LruCacheConfig;
+/// use cache_rs::config::LruCacheConfig;
+/// use cache_rs::LruCache;
 /// use core::num::NonZeroUsize;
 ///
-/// // Create a config with capacity of 100 items
+/// // Basic configuration with just capacity
 /// let config = LruCacheConfig::new(NonZeroUsize::new(100).unwrap());
+/// let cache: LruCache<&str, i32> = LruCache::from_config(config);
 ///
-/// assert_eq!(config.capacity(), NonZeroUsize::new(100).unwrap());
-/// assert_eq!(config.max_size(), u64::MAX); // Default: no size limit
+/// // Full configuration with size limit
+/// let config = LruCacheConfig::new(NonZeroUsize::new(1000).unwrap())
+///     .with_max_size(50 * 1024 * 1024);  // 50MB limit
+/// let cache: LruCache<String, Vec<u8>> = LruCache::from_config(config);
 /// ```
 #[derive(Clone, Copy)]
 pub struct LruCacheConfig {
@@ -28,10 +62,26 @@ pub struct LruCacheConfig {
 }
 
 impl LruCacheConfig {
-    /// Creates a new configuration for an LRU cache with no size limit.
+    /// Creates a new LRU cache configuration with the specified capacity.
+    ///
+    /// The cache will have no size limit by default (only entry count limit).
+    /// Use [`with_max_size`](Self::with_max_size) to add a size limit.
     ///
     /// # Arguments
+    ///
     /// * `capacity` - Maximum number of key-value pairs the cache can hold
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cache_rs::config::LruCacheConfig;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let config = LruCacheConfig::new(NonZeroUsize::new(100).unwrap());
+    /// assert_eq!(config.capacity().get(), 100);
+    /// assert_eq!(config.max_size(), u64::MAX);  // No size limit
+    /// ```
+    #[must_use]
     pub fn new(capacity: NonZeroUsize) -> Self {
         Self {
             capacity,
@@ -39,21 +89,40 @@ impl LruCacheConfig {
         }
     }
 
-    /// Creates a new configuration with both entry limit and size limit.
+    /// Sets the maximum total size of cached content.
+    ///
+    /// When both entry count and size limits are set, the cache evicts
+    /// entries when **either** limit would be exceeded.
     ///
     /// # Arguments
-    /// * `capacity` - Maximum number of key-value pairs the cache can hold
-    /// * `max_size` - Maximum total size of cached content
-    pub fn with_max_size(capacity: NonZeroUsize, max_size: u64) -> Self {
-        Self { capacity, max_size }
+    ///
+    /// * `max_size` - Maximum total size in bytes (or your chosen unit)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cache_rs::config::LruCacheConfig;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let config = LruCacheConfig::new(NonZeroUsize::new(1000).unwrap())
+    ///     .with_max_size(10 * 1024 * 1024);  // 10MB
+    ///
+    /// assert_eq!(config.max_size(), 10 * 1024 * 1024);
+    /// ```
+    #[must_use]
+    pub fn with_max_size(mut self, max_size: u64) -> Self {
+        self.max_size = max_size;
+        self
     }
 
     /// Returns the maximum number of key-value pairs the cache can hold.
+    #[inline]
     pub fn capacity(&self) -> NonZeroUsize {
         self.capacity
     }
 
     /// Returns the maximum total size of cached content.
+    #[inline]
     pub fn max_size(&self) -> u64 {
         self.max_size
     }
@@ -80,8 +149,9 @@ mod tests {
     }
 
     #[test]
-    fn test_lru_config_with_max_size() {
-        let config = LruCacheConfig::with_max_size(NonZeroUsize::new(100).unwrap(), 1024 * 1024);
+    fn test_lru_config_builder_pattern() {
+        let config =
+            LruCacheConfig::new(NonZeroUsize::new(100).unwrap()).with_max_size(1024 * 1024);
         assert_eq!(config.capacity().get(), 100);
         assert_eq!(config.max_size(), 1024 * 1024);
     }

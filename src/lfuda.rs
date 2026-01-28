@@ -264,7 +264,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
 
     /// Creates a new LFUDA segment with the specified capacity, hash builder, and max size.
     pub(crate) fn with_hasher_and_size(cap: NonZeroUsize, hash_builder: S, max_size: u64) -> Self {
-        let config = LfudaCacheConfig::with_max_size(cap, max_size);
+        let config = LfudaCacheConfig::new(cap).with_max_size(max_size);
         let map_capacity = config.capacity().get().next_power_of_two();
 
         LfudaSegment {
@@ -868,62 +868,104 @@ impl<K: Hash + Eq, V> LfudaCache<K, V>
 where
     V: Clone,
 {
+    /// Creates a new LFUDA cache from a configuration.
+    ///
+    /// This is the **recommended** way to create an LFUDA cache. All configuration
+    /// is specified through the [`LfudaCacheConfig`] struct, which uses a builder
+    /// pattern for optional parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Configuration specifying capacity and optional size limit/initial age
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::LfudaCache;
+    /// use cache_rs::config::LfudaCacheConfig;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// // Simple capacity-only cache
+    /// let config = LfudaCacheConfig::new(NonZeroUsize::new(100).unwrap());
+    /// let mut cache: LfudaCache<&str, i32> = LfudaCache::from_config(config);
+    /// cache.put("key", 42);
+    ///
+    /// // Cache with size limit
+    /// let config = LfudaCacheConfig::new(NonZeroUsize::new(1000).unwrap())
+    ///     .with_max_size(10 * 1024 * 1024)  // 10MB
+    ///     .with_initial_age(100);
+    /// let cache: LfudaCache<String, Vec<u8>> = LfudaCache::from_config(config);
+    /// ```
+    pub fn from_config(config: LfudaCacheConfig) -> LfudaCache<K, V, DefaultHashBuilder> {
+        LfudaCache::with_hasher_and_size(
+            config.capacity(),
+            DefaultHashBuilder::default(),
+            config.max_size(),
+        )
+    }
+
     /// Creates a new LFUDA cache with the specified capacity.
     ///
-    /// # Examples
+    /// This is a convenience constructor that creates a cache with only a capacity limit.
+    /// For more control, use [`LfudaCache::from_config`] with an [`LfudaCacheConfig`].
+    ///
+    /// # Arguments
+    ///
+    /// * `cap` - The maximum number of entries the cache can hold.
+    ///
+    /// # Example
     ///
     /// ```
-    /// use cache_rs::lfuda::LfudaCache;
+    /// use cache_rs::LfudaCache;
     /// use core::num::NonZeroUsize;
     ///
-    /// let cache: LfudaCache<&str, u32> = LfudaCache::new(NonZeroUsize::new(10).unwrap());
+    /// let mut cache = LfudaCache::new(NonZeroUsize::new(100).unwrap());
+    /// cache.put("key", 42);
     /// ```
     pub fn new(cap: NonZeroUsize) -> LfudaCache<K, V, DefaultHashBuilder> {
-        let config = LfudaCacheConfig::new(cap);
-        LfudaCache::with_hasher(config.capacity(), DefaultHashBuilder::default())
+        LfudaCache::from_config(LfudaCacheConfig::new(cap))
     }
 
-    /// Creates a size-based LFUDA cache (max size only, effectively unlimited entries).
+    /// Creates a new LFUDA cache with both entry count and size limits.
     ///
-    /// Useful for in-memory caches bounded by total memory.
+    /// This is a convenience constructor. For more control, use [`LfudaCache::from_config`].
     ///
-    /// # Example
-    /// ```
-    /// use cache_rs::lfuda::LfudaCache;
+    /// # Arguments
     ///
-    /// // 10 MB cache
-    /// let mut cache: LfudaCache<String, Vec<u8>> = LfudaCache::with_max_size(10 * 1024 * 1024);
-    /// // cache.put_with_size("image.png".into(), bytes.clone(), bytes.len() as u64);
-    /// ```
-    pub fn with_max_size(max_size: u64) -> LfudaCache<K, V, DefaultHashBuilder> {
-        // Use a large but reasonable entry limit to avoid excessive memory pre-allocation
-        // 10 million entries * ~100 bytes overhead = ~1GB cache index memory
-        let max_entries = NonZeroUsize::new(10_000_000).unwrap();
-        LfudaCache::with_hasher_and_size(max_entries, DefaultHashBuilder::default(), max_size)
-    }
-
-    /// Creates a dual-limit LFUDA cache.
-    ///
-    /// Evicts when EITHER limit would be exceeded:
-    /// - `max_entries`: bounds cache-rs memory (~150 bytes per entry)
-    /// - `max_size`: bounds content storage (sum of `size` params)
+    /// * `cap` - The maximum number of entries the cache can hold.
+    /// * `max_size` - The maximum total size in bytes (0 means unlimited).
     ///
     /// # Example
+    ///
     /// ```
-    /// use cache_rs::lfuda::LfudaCache;
+    /// use cache_rs::LfudaCache;
     /// use core::num::NonZeroUsize;
     ///
-    /// // 5M entries (~750MB RAM for index), 100GB tracked content
-    /// let cache: LfudaCache<String, String> = LfudaCache::with_limits(
-    ///     NonZeroUsize::new(5_000_000).unwrap(),
-    ///     100 * 1024 * 1024 * 1024
+    /// // Cache with 1000 entries and 10MB size limit
+    /// let mut cache: LfudaCache<String, Vec<u8>> = LfudaCache::with_limits(
+    ///     NonZeroUsize::new(1000).unwrap(),
+    ///     10 * 1024 * 1024,
     /// );
     /// ```
-    pub fn with_limits(
-        max_entries: NonZeroUsize,
-        max_size: u64,
-    ) -> LfudaCache<K, V, DefaultHashBuilder> {
-        LfudaCache::with_hasher_and_size(max_entries, DefaultHashBuilder::default(), max_size)
+    pub fn with_limits(cap: NonZeroUsize, max_size: u64) -> LfudaCache<K, V, DefaultHashBuilder> {
+        LfudaCache::from_config(LfudaCacheConfig::new(cap).with_max_size(max_size))
+    }
+
+    /// Creates a new LFUDA cache with only a size limit.
+    ///
+    /// This is a convenience constructor that creates a cache limited by total size
+    /// with a very high entry count limit.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_size` - The maximum total size in bytes.
+    pub fn with_max_size(max_size: u64) -> LfudaCache<K, V, DefaultHashBuilder> {
+        // Use a large but reasonable capacity that won't overflow hash tables
+        const MAX_REASONABLE_CAPACITY: usize = 1 << 30; // ~1 billion entries
+        LfudaCache::from_config(
+            LfudaCacheConfig::new(NonZeroUsize::new(MAX_REASONABLE_CAPACITY).unwrap())
+                .with_max_size(max_size),
+        )
     }
 }
 
@@ -1264,8 +1306,10 @@ mod tests {
     }
 
     #[test]
-    fn test_lfuda_with_max_size_constructor() {
-        let cache: LfudaCache<String, i32> = LfudaCache::with_max_size(1024 * 1024);
+    fn test_lfuda_from_config_constructor() {
+        let config =
+            LfudaCacheConfig::new(NonZeroUsize::new(1000).unwrap()).with_max_size(1024 * 1024);
+        let cache: LfudaCache<String, i32> = LfudaCache::from_config(config);
 
         assert_eq!(cache.current_size(), 0);
         assert_eq!(cache.max_size(), 1024 * 1024);

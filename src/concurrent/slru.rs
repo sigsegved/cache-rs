@@ -132,8 +132,6 @@ use hashbrown::DefaultHashBuilder;
 #[cfg(not(feature = "hashbrown"))]
 use std::collections::hash_map::RandomState as DefaultHashBuilder;
 
-use super::default_segment_count;
-
 /// A thread-safe SLRU cache with segmented storage for high concurrency.
 pub struct ConcurrentSlruCache<K, V, S = DefaultHashBuilder> {
     segments: Box<[Mutex<SlruSegment<K, V, S>>]>,
@@ -145,60 +143,16 @@ where
     K: Hash + Eq + Clone + Send,
     V: Clone + Send,
 {
-    /// Creates a new concurrent SLRU cache with the specified total capacity.
-    pub fn new(capacity: NonZeroUsize, protected_capacity: NonZeroUsize) -> Self {
-        Self::with_segments(capacity, protected_capacity, default_segment_count())
-    }
+    /// Creates a new concurrent SLRU cache from a configuration.
+    ///
+    /// This is the **recommended** way to create a concurrent SLRU cache.
+    pub fn from_config(config: crate::config::ConcurrentSlruCacheConfig) -> Self {
+        let segment_count = config.segments();
+        let capacity = config.capacity();
+        let protected_capacity = config.protected_capacity();
+        let max_size = config.max_size();
 
-    /// Creates a new concurrent SLRU cache with custom segment count.
-    pub fn with_segments(
-        capacity: NonZeroUsize,
-        protected_capacity: NonZeroUsize,
-        segment_count: usize,
-    ) -> Self {
-        Self::with_segments_and_hasher(
-            capacity,
-            protected_capacity,
-            segment_count,
-            DefaultHashBuilder::default(),
-        )
-    }
-
-    /// Creates a size-based concurrent SLRU cache with default protected ratio (20%).
-    pub fn with_max_size(max_size: u64) -> Self {
-        let max_entries = NonZeroUsize::new(10_000_000).unwrap();
-        let protected_cap = NonZeroUsize::new(max_entries.get() / 5).unwrap();
-        Self::with_limits(max_entries, protected_cap, max_size)
-    }
-
-    /// Creates a dual-limit concurrent SLRU cache.
-    pub fn with_limits(
-        max_entries: NonZeroUsize,
-        protected_capacity: NonZeroUsize,
-        max_size: u64,
-    ) -> Self {
-        Self::with_limits_and_segments(
-            max_entries,
-            protected_capacity,
-            max_size,
-            default_segment_count(),
-        )
-    }
-
-    /// Creates a dual-limit concurrent SLRU cache with custom segment count.
-    pub fn with_limits_and_segments(
-        max_entries: NonZeroUsize,
-        protected_capacity: NonZeroUsize,
-        max_size: u64,
-        segment_count: usize,
-    ) -> Self {
-        assert!(segment_count > 0, "segment_count must be greater than 0");
-        assert!(
-            max_entries.get() >= segment_count,
-            "max_entries must be >= segment_count"
-        );
-
-        let segment_capacity = max_entries.get() / segment_count;
+        let segment_capacity = capacity.get() / segment_count;
         let segment_protected = protected_capacity.get() / segment_count;
         let segment_cap = NonZeroUsize::new(segment_capacity.max(1)).unwrap();
         let segment_protected_cap = NonZeroUsize::new(segment_protected.max(1)).unwrap();
@@ -220,6 +174,72 @@ where
             hash_builder: DefaultHashBuilder::default(),
         }
     }
+
+    /// Creates a concurrent SLRU cache with the specified capacities.
+    ///
+    /// This is a convenience constructor with default segment count.
+    /// For more control, use [`ConcurrentSlruCache::from_config`].
+    ///
+    /// # Arguments
+    ///
+    /// * `total_cap` - The maximum total number of entries across all segments.
+    /// * `protected_cap` - The maximum number of entries in protected segments.
+    pub fn new(total_cap: NonZeroUsize, protected_cap: NonZeroUsize) -> Self {
+        Self::from_config(crate::config::ConcurrentSlruCacheConfig::new(
+            total_cap,
+            protected_cap,
+        ))
+    }
+
+    /// Creates a concurrent SLRU cache with the specified capacities and segment count.
+    ///
+    /// This is a convenience constructor. For more control, use [`ConcurrentSlruCache::from_config`].
+    ///
+    /// # Arguments
+    ///
+    /// * `total_cap` - The maximum total number of entries across all segments.
+    /// * `protected_cap` - The maximum number of entries in protected segments.
+    /// * `segments` - The number of segments to use.
+    pub fn with_segments(
+        total_cap: NonZeroUsize,
+        protected_cap: NonZeroUsize,
+        segments: usize,
+    ) -> Self {
+        Self::from_config(
+            crate::config::ConcurrentSlruCacheConfig::new(total_cap, protected_cap)
+                .with_segments(segments),
+        )
+    }
+
+    /// Creates a concurrent SLRU cache with capacity, protected capacity, size limit, and segment count.
+    ///
+    /// This is a convenience constructor. For more control, use [`ConcurrentSlruCache::from_config`].
+    pub fn with_limits_and_segments(
+        total_cap: NonZeroUsize,
+        protected_cap: NonZeroUsize,
+        max_size: u64,
+        segments: usize,
+    ) -> Self {
+        Self::from_config(
+            crate::config::ConcurrentSlruCacheConfig::new(total_cap, protected_cap)
+                .with_max_size(max_size)
+                .with_segments(segments),
+        )
+    }
+
+    /// Creates a concurrent SLRU cache with size limit only.
+    ///
+    /// This is a convenience constructor. For more control, use [`ConcurrentSlruCache::from_config`].
+    pub fn with_max_size(max_size: u64) -> Self {
+        // Use a large but reasonable capacity that won't overflow hash tables
+        const MAX_REASONABLE_CAPACITY: usize = 1 << 30; // ~1 billion entries
+        let default_cap = NonZeroUsize::new(MAX_REASONABLE_CAPACITY).unwrap();
+        let default_protected = NonZeroUsize::new(MAX_REASONABLE_CAPACITY / 5).unwrap();
+        Self::from_config(
+            crate::config::ConcurrentSlruCacheConfig::new(default_cap, default_protected)
+                .with_max_size(max_size),
+        )
+    }
 }
 
 impl<K, V, S> ConcurrentSlruCache<K, V, S>
@@ -228,30 +248,29 @@ where
     V: Clone + Send,
     S: BuildHasher + Clone + Send,
 {
-    /// Creates a new concurrent SLRU cache with custom hasher.
-    pub fn with_segments_and_hasher(
-        capacity: NonZeroUsize,
-        protected_capacity: NonZeroUsize,
-        segment_count: usize,
+    /// Creates a concurrent SLRU cache with a custom hash builder.
+    pub fn from_config_with_hasher(
+        config: crate::config::ConcurrentSlruCacheConfig,
         hash_builder: S,
     ) -> Self {
-        assert!(segment_count > 0, "segment_count must be greater than 0");
-        assert!(
-            capacity.get() >= segment_count,
-            "capacity must be >= segment_count"
-        );
+        let segment_count = config.segments();
+        let capacity = config.capacity();
+        let protected_capacity = config.protected_capacity();
+        let max_size = config.max_size();
 
         let segment_capacity = capacity.get() / segment_count;
         let segment_protected = protected_capacity.get() / segment_count;
         let segment_cap = NonZeroUsize::new(segment_capacity.max(1)).unwrap();
         let segment_protected_cap = NonZeroUsize::new(segment_protected.max(1)).unwrap();
+        let segment_max_size = max_size / segment_count as u64;
 
         let segments: Vec<_> = (0..segment_count)
             .map(|_| {
-                Mutex::new(SlruSegment::with_hasher(
+                Mutex::new(SlruSegment::with_hasher_and_size(
                     segment_cap,
                     segment_protected_cap,
                     hash_builder.clone(),
+                    segment_max_size,
                 ))
             })
             .collect();
@@ -653,14 +672,15 @@ mod tests {
     }
 
     #[test]
-    fn test_with_segments_and_hasher() {
+    fn test_from_config_with_hasher() {
         let hasher = DefaultHashBuilder::default();
-        let cache: ConcurrentSlruCache<String, i32> = ConcurrentSlruCache::with_segments_and_hasher(
+        let config = crate::config::ConcurrentSlruCacheConfig::new(
             NonZeroUsize::new(100).unwrap(),
             NonZeroUsize::new(50).unwrap(),
-            4,
-            hasher,
-        );
+        )
+        .with_segments(4);
+        let cache: ConcurrentSlruCache<String, i32, _> =
+            ConcurrentSlruCache::from_config_with_hasher(config, hasher);
 
         cache.put("test".to_string(), 42);
         assert_eq!(cache.get(&"test".to_string()), Some(42));

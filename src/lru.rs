@@ -193,7 +193,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
         max_size_bytes: u64,
     ) -> Self {
         let map_capacity = cap.get().next_power_of_two();
-        let config = LruCacheConfig::with_max_size(cap, max_size_bytes);
+        let config = LruCacheConfig::new(cap).with_max_size(max_size_bytes);
         LruSegment {
             config,
             list: List::new(cap),
@@ -406,7 +406,7 @@ impl<K, V, S> core::fmt::Debug for LruSegment<K, V, S> {
 /// # Capacity Modes
 ///
 /// - **Count-based**: `LruCache::new(cap)` - limits number of entries
-/// - **Size-based**: `LruCache::with_max_size(bytes)` - limits total content size
+/// - **Size-based**: `LruCache::from_config(config.with_max_size(bytes))` - limits total content size
 /// - **Dual-limit**: `LruCache::with_limits(cap, bytes)` - limits both
 ///
 /// # Example
@@ -686,14 +686,49 @@ impl<K: Hash + Eq, V> LruCache<K, V>
 where
     V: Clone,
 {
-    /// Creates a new count-based LRU cache.
+    /// Creates a new LRU cache from a configuration.
     ///
-    /// This is the simplest constructor for when you only care about limiting
-    /// the number of entries. Size tracking uses estimated values.
+    /// This is the **recommended** way to create an LRU cache. All configuration
+    /// is specified through the [`LruCacheConfig`] struct, which uses a builder
+    /// pattern for optional parameters.
     ///
     /// # Arguments
     ///
-    /// * `cap` - Maximum number of entries the cache can hold
+    /// * `config` - Configuration specifying capacity and optional size limit
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::LruCache;
+    /// use cache_rs::config::LruCacheConfig;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// // Simple capacity-only cache
+    /// let config = LruCacheConfig::new(NonZeroUsize::new(100).unwrap());
+    /// let mut cache: LruCache<&str, i32> = LruCache::from_config(config);
+    /// cache.put("key", 42);
+    ///
+    /// // Cache with size limit
+    /// let config = LruCacheConfig::new(NonZeroUsize::new(1000).unwrap())
+    ///     .with_max_size(10 * 1024 * 1024);  // 10MB
+    /// let cache: LruCache<String, Vec<u8>> = LruCache::from_config(config);
+    /// ```
+    pub fn from_config(config: LruCacheConfig) -> LruCache<K, V, DefaultHashBuilder> {
+        LruCache::with_hasher_and_size(
+            config.capacity(),
+            DefaultHashBuilder::default(),
+            config.max_size(),
+        )
+    }
+
+    /// Creates a new LRU cache with the specified capacity.
+    ///
+    /// This is a convenience constructor that creates a cache with only a capacity limit.
+    /// For more control, use [`LruCache::from_config`] with an [`LruCacheConfig`].
+    ///
+    /// # Arguments
+    ///
+    /// * `cap` - The maximum number of entries the cache can hold.
     ///
     /// # Example
     ///
@@ -702,53 +737,20 @@ where
     /// use core::num::NonZeroUsize;
     ///
     /// let mut cache = LruCache::new(NonZeroUsize::new(100).unwrap());
-    /// cache.put("key", "value");
+    /// cache.put("key", 42);
     /// ```
     pub fn new(cap: NonZeroUsize) -> LruCache<K, V, DefaultHashBuilder> {
-        LruCache::with_hasher(cap, DefaultHashBuilder::default())
+        LruCache::from_config(LruCacheConfig::new(cap))
     }
 
-    /// Creates a size-based LRU cache.
+    /// Creates a new LRU cache with both entry count and size limits.
     ///
-    /// Use this when you want to bound cache by total content size rather than
-    /// entry count. The entry count limit is set to a large default (10 million).
-    ///
-    /// Use `put_with_size()` to specify the size of each entry.
+    /// This is a convenience constructor. For more control, use [`LruCache::from_config`].
     ///
     /// # Arguments
     ///
-    /// * `max_size` - Maximum total size of cached content (in your chosen unit)
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use cache_rs::LruCache;
-    ///
-    /// // 10 MB cache for image data
-    /// let mut cache: LruCache<String, Vec<u8>> = LruCache::with_max_size(10 * 1024 * 1024);
-    ///
-    /// let image = vec![0u8; 50_000];  // 50KB image
-    /// cache.put_with_size("photo.jpg".to_string(), image, 50_000);
-    /// ```
-    pub fn with_max_size(max_size: u64) -> LruCache<K, V, DefaultHashBuilder> {
-        // Use a large but reasonable entry limit to avoid excessive memory pre-allocation
-        let max_entries = NonZeroUsize::new(10_000_000).unwrap();
-        LruCache::with_hasher_and_size(max_entries, DefaultHashBuilder::default(), max_size)
-    }
-
-    /// Creates a dual-limit LRU cache.
-    ///
-    /// The cache evicts entries when **either** limit would be exceeded:
-    /// - `max_entries`: Bounds the cache's internal memory overhead
-    /// - `max_size`: Bounds the total content size (sum of `put_with_size` sizes)
-    ///
-    /// This is useful for scenarios like disk cache indexes where you want to
-    /// limit both the index memory and the total tracked disk space.
-    ///
-    /// # Arguments
-    ///
-    /// * `max_entries` - Maximum number of entries
-    /// * `max_size` - Maximum total content size
+    /// * `cap` - The maximum number of entries the cache can hold.
+    /// * `max_size` - The maximum total size in bytes (0 means unlimited).
     ///
     /// # Example
     ///
@@ -756,17 +758,40 @@ where
     /// use cache_rs::LruCache;
     /// use core::num::NonZeroUsize;
     ///
-    /// // Cache index for disk files: 100K entries max, 50GB content max
-    /// let mut cache: LruCache<String, String> = LruCache::with_limits(
-    ///     NonZeroUsize::new(100_000).unwrap(),
-    ///     50 * 1024 * 1024 * 1024,  // 50GB
+    /// // Cache with 1000 entries and 10MB size limit
+    /// let mut cache: LruCache<String, Vec<u8>> = LruCache::with_limits(
+    ///     NonZeroUsize::new(1000).unwrap(),
+    ///     10 * 1024 * 1024,
     /// );
     /// ```
-    pub fn with_limits(
-        max_entries: NonZeroUsize,
-        max_size: u64,
-    ) -> LruCache<K, V, DefaultHashBuilder> {
-        LruCache::with_hasher_and_size(max_entries, DefaultHashBuilder::default(), max_size)
+    pub fn with_limits(cap: NonZeroUsize, max_size: u64) -> LruCache<K, V, DefaultHashBuilder> {
+        LruCache::from_config(LruCacheConfig::new(cap).with_max_size(max_size))
+    }
+
+    /// Creates a new LRU cache with only a size limit.
+    ///
+    /// This is a convenience constructor that creates a cache limited by total size
+    /// with a very high entry count limit.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_size` - The maximum total size in bytes.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::LruCache;
+    ///
+    /// // Cache limited to 10MB
+    /// let mut cache: LruCache<String, Vec<u8>> = LruCache::with_max_size(10 * 1024 * 1024);
+    /// ```
+    pub fn with_max_size(max_size: u64) -> LruCache<K, V, DefaultHashBuilder> {
+        // Use a large but reasonable capacity that won't overflow hash tables
+        const MAX_REASONABLE_CAPACITY: usize = 1 << 30; // ~1 billion entries
+        LruCache::from_config(
+            LruCacheConfig::new(NonZeroUsize::new(MAX_REASONABLE_CAPACITY).unwrap())
+                .with_max_size(max_size),
+        )
     }
 }
 
@@ -1115,9 +1140,11 @@ mod tests {
     }
 
     #[test]
-    fn test_lru_with_max_size_constructor() {
-        // Test the with_max_size constructor
-        let cache: LruCache<String, i32> = LruCache::with_max_size(1024 * 1024);
+    fn test_lru_from_config_constructor() {
+        // Test the from_config constructor with size limit
+        let config =
+            LruCacheConfig::new(NonZeroUsize::new(1000).unwrap()).with_max_size(1024 * 1024);
+        let cache: LruCache<String, i32> = LruCache::from_config(config);
 
         assert_eq!(cache.current_size(), 0);
         assert_eq!(cache.max_size(), 1024 * 1024);

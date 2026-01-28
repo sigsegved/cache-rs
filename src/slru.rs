@@ -898,78 +898,124 @@ impl<K: Hash + Eq, V> SlruCache<K, V>
 where
     V: Clone,
 {
-    /// Creates a new SLRU cache with the specified capacity and protected capacity.
+    /// Creates a new SLRU cache from a configuration.
     ///
-    /// The total capacity must be greater than the protected capacity.
+    /// This is the **recommended** way to create an SLRU cache. All configuration
+    /// is specified through the [`SlruCacheConfig`] struct, which uses a builder
+    /// pattern for optional parameters.
     ///
-    /// # Panics
+    /// # Arguments
     ///
-    /// Panics if `protected_capacity` is greater than `capacity`.
-    pub fn new(
-        capacity: NonZeroUsize,
-        protected_capacity: NonZeroUsize,
-    ) -> SlruCache<K, V, DefaultHashBuilder> {
-        let config = SlruCacheConfig::new(capacity, protected_capacity);
-        SlruCache::with_hasher(
+    /// * `config` - Configuration specifying capacity, protected capacity, and optional size limit
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::SlruCache;
+    /// use cache_rs::config::SlruCacheConfig;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// // Simple capacity-only cache with 20% protected segment
+    /// let config = SlruCacheConfig::new(
+    ///     NonZeroUsize::new(100).unwrap(),
+    ///     NonZeroUsize::new(20).unwrap(),
+    /// );
+    /// let mut cache: SlruCache<&str, i32> = SlruCache::from_config(config);
+    /// cache.put("key", 42);
+    ///
+    /// // Cache with size limit
+    /// let config = SlruCacheConfig::new(
+    ///     NonZeroUsize::new(1000).unwrap(),
+    ///     NonZeroUsize::new(200).unwrap(),
+    /// ).with_max_size(10 * 1024 * 1024);  // 10MB
+    /// let cache: SlruCache<String, Vec<u8>> = SlruCache::from_config(config);
+    /// ```
+    pub fn from_config(config: SlruCacheConfig) -> SlruCache<K, V, DefaultHashBuilder> {
+        SlruCache::with_hasher_and_size(
             config.capacity(),
             config.protected_capacity(),
             DefaultHashBuilder::default(),
+            config.max_size(),
         )
     }
 
-    /// Creates a size-based SLRU cache with default protected ratio (20%).
+    /// Creates a new SLRU cache with the specified total and protected capacities.
     ///
-    /// Useful for in-memory caches bounded by total memory.
+    /// This is a convenience constructor. For more control, use [`SlruCache::from_config`].
     ///
-    /// # Example
-    /// ```
-    /// use cache_rs::SlruCache;
+    /// # Arguments
     ///
-    /// // 10 MB cache with 20% protected segment
-    /// let mut cache: SlruCache<String, Vec<u8>> = SlruCache::with_max_size(10 * 1024 * 1024);
-    /// // cache.put_with_size("image.png".into(), bytes.clone(), bytes.len() as u64);
-    /// ```
-    pub fn with_max_size(max_size: u64) -> SlruCache<K, V, DefaultHashBuilder> {
-        // Use a large but reasonable entry limit to avoid excessive memory pre-allocation
-        // 10 million entries * ~100 bytes overhead = ~1GB cache index memory
-        let max_entries = NonZeroUsize::new(10_000_000).unwrap();
-        let protected_cap = NonZeroUsize::new(max_entries.get() / 5).unwrap(); // 20% protected
-        SlruCache::with_hasher_and_size(
-            max_entries,
-            protected_cap,
-            DefaultHashBuilder::default(),
-            max_size,
-        )
-    }
-
-    /// Creates a dual-limit SLRU cache with specified protected capacity.
-    ///
-    /// Evicts when EITHER limit would be exceeded:
-    /// - `max_entries`: bounds cache-rs memory (~150 bytes per entry)
-    /// - `max_size`: bounds content storage (sum of `size` params)
+    /// * `total_cap` - The maximum total number of entries (probationary + protected).
+    /// * `protected_cap` - The maximum number of entries in the protected segment.
     ///
     /// # Example
+    ///
     /// ```
     /// use cache_rs::SlruCache;
     /// use core::num::NonZeroUsize;
     ///
-    /// // 5M entries with 1M protected, 100GB tracked content
-    /// let cache: SlruCache<String, String> = SlruCache::with_limits(
-    ///     NonZeroUsize::new(5_000_000).unwrap(),
-    ///     NonZeroUsize::new(1_000_000).unwrap(),
-    ///     100 * 1024 * 1024 * 1024
+    /// // Cache with total 100 entries, 20 in protected segment
+    /// let mut cache = SlruCache::new(
+    ///     NonZeroUsize::new(100).unwrap(),
+    ///     NonZeroUsize::new(20).unwrap(),
+    /// );
+    /// cache.put("key", 42);
+    /// ```
+    pub fn new(
+        total_cap: NonZeroUsize,
+        protected_cap: NonZeroUsize,
+    ) -> SlruCache<K, V, DefaultHashBuilder> {
+        SlruCache::from_config(SlruCacheConfig::new(total_cap, protected_cap))
+    }
+
+    /// Creates a new SLRU cache with entry count and size limits.
+    ///
+    /// This is a convenience constructor. For more control, use [`SlruCache::from_config`].
+    ///
+    /// # Arguments
+    ///
+    /// * `total_cap` - The maximum total number of entries (probationary + protected).
+    /// * `protected_cap` - The maximum number of entries in the protected segment.
+    /// * `max_size` - The maximum total size in bytes (0 means unlimited).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::SlruCache;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// // Cache with 1000 entries, 200 protected, and 10MB size limit
+    /// let mut cache: SlruCache<String, Vec<u8>> = SlruCache::with_limits(
+    ///     NonZeroUsize::new(1000).unwrap(),
+    ///     NonZeroUsize::new(200).unwrap(),
+    ///     10 * 1024 * 1024,
     /// );
     /// ```
     pub fn with_limits(
-        max_entries: NonZeroUsize,
-        protected_capacity: NonZeroUsize,
+        total_cap: NonZeroUsize,
+        protected_cap: NonZeroUsize,
         max_size: u64,
     ) -> SlruCache<K, V, DefaultHashBuilder> {
-        SlruCache::with_hasher_and_size(
-            max_entries,
-            protected_capacity,
-            DefaultHashBuilder::default(),
-            max_size,
+        SlruCache::from_config(
+            SlruCacheConfig::new(total_cap, protected_cap).with_max_size(max_size),
+        )
+    }
+
+    /// Creates a new SLRU cache with only a size limit.
+    ///
+    /// This is a convenience constructor that creates a cache limited by total size
+    /// with very high entry count limits.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_size` - The maximum total size in bytes.
+    pub fn with_max_size(max_size: u64) -> SlruCache<K, V, DefaultHashBuilder> {
+        // Use a large but reasonable capacity that won't overflow hash tables
+        const MAX_REASONABLE_CAPACITY: usize = 1 << 30; // ~1 billion entries
+        let default_cap = NonZeroUsize::new(MAX_REASONABLE_CAPACITY).unwrap();
+        let default_protected = NonZeroUsize::new(MAX_REASONABLE_CAPACITY / 5).unwrap();
+        SlruCache::from_config(
+            SlruCacheConfig::new(default_cap, default_protected).with_max_size(max_size),
         )
     }
 }
@@ -1259,8 +1305,13 @@ mod tests {
     }
 
     #[test]
-    fn test_slru_with_max_size_constructor() {
-        let cache: SlruCache<String, i32> = SlruCache::with_max_size(1024 * 1024);
+    fn test_slru_from_config_constructor() {
+        let config = SlruCacheConfig::new(
+            NonZeroUsize::new(1000).unwrap(),
+            NonZeroUsize::new(300).unwrap(),
+        )
+        .with_max_size(1024 * 1024);
+        let cache: SlruCache<String, i32> = SlruCache::from_config(config);
 
         assert_eq!(cache.current_size(), 0);
         assert_eq!(cache.max_size(), 1024 * 1024);

@@ -132,8 +132,6 @@ use hashbrown::DefaultHashBuilder;
 #[cfg(not(feature = "hashbrown"))]
 use std::collections::hash_map::RandomState as DefaultHashBuilder;
 
-use super::default_segment_count;
-
 /// A thread-safe LFUDA cache with segmented storage for high concurrency.
 pub struct ConcurrentLfudaCache<K, V, S = DefaultHashBuilder> {
     segments: Box<[Mutex<LfudaSegment<K, V, S>>]>,
@@ -145,40 +143,15 @@ where
     K: Hash + Eq + Clone + Send,
     V: Clone + Send,
 {
-    /// Creates a new concurrent LFUDA cache with the specified total capacity.
-    pub fn new(capacity: NonZeroUsize) -> Self {
-        Self::with_segments(capacity, default_segment_count())
-    }
+    /// Creates a new concurrent LFUDA cache from a configuration.
+    ///
+    /// This is the **recommended** way to create a concurrent LFUDA cache.
+    pub fn from_config(config: crate::config::ConcurrentLfudaCacheConfig) -> Self {
+        let segment_count = config.segments();
+        let capacity = config.capacity();
+        let max_size = config.max_size();
 
-    /// Creates a new concurrent LFUDA cache with custom segment count.
-    pub fn with_segments(capacity: NonZeroUsize, segment_count: usize) -> Self {
-        Self::with_segments_and_hasher(capacity, segment_count, DefaultHashBuilder::default())
-    }
-
-    /// Creates a size-based concurrent LFUDA cache.
-    pub fn with_max_size(max_size: u64) -> Self {
-        let max_entries = NonZeroUsize::new(10_000_000).unwrap();
-        Self::with_limits(max_entries, max_size)
-    }
-
-    /// Creates a dual-limit concurrent LFUDA cache.
-    pub fn with_limits(max_entries: NonZeroUsize, max_size: u64) -> Self {
-        Self::with_limits_and_segments(max_entries, max_size, default_segment_count())
-    }
-
-    /// Creates a dual-limit concurrent LFUDA cache with custom segment count.
-    pub fn with_limits_and_segments(
-        max_entries: NonZeroUsize,
-        max_size: u64,
-        segment_count: usize,
-    ) -> Self {
-        assert!(segment_count > 0, "segment_count must be greater than 0");
-        assert!(
-            max_entries.get() >= segment_count,
-            "max_entries must be >= segment_count"
-        );
-
-        let segment_capacity = max_entries.get() / segment_count;
+        let segment_capacity = capacity.get() / segment_count;
         let segment_cap = NonZeroUsize::new(segment_capacity.max(1)).unwrap();
         let segment_max_size = max_size / segment_count as u64;
 
@@ -197,6 +170,57 @@ where
             hash_builder: DefaultHashBuilder::default(),
         }
     }
+
+    /// Creates a concurrent LFUDA cache with the specified capacity.
+    ///
+    /// This is a convenience constructor with default segment count.
+    /// For more control, use [`ConcurrentLfudaCache::from_config`].
+    ///
+    /// # Arguments
+    ///
+    /// * `cap` - The maximum number of entries the cache can hold across all segments.
+    pub fn new(cap: NonZeroUsize) -> Self {
+        Self::from_config(crate::config::ConcurrentLfudaCacheConfig::new(cap))
+    }
+
+    /// Creates a concurrent LFUDA cache with the specified capacity and segment count.
+    ///
+    /// This is a convenience constructor. For more control, use [`ConcurrentLfudaCache::from_config`].
+    ///
+    /// # Arguments
+    ///
+    /// * `cap` - The maximum number of entries the cache can hold across all segments.
+    /// * `segments` - The number of segments to use.
+    pub fn with_segments(cap: NonZeroUsize, segments: usize) -> Self {
+        Self::from_config(
+            crate::config::ConcurrentLfudaCacheConfig::new(cap).with_segments(segments),
+        )
+    }
+
+    /// Creates a concurrent LFUDA cache with capacity, size limit, and segment count.
+    ///
+    /// This is a convenience constructor. For more control, use [`ConcurrentLfudaCache::from_config`].
+    pub fn with_limits_and_segments(cap: NonZeroUsize, max_size: u64, segments: usize) -> Self {
+        Self::from_config(
+            crate::config::ConcurrentLfudaCacheConfig::new(cap)
+                .with_max_size(max_size)
+                .with_segments(segments),
+        )
+    }
+
+    /// Creates a concurrent LFUDA cache with size limit only.
+    ///
+    /// This is a convenience constructor. For more control, use [`ConcurrentLfudaCache::from_config`].
+    pub fn with_max_size(max_size: u64) -> Self {
+        // Use a large but reasonable capacity that won't overflow hash tables
+        const MAX_REASONABLE_CAPACITY: usize = 1 << 30; // ~1 billion entries
+        Self::from_config(
+            crate::config::ConcurrentLfudaCacheConfig::new(
+                NonZeroUsize::new(MAX_REASONABLE_CAPACITY).unwrap(),
+            )
+            .with_max_size(max_size),
+        )
+    }
 }
 
 impl<K, V, S> ConcurrentLfudaCache<K, V, S>
@@ -205,23 +229,27 @@ where
     V: Clone + Send,
     S: BuildHasher + Clone + Send,
 {
-    /// Creates a new concurrent LFUDA cache with custom hasher.
-    pub fn with_segments_and_hasher(
-        capacity: NonZeroUsize,
-        segment_count: usize,
+    /// Creates a concurrent LFUDA cache with a custom hash builder.
+    pub fn from_config_with_hasher(
+        config: crate::config::ConcurrentLfudaCacheConfig,
         hash_builder: S,
     ) -> Self {
-        assert!(segment_count > 0, "segment_count must be greater than 0");
-        assert!(
-            capacity.get() >= segment_count,
-            "capacity must be >= segment_count"
-        );
+        let segment_count = config.segments();
+        let capacity = config.capacity();
+        let max_size = config.max_size();
 
         let segment_capacity = capacity.get() / segment_count;
         let segment_cap = NonZeroUsize::new(segment_capacity.max(1)).unwrap();
+        let segment_max_size = max_size / segment_count as u64;
 
         let segments: Vec<_> = (0..segment_count)
-            .map(|_| Mutex::new(LfudaSegment::with_hasher(segment_cap, hash_builder.clone())))
+            .map(|_| {
+                Mutex::new(LfudaSegment::with_hasher_and_size(
+                    segment_cap,
+                    hash_builder.clone(),
+                    segment_max_size,
+                ))
+            })
             .collect();
 
         Self {
@@ -607,14 +635,13 @@ mod tests {
     }
 
     #[test]
-    fn test_with_segments_and_hasher() {
+    fn test_from_config_with_hasher() {
         let hasher = DefaultHashBuilder::default();
-        let cache: ConcurrentLfudaCache<String, i32> =
-            ConcurrentLfudaCache::with_segments_and_hasher(
-                NonZeroUsize::new(100).unwrap(),
-                4,
-                hasher,
-            );
+        let config =
+            crate::config::ConcurrentLfudaCacheConfig::new(NonZeroUsize::new(100).unwrap())
+                .with_segments(4);
+        let cache: ConcurrentLfudaCache<String, i32, _> =
+            ConcurrentLfudaCache::from_config_with_hasher(config, hasher);
 
         cache.put("test".to_string(), 42);
         assert_eq!(cache.get(&"test".to_string()), Some(42));

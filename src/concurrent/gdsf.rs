@@ -171,8 +171,6 @@ use hashbrown::DefaultHashBuilder;
 #[cfg(not(feature = "hashbrown"))]
 use std::collections::hash_map::RandomState as DefaultHashBuilder;
 
-use super::default_segment_count;
-
 /// A thread-safe GDSF cache with segmented storage for high concurrency.
 ///
 /// GDSF (Greedy Dual-Size Frequency) is designed for caching variable-size objects.
@@ -187,42 +185,15 @@ where
     K: Hash + Eq + Clone + Send,
     V: Clone + Send,
 {
-    /// Creates a new concurrent GDSF cache with the specified total capacity.
+    /// Creates a new concurrent GDSF cache from a configuration.
     ///
-    /// Capacity is measured in size units (bytes), not number of entries.
-    pub fn new(capacity: NonZeroUsize) -> Self {
-        Self::with_segments(capacity, default_segment_count())
-    }
+    /// This is the **recommended** way to create a concurrent GDSF cache.
+    pub fn from_config(config: crate::config::ConcurrentGdsfCacheConfig) -> Self {
+        let segment_count = config.segments();
+        let capacity = config.capacity();
+        let max_size = config.max_size();
 
-    /// Creates a new concurrent GDSF cache with custom segment count.
-    pub fn with_segments(capacity: NonZeroUsize, segment_count: usize) -> Self {
-        Self::with_segments_and_hasher(capacity, segment_count, DefaultHashBuilder::default())
-    }
-
-    /// Creates a size-based concurrent GDSF cache.
-    pub fn with_max_size(max_size: u64) -> Self {
-        let max_entries = NonZeroUsize::new(10_000_000).unwrap();
-        Self::with_limits(max_entries, max_size)
-    }
-
-    /// Creates a dual-limit concurrent GDSF cache.
-    pub fn with_limits(max_entries: NonZeroUsize, max_size: u64) -> Self {
-        Self::with_limits_and_segments(max_entries, max_size, default_segment_count())
-    }
-
-    /// Creates a dual-limit concurrent GDSF cache with custom segment count.
-    pub fn with_limits_and_segments(
-        max_entries: NonZeroUsize,
-        max_size: u64,
-        segment_count: usize,
-    ) -> Self {
-        assert!(segment_count > 0, "segment_count must be greater than 0");
-        assert!(
-            max_entries.get() >= segment_count,
-            "max_entries must be >= segment_count"
-        );
-
-        let segment_capacity = max_entries.get() / segment_count;
+        let segment_capacity = capacity.get() / segment_count;
         let segment_cap = NonZeroUsize::new(segment_capacity.max(1)).unwrap();
         let segment_max_size = max_size / segment_count as u64;
 
@@ -241,6 +212,57 @@ where
             hash_builder: DefaultHashBuilder::default(),
         }
     }
+
+    /// Creates a concurrent GDSF cache with the specified capacity.
+    ///
+    /// This is a convenience constructor with default segment count.
+    /// For more control, use [`ConcurrentGdsfCache::from_config`].
+    ///
+    /// # Arguments
+    ///
+    /// * `cap` - The maximum number of entries the cache can hold across all segments.
+    pub fn new(cap: NonZeroUsize) -> Self {
+        Self::from_config(crate::config::ConcurrentGdsfCacheConfig::new(cap))
+    }
+
+    /// Creates a concurrent GDSF cache with the specified capacity and segment count.
+    ///
+    /// This is a convenience constructor. For more control, use [`ConcurrentGdsfCache::from_config`].
+    ///
+    /// # Arguments
+    ///
+    /// * `cap` - The maximum number of entries the cache can hold across all segments.
+    /// * `segments` - The number of segments to use.
+    pub fn with_segments(cap: NonZeroUsize, segments: usize) -> Self {
+        Self::from_config(
+            crate::config::ConcurrentGdsfCacheConfig::new(cap).with_segments(segments),
+        )
+    }
+
+    /// Creates a concurrent GDSF cache with capacity, size limit, and segment count.
+    ///
+    /// This is a convenience constructor. For more control, use [`ConcurrentGdsfCache::from_config`].
+    pub fn with_limits_and_segments(cap: NonZeroUsize, max_size: u64, segments: usize) -> Self {
+        Self::from_config(
+            crate::config::ConcurrentGdsfCacheConfig::new(cap)
+                .with_max_size(max_size)
+                .with_segments(segments),
+        )
+    }
+
+    /// Creates a concurrent GDSF cache with size limit only.
+    ///
+    /// This is a convenience constructor. For more control, use [`ConcurrentGdsfCache::from_config`].
+    pub fn with_max_size(max_size: u64) -> Self {
+        // Use a large but reasonable capacity that won't overflow hash tables
+        const MAX_REASONABLE_CAPACITY: usize = 1 << 30; // ~1 billion entries
+        Self::from_config(
+            crate::config::ConcurrentGdsfCacheConfig::new(
+                NonZeroUsize::new(MAX_REASONABLE_CAPACITY).unwrap(),
+            )
+            .with_max_size(max_size),
+        )
+    }
 }
 
 impl<K, V, S> ConcurrentGdsfCache<K, V, S>
@@ -249,23 +271,27 @@ where
     V: Clone + Send,
     S: BuildHasher + Clone + Send,
 {
-    /// Creates a new concurrent GDSF cache with custom hasher.
-    pub fn with_segments_and_hasher(
-        capacity: NonZeroUsize,
-        segment_count: usize,
+    /// Creates a concurrent GDSF cache with a custom hash builder.
+    pub fn from_config_with_hasher(
+        config: crate::config::ConcurrentGdsfCacheConfig,
         hash_builder: S,
     ) -> Self {
-        assert!(segment_count > 0, "segment_count must be greater than 0");
-        assert!(
-            capacity.get() >= segment_count,
-            "capacity must be >= segment_count"
-        );
+        let segment_count = config.segments();
+        let capacity = config.capacity();
+        let max_size = config.max_size();
 
         let segment_capacity = capacity.get() / segment_count;
         let segment_cap = NonZeroUsize::new(segment_capacity.max(1)).unwrap();
+        let segment_max_size = max_size / segment_count as u64;
 
         let segments: Vec<_> = (0..segment_count)
-            .map(|_| Mutex::new(GdsfSegment::with_hasher(segment_cap, hash_builder.clone())))
+            .map(|_| {
+                Mutex::new(GdsfSegment::with_hasher_and_size(
+                    segment_cap,
+                    hash_builder.clone(),
+                    segment_max_size,
+                ))
+            })
             .collect();
 
         Self {
@@ -651,13 +677,13 @@ mod tests {
     }
 
     #[test]
-    fn test_with_segments_and_hasher() {
+    fn test_from_config_with_hasher() {
         let hasher = DefaultHashBuilder::default();
-        let cache: ConcurrentGdsfCache<String, i32> = ConcurrentGdsfCache::with_segments_and_hasher(
-            NonZeroUsize::new(10000).unwrap(),
-            4,
-            hasher,
-        );
+        let config =
+            crate::config::ConcurrentGdsfCacheConfig::new(NonZeroUsize::new(10000).unwrap())
+                .with_segments(4);
+        let cache: ConcurrentGdsfCache<String, i32, _> =
+            ConcurrentGdsfCache::from_config_with_hasher(config, hasher);
 
         cache.put("test".to_string(), 42, 100);
         assert_eq!(cache.get(&"test".to_string()), Some(42));

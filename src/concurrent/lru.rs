@@ -106,8 +106,6 @@ use hashbrown::DefaultHashBuilder;
 #[cfg(not(feature = "hashbrown"))]
 use std::collections::hash_map::RandomState as DefaultHashBuilder;
 
-use super::default_segment_count;
-
 /// A thread-safe LRU cache with segmented storage for high concurrency.
 ///
 /// Keys are partitioned across multiple segments using hash-based sharding.
@@ -149,119 +147,39 @@ where
     K: Hash + Eq + Clone + Send,
     V: Clone + Send,
 {
-    /// Creates a new concurrent LRU cache with the specified capacity.
+    /// Creates a new concurrent LRU cache from a configuration.
     ///
-    /// Capacity is distributed evenly across the default number of segments
-    /// (typically 16, based on CPU count).
+    /// This is the **recommended** way to create a concurrent LRU cache.
+    /// All configuration is specified through the [`ConcurrentLruCacheConfig`] struct,
+    /// which uses a builder pattern for optional parameters.
     ///
     /// # Arguments
     ///
-    /// * `capacity` - Total maximum number of entries across all segments
+    /// * `config` - Configuration specifying capacity, segments, and optional size limit
     ///
     /// # Example
     ///
     /// ```rust,ignore
     /// use cache_rs::concurrent::ConcurrentLruCache;
+    /// use cache_rs::config::ConcurrentLruCacheConfig;
+    /// use core::num::NonZeroUsize;
     ///
-    /// let cache: ConcurrentLruCache<String, i32> = ConcurrentLruCache::new(10_000);
+    /// // Simple capacity-only cache with default segments
+    /// let config = ConcurrentLruCacheConfig::new(NonZeroUsize::new(10000).unwrap());
+    /// let cache: ConcurrentLruCache<String, i32> = ConcurrentLruCache::from_config(config);
+    ///
+    /// // With custom segments and size limit
+    /// let config = ConcurrentLruCacheConfig::new(NonZeroUsize::new(10000).unwrap())
+    ///     .with_segments(32)
+    ///     .with_max_size(100 * 1024 * 1024);  // 100MB
+    /// let cache: ConcurrentLruCache<String, Vec<u8>> = ConcurrentLruCache::from_config(config);
     /// ```
-    pub fn new(capacity: NonZeroUsize) -> Self {
-        Self::with_segments(capacity, default_segment_count())
-    }
+    pub fn from_config(config: crate::config::ConcurrentLruCacheConfig) -> Self {
+        let segment_count = config.segments();
+        let capacity = config.capacity();
+        let max_size = config.max_size();
 
-    /// Creates a concurrent LRU cache with a custom segment count.
-    ///
-    /// More segments = less lock contention but more memory overhead.
-    /// Use a power of 2 for optimal hash distribution.
-    ///
-    /// # Arguments
-    ///
-    /// * `capacity` - Total maximum entries across all segments
-    /// * `segment_count` - Number of independent segments (recommend power of 2)
-    ///
-    /// # Panics
-    ///
-    /// - If `segment_count` is 0
-    /// - If `capacity < segment_count`
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use cache_rs::concurrent::ConcurrentLruCache;
-    ///
-    /// // 32 segments for high-contention workloads
-    /// let cache: ConcurrentLruCache<String, i32> =
-    ///     ConcurrentLruCache::with_segments(10_000, 32);
-    /// ```
-    pub fn with_segments(capacity: NonZeroUsize, segment_count: usize) -> Self {
-        assert!(segment_count > 0, "segment_count must be greater than 0");
-        assert!(
-            capacity.get() >= segment_count,
-            "capacity must be >= segment_count"
-        );
-
-        Self::with_segments_and_hasher(capacity, segment_count, DefaultHashBuilder::default())
-    }
-
-    /// Creates a size-based concurrent LRU cache.
-    ///
-    /// Use this when you want to bound cache by total content size.
-    /// Entry count is set to a large default (10 million).
-    ///
-    /// # Arguments
-    ///
-    /// * `max_size` - Maximum total size of cached content
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use cache_rs::concurrent::ConcurrentLruCache;
-    ///
-    /// // 100MB cache for binary data
-    /// let cache: ConcurrentLruCache<String, Vec<u8>> =
-    ///     ConcurrentLruCache::with_max_size(100 * 1024 * 1024);
-    /// ```
-    pub fn with_max_size(max_size: u64) -> Self {
-        let max_entries = NonZeroUsize::new(10_000_000).unwrap();
-        Self::with_limits(max_entries, max_size)
-    }
-
-    /// Creates a dual-limit concurrent LRU cache.
-    ///
-    /// Eviction occurs when **either** limit would be exceeded.
-    ///
-    /// # Arguments
-    ///
-    /// * `max_entries` - Maximum total entries across all segments
-    /// * `max_size` - Maximum total content size
-    pub fn with_limits(max_entries: NonZeroUsize, max_size: u64) -> Self {
-        Self::with_limits_and_segments(max_entries, max_size, default_segment_count())
-    }
-
-    /// Creates a dual-limit concurrent LRU cache with custom segment count.
-    ///
-    /// # Arguments
-    ///
-    /// * `max_entries` - Maximum total entries
-    /// * `max_size` - Maximum total content size
-    /// * `segment_count` - Number of segments
-    ///
-    /// # Panics
-    ///
-    /// - If `segment_count` is 0
-    /// - If `max_entries < segment_count`
-    pub fn with_limits_and_segments(
-        max_entries: NonZeroUsize,
-        max_size: u64,
-        segment_count: usize,
-    ) -> Self {
-        assert!(segment_count > 0, "segment_count must be greater than 0");
-        assert!(
-            max_entries.get() >= segment_count,
-            "max_entries must be >= segment_count"
-        );
-
-        let segment_capacity = max_entries.get() / segment_count;
+        let segment_capacity = capacity.get() / segment_count;
         let segment_cap = NonZeroUsize::new(segment_capacity.max(1)).unwrap();
         let segment_max_size = max_size / segment_count as u64;
 
@@ -280,6 +198,80 @@ where
             hash_builder: DefaultHashBuilder::default(),
         }
     }
+
+    /// Creates a concurrent LRU cache with the specified capacity.
+    ///
+    /// This is a convenience constructor with default segment count.
+    /// For more control, use [`ConcurrentLruCache::from_config`].
+    ///
+    /// # Arguments
+    ///
+    /// * `cap` - The maximum number of entries the cache can hold across all segments.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::ConcurrentLruCache;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let cache: ConcurrentLruCache<&str, i32> = ConcurrentLruCache::new(
+    ///     NonZeroUsize::new(1000).unwrap(),
+    /// );
+    /// cache.put("key", 42);
+    /// ```
+    pub fn new(cap: NonZeroUsize) -> Self {
+        Self::from_config(crate::config::ConcurrentLruCacheConfig::new(cap))
+    }
+
+    /// Creates a concurrent LRU cache with the specified capacity and segment count.
+    ///
+    /// This is a convenience constructor. For more control, use [`ConcurrentLruCache::from_config`].
+    ///
+    /// # Arguments
+    ///
+    /// * `cap` - The maximum number of entries the cache can hold across all segments.
+    /// * `segments` - The number of segments to use (more = better concurrency, more memory).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::ConcurrentLruCache;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// // Cache with 32 segments for high concurrency
+    /// let cache: ConcurrentLruCache<&str, i32> = ConcurrentLruCache::with_segments(
+    ///     NonZeroUsize::new(10000).unwrap(),
+    ///     32,
+    /// );
+    /// ```
+    pub fn with_segments(cap: NonZeroUsize, segments: usize) -> Self {
+        Self::from_config(crate::config::ConcurrentLruCacheConfig::new(cap).with_segments(segments))
+    }
+
+    /// Creates a concurrent LRU cache with capacity, size limit, and segment count.
+    ///
+    /// This is a convenience constructor. For more control, use [`ConcurrentLruCache::from_config`].
+    pub fn with_limits_and_segments(cap: NonZeroUsize, max_size: u64, segments: usize) -> Self {
+        Self::from_config(
+            crate::config::ConcurrentLruCacheConfig::new(cap)
+                .with_max_size(max_size)
+                .with_segments(segments),
+        )
+    }
+
+    /// Creates a concurrent LRU cache with size limit only.
+    ///
+    /// This is a convenience constructor. For more control, use [`ConcurrentLruCache::from_config`].
+    pub fn with_max_size(max_size: u64) -> Self {
+        // Use a large but reasonable capacity that won't overflow hash tables
+        const MAX_REASONABLE_CAPACITY: usize = 1 << 30; // ~1 billion entries
+        Self::from_config(
+            crate::config::ConcurrentLruCacheConfig::new(
+                NonZeroUsize::new(MAX_REASONABLE_CAPACITY).unwrap(),
+            )
+            .with_max_size(max_size),
+        )
+    }
 }
 
 impl<K, V, S> ConcurrentLruCache<K, V, S>
@@ -294,19 +286,28 @@ where
     ///
     /// # Arguments
     ///
-    /// * `capacity` - Total maximum entries
-    /// * `segment_count` - Number of segments
+    /// * `config` - Configuration specifying capacity and segments
     /// * `hash_builder` - Custom hash builder (will be cloned for each segment)
-    pub fn with_segments_and_hasher(
-        capacity: NonZeroUsize,
-        segment_count: usize,
+    pub fn from_config_with_hasher(
+        config: crate::config::ConcurrentLruCacheConfig,
         hash_builder: S,
     ) -> Self {
+        let segment_count = config.segments();
+        let capacity = config.capacity();
+        let max_size = config.max_size();
+
         let segment_capacity = capacity.get() / segment_count;
         let segment_cap = NonZeroUsize::new(segment_capacity.max(1)).unwrap();
+        let segment_max_size = max_size / segment_count as u64;
 
         let segments: Vec<_> = (0..segment_count)
-            .map(|_| Mutex::new(LruSegment::with_hasher(segment_cap, hash_builder.clone())))
+            .map(|_| {
+                Mutex::new(LruSegment::with_hasher_and_size(
+                    segment_cap,
+                    hash_builder.clone(),
+                    segment_max_size,
+                ))
+            })
             .collect();
 
         Self {
@@ -864,13 +865,12 @@ mod tests {
     }
 
     #[test]
-    fn test_with_segments_and_hasher() {
+    fn test_from_config_with_hasher() {
         let hasher = DefaultHashBuilder::default();
-        let cache: ConcurrentLruCache<String, i32> = ConcurrentLruCache::with_segments_and_hasher(
-            NonZeroUsize::new(100).unwrap(),
-            4,
-            hasher,
-        );
+        let config = crate::config::ConcurrentLruCacheConfig::new(NonZeroUsize::new(100).unwrap())
+            .with_segments(4);
+        let cache: ConcurrentLruCache<String, i32, _> =
+            ConcurrentLruCache::from_config_with_hasher(config, hasher);
 
         cache.put("test".to_string(), 42);
         assert_eq!(cache.get(&"test".to_string()), Some(42));
