@@ -11,6 +11,43 @@
 //! - **Type safety**: All parameters must be provided at construction
 //! - **No boilerplate**: No constructors or builder methods needed
 //!
+//! # Sizing Guidelines
+//!
+//! ## Understanding `max_size` and `capacity`
+//!
+//! All cache configurations include two key sizing parameters:
+//!
+//! - **`max_size`**: Maximum total size in bytes for cached *values*. Set this to your
+//!   memory/disk budget for the actual cache data.
+//! - **`capacity`**: Maximum number of entries. Each entry incurs memory overhead
+//!   (~64-128 bytes) beyond the value size for keys, pointers, and metadata.
+//!
+//! ## For In-Memory Caches
+//!
+//! Set `max_size` based on how much memory you want to allocate for cached values:
+//!
+//! ```text
+//! Total Memory ≈ max_size + (capacity × overhead_per_entry)
+//! overhead_per_entry ≈ 64-128 bytes (keys, pointers, metadata)
+//! ```
+//!
+//! **Example**: 100MB cache with ~10KB average values:
+//! - `max_size = 100 * 1024 * 1024` (100MB for values)
+//! - `capacity = 10_000` entries
+//! - Overhead ≈ 10,000 × 100 bytes = ~1MB additional
+//!
+//! ## For Disk-Based or External Caches
+//!
+//! When caching references to external storage, size based on your target cache size:
+//!
+//! ```text
+//! capacity = target_cache_size / average_object_size
+//! ```
+//!
+//! **Example**: 1GB disk cache with 50KB average objects:
+//! - `max_size = 1024 * 1024 * 1024` (1GB)
+//! - `capacity = 1GB / 50KB ≈ 20_000` entries
+//!
 //! # Single-Threaded Cache Configs
 //!
 //! | Config | Cache | Description |
@@ -40,14 +77,14 @@
 //! use cache_rs::LruCache;
 //! use core::num::NonZeroUsize;
 //!
-//! // Create config with all fields
+//! // 10MB in-memory cache for ~1KB average values
 //! let config = LruCacheConfig {
-//!     capacity: NonZeroUsize::new(1000).unwrap(),
-//!     max_size: u64::MAX,
+//!     capacity: NonZeroUsize::new(10_000).unwrap(),
+//!     max_size: 10 * 1024 * 1024,  // 10MB
 //! };
 //!
 //! // Create cache from config
-//! let cache: LruCache<String, i32> = LruCache::init(config, None);
+//! let cache: LruCache<String, Vec<u8>> = LruCache::init(config, None);
 //! ```
 
 // Single-threaded cache configs
@@ -75,8 +112,14 @@ pub use slru::SlruCacheConfig;
 ///
 /// # Fields
 ///
-/// - `base`: The underlying single-threaded cache configuration
+/// - `base`: The underlying single-threaded cache configuration. See the base
+///   config docs for sizing guidance on `capacity` and `max_size`.
 /// - `segments`: Number of independent segments for sharding (more = less contention)
+///
+/// # Sizing Note
+///
+/// The `capacity` and `max_size` in the base config apply to the **entire cache**
+/// (distributed across all segments), not per-segment.
 ///
 /// # Example
 ///
@@ -84,11 +127,11 @@ pub use slru::SlruCacheConfig;
 /// use cache_rs::config::{ConcurrentCacheConfig, LruCacheConfig, ConcurrentLruCacheConfig};
 /// use core::num::NonZeroUsize;
 ///
-/// // Using the type alias
+/// // 100MB concurrent cache with 16 segments
 /// let config: ConcurrentLruCacheConfig = ConcurrentCacheConfig {
 ///     base: LruCacheConfig {
-///         capacity: NonZeroUsize::new(10000).unwrap(),
-///         max_size: u64::MAX,
+///         capacity: NonZeroUsize::new(10_000).unwrap(),
+///         max_size: 100 * 1024 * 1024,  // 100MB total
 ///     },
 ///     segments: 16,
 /// };
@@ -96,7 +139,8 @@ pub use slru::SlruCacheConfig;
 #[cfg(feature = "concurrent")]
 #[derive(Clone, Copy)]
 pub struct ConcurrentCacheConfig<C> {
-    /// Base configuration for the underlying cache algorithm
+    /// Base configuration for the underlying cache algorithm.
+    /// See individual config docs for sizing guidance.
     pub base: C,
     /// Number of segments for sharding (more segments = less contention)
     pub segments: usize,
