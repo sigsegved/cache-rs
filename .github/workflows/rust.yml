@@ -343,7 +343,11 @@ jobs:
             ${{ runner.os }}-cargo-release-v3-stable-
             ${{ runner.os }}-cargo-v3-stable-
             ${{ runner.os }}-cargo-v3-
+
+      - name: Publish to crates.io
         run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
