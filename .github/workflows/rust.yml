@@ -40,11 +40,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-check-v4-stable-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-check-v5-stable-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-check-v4-stable-
-            ${{ runner.os }}-cargo-v4-stable-
-            ${{ runner.os }}-cargo-v4-
+            ${{ runner.os }}-cargo-check-v5-stable-
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -99,12 +97,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-test-v4-${{ matrix.rust }}-${{ matrix.features }}-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-test-v5-${{ matrix.rust }}-${{ matrix.features }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-test-v4-${{ matrix.rust }}-${{ matrix.features }}-
-            ${{ runner.os }}-cargo-test-v4-${{ matrix.rust }}-
-            ${{ runner.os }}-cargo-v4-${{ matrix.rust }}-
-            ${{ runner.os }}-cargo-v4-
+            ${{ runner.os }}-cargo-test-v5-${{ matrix.rust }}-${{ matrix.features }}-
 
       - name: Build all targets (default features)
         if: matrix.features == 'default'
@@ -153,10 +148,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-nightly-v4-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-nightly-v5-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-nightly-v4-
-            ${{ runner.os }}-cargo-v4-
+            ${{ runner.os }}-cargo-nightly-v5-
 
       - name: Build with nightly
         run: cargo build --all-targets
@@ -189,11 +183,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-no-std-v4-1.74.0-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-no-std-v5-1.74.0-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-no-std-v4-1.74.0-
-            ${{ runner.os }}-cargo-v4-1.74.0-
-            ${{ runner.os }}-cargo-v4-
+            ${{ runner.os }}-cargo-no-std-v5-1.74.0-
 
       - name: Build for no_std target
         run: cargo build --target thumbv6m-none-eabi --no-default-features --features hashbrown
@@ -218,11 +210,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-doc-v4-stable-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-doc-v5-stable-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-doc-v4-stable-
-            ${{ runner.os }}-cargo-v4-stable-
-            ${{ runner.os }}-cargo-v4-
+            ${{ runner.os }}-cargo-doc-v5-stable-
 
       - name: Check documentation
         env:
@@ -250,11 +240,9 @@ jobs:
             ~/.cargo/git
             ~/.cargo/bin
             target
-          key: ${{ runner.os }}-cargo-audit-v4-stable-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-audit-v5-stable-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-audit-v4-stable-
-            ${{ runner.os }}-cargo-v4-stable-
-            ${{ runner.os }}-cargo-v4-
+            ${{ runner.os }}-cargo-audit-v5-stable-
 
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked || cargo install cargo-audit --force --locked
@@ -286,11 +274,9 @@ jobs:
             ~/.cargo/git
             ~/.cargo/bin
             target
-          key: ${{ runner.os }}-cargo-coverage-v4-stable-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-coverage-v5-stable-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-coverage-v4-stable-
-            ${{ runner.os }}-cargo-v4-stable-
-            ${{ runner.os }}-cargo-v4-
+            ${{ runner.os }}-cargo-coverage-v5-stable-
 
       - name: Install cargo-llvm-cov and cargo-nextest
         run: |
@@ -338,11 +324,11 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-release-v4-stable-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-release-v5-stable-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-release-v4-stable-
-            ${{ runner.os }}-cargo-v4-stable-
-            ${{ runner.os }}-cargo-v4-
+            ${{ runner.os }}-cargo-release-v5-stable-
+            ${{ runner.os }}-cargo-v5-stable-
+            ${{ runner.os }}-cargo-v5-
 
       - name: Publish to crates.io
         run: cargo publish
