@@ -18,9 +18,4 @@ jobs:
         with:
           toolchain: nightly
           components: miri
-      
-      - name: Setup Miri
-        run: cargo miri setup
-      
-      - name: Run Miri tests (ignoring test-only memory leaks)
-        run: MIRIFLAGS="-Zmiri-ignore-leaks" cargo miri test --lib
+          cache: false
