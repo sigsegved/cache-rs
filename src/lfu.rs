@@ -867,10 +867,12 @@ where
     ///
     /// * `max_size` - The maximum total size in bytes.
     pub fn with_max_size(max_size: u64) -> LfuCache<K, V, DefaultHashBuilder> {
-        // Use a large but reasonable capacity that won't overflow hash tables
-        const MAX_REASONABLE_CAPACITY: usize = 1 << 30; // ~1 billion entries
+        // Use a reasonable default capacity for size-based caches.
+        // The HashMap will grow dynamically as needed, so we don't need
+        // to pre-allocate for billions of entries.
+        const DEFAULT_SIZE_BASED_CAPACITY: usize = 16384;
         LfuCache::from_config(
-            LfuCacheConfig::new(NonZeroUsize::new(MAX_REASONABLE_CAPACITY).unwrap())
+            LfuCacheConfig::new(NonZeroUsize::new(DEFAULT_SIZE_BASED_CAPACITY).unwrap())
                 .with_max_size(max_size),
         )
     }

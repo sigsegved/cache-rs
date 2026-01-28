@@ -1010,10 +1010,12 @@ where
     ///
     /// * `max_size` - The maximum total size in bytes.
     pub fn with_max_size(max_size: u64) -> SlruCache<K, V, DefaultHashBuilder> {
-        // Use a large but reasonable capacity that won't overflow hash tables
-        const MAX_REASONABLE_CAPACITY: usize = 1 << 30; // ~1 billion entries
-        let default_cap = NonZeroUsize::new(MAX_REASONABLE_CAPACITY).unwrap();
-        let default_protected = NonZeroUsize::new(MAX_REASONABLE_CAPACITY / 5).unwrap();
+        // Use a reasonable default capacity for size-based caches.
+        // The HashMap will grow dynamically as needed, so we don't need
+        // to pre-allocate for billions of entries.
+        const DEFAULT_SIZE_BASED_CAPACITY: usize = 16384;
+        let default_cap = NonZeroUsize::new(DEFAULT_SIZE_BASED_CAPACITY).unwrap();
+        let default_protected = NonZeroUsize::new(DEFAULT_SIZE_BASED_CAPACITY / 5).unwrap();
         SlruCache::from_config(
             SlruCacheConfig::new(default_cap, default_protected).with_max_size(max_size),
         )
