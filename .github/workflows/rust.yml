@@ -33,16 +33,16 @@ jobs:
           components: rustfmt, clippy
           cache: false  # Disable action's built-in cache to avoid conflicts
 
+      # Only cache registry/git, not target - let cargo build fresh every time
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-check-v5-stable-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-v6-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-check-v5-stable-
+            ${{ runner.os }}-cargo-registry-v6-
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -90,19 +90,17 @@ jobs:
           toolchain: ${{ matrix.rust }}
           cache: false  # Disable action's built-in cache to avoid conflicts
 
+      # Only cache registry/git, not target - let cargo build fresh every time
+      # This avoids potential cache corruption issues
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-test-v5-${{ matrix.rust }}-${{ matrix.features }}-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-v6-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-test-v5-${{ matrix.rust }}-${{ matrix.features }}-
-
-      - name: Clean stale build artifacts
-        run: cargo clean
+            ${{ runner.os }}-cargo-registry-v6-
 
       - name: Build all targets (default features)
         if: matrix.features == 'default'
@@ -150,10 +148,9 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-nightly-v5-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-v6-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-nightly-v5-
+            ${{ runner.os }}-cargo-registry-v6-
 
       - name: Build with nightly
         run: cargo build --all-targets
@@ -185,10 +182,9 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-no-std-v5-1.74.0-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-v6-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-no-std-v5-1.74.0-
+            ${{ runner.os }}-cargo-registry-v6-
 
       - name: Build for no_std target
         run: cargo build --target thumbv6m-none-eabi --no-default-features --features hashbrown
@@ -212,10 +208,9 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-doc-v5-stable-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-v6-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-doc-v5-stable-
+            ${{ runner.os }}-cargo-registry-v6-
 
       - name: Check documentation
         env:
@@ -242,10 +237,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ~/.cargo/bin
-            target
-          key: ${{ runner.os }}-cargo-audit-v5-stable-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-audit-v6-stable-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-audit-v5-stable-
+            ${{ runner.os }}-cargo-audit-v6-stable-
 
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked || cargo install cargo-audit --force --locked
@@ -276,10 +270,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ~/.cargo/bin
-            target
-          key: ${{ runner.os }}-cargo-coverage-v5-stable-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-coverage-v6-stable-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-coverage-v5-stable-
+            ${{ runner.os }}-cargo-coverage-v6-stable-
 
       - name: Install cargo-llvm-cov and cargo-nextest
         run: |
@@ -326,12 +319,9 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-release-v5-stable-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-v6-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-release-v5-stable-
-            ${{ runner.os }}-cargo-v5-stable-
-            ${{ runner.os }}-cargo-v5-
+            ${{ runner.os }}-cargo-registry-v6-
 
       - name: Publish to crates.io
         run: cargo publish
