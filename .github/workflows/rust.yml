@@ -101,6 +101,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-test-v5-${{ matrix.rust }}-${{ matrix.features }}-
 
+      - name: Clean stale build artifacts
+        run: cargo clean
+
       - name: Build all targets (default features)
         if: matrix.features == 'default'
         run: cargo build --all-targets
