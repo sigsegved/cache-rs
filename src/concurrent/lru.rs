@@ -150,7 +150,7 @@ where
     /// Creates a new concurrent LRU cache from a configuration.
     ///
     /// This is the **recommended** way to create a concurrent LRU cache.
-    /// All configuration is specified through the [`ConcurrentLruCacheConfig`] struct,
+    /// All configuration is specified through the `ConcurrentLruCacheConfig` struct,
     /// which uses a builder pattern for optional parameters.
     ///
     /// # Arguments

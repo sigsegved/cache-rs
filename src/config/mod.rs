@@ -18,21 +18,21 @@
 //!
 //! | Config | Cache | Description |
 //! |--------|-------|-------------|
-//! | [`LruCacheConfig`] | [`LruCache`](crate::LruCache) | Least Recently Used |
-//! | [`LfuCacheConfig`] | [`LfuCache`](crate::LfuCache) | Least Frequently Used |
-//! | [`LfudaCacheConfig`] | [`LfudaCache`](crate::LfudaCache) | LFU with Dynamic Aging |
-//! | [`SlruCacheConfig`] | [`SlruCache`](crate::SlruCache) | Segmented LRU |
-//! | [`GdsfCacheConfig`] | [`GdsfCache`](crate::GdsfCache) | Greedy Dual-Size Frequency |
+//! | `LruCacheConfig` | [`LruCache`](crate::LruCache) | Least Recently Used |
+//! | `LfuCacheConfig` | [`LfuCache`](crate::LfuCache) | Least Frequently Used |
+//! | `LfudaCacheConfig` | [`LfudaCache`](crate::LfudaCache) | LFU with Dynamic Aging |
+//! | `SlruCacheConfig` | [`SlruCache`](crate::SlruCache) | Segmented LRU |
+//! | `GdsfCacheConfig` | [`GdsfCache`](crate::GdsfCache) | Greedy Dual-Size Frequency |
 //!
 //! # Concurrent Cache Configs (requires `concurrent` feature)
 //!
 //! | Config | Cache | Description |
 //! |--------|-------|-------------|
-//! | [`ConcurrentLruCacheConfig`] | `ConcurrentLruCache` | Thread-safe LRU |
-//! | [`ConcurrentLfuCacheConfig`] | `ConcurrentLfuCache` | Thread-safe LFU |
-//! | [`ConcurrentLfudaCacheConfig`] | `ConcurrentLfudaCache` | Thread-safe LFUDA |
-//! | [`ConcurrentSlruCacheConfig`] | `ConcurrentSlruCache` | Thread-safe SLRU |
-//! | [`ConcurrentGdsfCacheConfig`] | `ConcurrentGdsfCache` | Thread-safe GDSF |
+//! | `ConcurrentLruCacheConfig` | `ConcurrentLruCache` | Thread-safe LRU |
+//! | `ConcurrentLfuCacheConfig` | `ConcurrentLfuCache` | Thread-safe LFU |
+//! | `ConcurrentLfudaCacheConfig` | `ConcurrentLfudaCache` | Thread-safe LFUDA |
+//! | `ConcurrentSlruCacheConfig` | `ConcurrentSlruCache` | Thread-safe SLRU |
+//! | `ConcurrentGdsfCacheConfig` | `ConcurrentGdsfCache` | Thread-safe GDSF |
 //!
 //! # Examples
 //!
