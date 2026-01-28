@@ -71,6 +71,7 @@ jobs:
     name: Test Suite (${{ matrix.features }})
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false  # Continue running other jobs even if one fails
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         rust: [1.74.0, stable]
@@ -109,7 +110,7 @@ jobs:
 
       - name: Run tests (default features)
         if: matrix.features == 'default'
-        run: cargo test --verbose
+        run: cargo test --verbose -- --nocapture 2>&1 || (echo "Test failed, showing cargo version and environment:" && rustc --version && cargo --version && exit 1)
 
       - name: Build all targets (concurrent)
         if: matrix.features == 'concurrent'
@@ -117,7 +118,7 @@ jobs:
 
       - name: Run tests (concurrent)
         if: matrix.features == 'concurrent'
-        run: cargo test --verbose --features concurrent
+        run: cargo test --verbose --features concurrent -- --nocapture 2>&1 || (echo "Test failed, showing environment:" && rustc --version && exit 1)
 
       - name: Build all targets (std + concurrent)
         if: matrix.features == 'std-concurrent'
