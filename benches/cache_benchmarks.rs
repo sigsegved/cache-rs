@@ -1,4 +1,7 @@
 // Simple benchmarks using criterion instead of unstable test feature
+use cache_rs::config::{
+    GdsfCacheConfig, LfuCacheConfig, LfudaCacheConfig, LruCacheConfig, SlruCacheConfig,
+};
 use cache_rs::{GdsfCache, LfuCache, LfudaCache, LruCache, SlruCache};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use std::num::NonZeroUsize;
@@ -6,6 +9,53 @@ use std::num::NonZeroUsize;
 // Benchmark configuration
 const CACHE_SIZE: usize = 1_000;
 const NUM_OPERATIONS: usize = 10_000;
+
+// Helper functions to create caches with the init pattern
+fn make_lru<K: std::hash::Hash + Eq + Clone, V: Clone>(cap: usize) -> LruCache<K, V> {
+    let config = LruCacheConfig {
+        capacity: NonZeroUsize::new(cap).unwrap(),
+        max_size: u64::MAX,
+    };
+    LruCache::init(config, None)
+}
+
+fn make_lfu<K: std::hash::Hash + Eq + Clone, V: Clone>(cap: usize) -> LfuCache<K, V> {
+    let config = LfuCacheConfig {
+        capacity: NonZeroUsize::new(cap).unwrap(),
+        max_size: u64::MAX,
+    };
+    LfuCache::init(config, None)
+}
+
+fn make_lfuda<K: std::hash::Hash + Eq + Clone, V: Clone>(cap: usize) -> LfudaCache<K, V> {
+    let config = LfudaCacheConfig {
+        capacity: NonZeroUsize::new(cap).unwrap(),
+        initial_age: 0,
+        max_size: u64::MAX,
+    };
+    LfudaCache::init(config, None)
+}
+
+fn make_slru<K: std::hash::Hash + Eq + Clone, V: Clone>(
+    cap: usize,
+    protected_cap: usize,
+) -> SlruCache<K, V> {
+    let config = SlruCacheConfig {
+        capacity: NonZeroUsize::new(cap).unwrap(),
+        protected_capacity: NonZeroUsize::new(protected_cap).unwrap(),
+        max_size: u64::MAX,
+    };
+    SlruCache::init(config, None)
+}
+
+fn make_gdsf<K: std::hash::Hash + Eq + Clone, V: Clone>(cap: usize) -> GdsfCache<K, V> {
+    let config = GdsfCacheConfig {
+        capacity: NonZeroUsize::new(cap).unwrap(),
+        initial_age: 0.0,
+        max_size: u64::MAX,
+    };
+    GdsfCache::init(config, None)
+}
 
 // Simple linear congruential generator for reproducible benchmarks
 struct SimpleRng {
@@ -59,7 +109,6 @@ fn zipf_sample(n: usize, skew: f64) -> Vec<usize> {
 }
 
 fn benchmark_caches(c: &mut Criterion) {
-    let cache_size = NonZeroUsize::new(CACHE_SIZE).unwrap();
     let samples = zipf_sample(CACHE_SIZE * 2, 0.8);
 
     let mut group = c.benchmark_group("Cache Mixed Access");
@@ -67,7 +116,7 @@ fn benchmark_caches(c: &mut Criterion) {
     // LRU Cache benchmarks
     group.bench_function("LRU", |b| {
         b.iter(|| {
-            let mut cache = LruCache::new(cache_size);
+            let mut cache = make_lru(CACHE_SIZE);
             for &idx in &samples {
                 if idx % 4 == 0 {
                     // 25% puts
@@ -83,7 +132,7 @@ fn benchmark_caches(c: &mut Criterion) {
     // LFU Cache benchmarks
     group.bench_function("LFU", |b| {
         b.iter(|| {
-            let mut cache = LfuCache::new(cache_size);
+            let mut cache = make_lfu(CACHE_SIZE);
             for &idx in &samples {
                 if idx % 4 == 0 {
                     // 25% puts
@@ -99,7 +148,7 @@ fn benchmark_caches(c: &mut Criterion) {
     // LFUDA Cache benchmarks
     group.bench_function("LFUDA", |b| {
         b.iter(|| {
-            let mut cache = LfudaCache::new(cache_size);
+            let mut cache = make_lfuda(CACHE_SIZE);
             for &idx in &samples {
                 if idx % 4 == 0 {
                     // 25% puts
@@ -114,9 +163,8 @@ fn benchmark_caches(c: &mut Criterion) {
 
     // SLRU Cache benchmarks
     group.bench_function("SLRU", |b| {
-        let protected_size = NonZeroUsize::new(CACHE_SIZE / 2).unwrap(); // 50% protected
         b.iter(|| {
-            let mut cache = SlruCache::new(cache_size, protected_size);
+            let mut cache = make_slru(CACHE_SIZE, CACHE_SIZE / 2);
             for &idx in &samples {
                 if idx % 4 == 0 {
                     // 25% puts
@@ -132,7 +180,7 @@ fn benchmark_caches(c: &mut Criterion) {
     // GDSF Cache benchmarks
     group.bench_function("GDSF", |b| {
         b.iter(|| {
-            let mut cache = GdsfCache::new(cache_size);
+            let mut cache = make_gdsf(CACHE_SIZE);
             for &idx in &samples {
                 if idx % 4 == 0 {
                     // 25% puts - Use idx as size too, smaller items more likely due to Zipf

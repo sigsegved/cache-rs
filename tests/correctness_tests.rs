@@ -10,10 +10,126 @@
 //! - Each test validates the core eviction policy of the algorithm
 //! - Explicit checks for which key was evicted after each put
 
+use cache_rs::config::{
+    GdsfCacheConfig, LfuCacheConfig, LfudaCacheConfig, LruCacheConfig, SlruCacheConfig,
+};
 use cache_rs::{GdsfCache, LfuCache, LfudaCache, LruCache, SlruCache};
 use std::num::NonZeroUsize;
 
 const OBJECT_SIZE: u64 = 1;
+
+// ============================================================================
+// HELPER FUNCTIONS FOR CACHE CREATION
+// ============================================================================
+
+/// Helper to create an LruCache with the given capacity
+fn make_lru<K: std::hash::Hash + Eq + Clone, V: Clone>(cap: usize) -> LruCache<K, V> {
+    let config = LruCacheConfig {
+        capacity: NonZeroUsize::new(cap).unwrap(),
+        max_size: u64::MAX,
+    };
+    LruCache::init(config, None)
+}
+
+/// Helper to create an LruCache with capacity and max_size limit
+fn make_lru_with_limits<K: std::hash::Hash + Eq + Clone, V: Clone>(
+    cap: usize,
+    max_size: u64,
+) -> LruCache<K, V> {
+    let config = LruCacheConfig {
+        capacity: NonZeroUsize::new(cap).unwrap(),
+        max_size,
+    };
+    LruCache::init(config, None)
+}
+
+/// Helper to create an LruCache with max_size limit only (large capacity)
+fn make_lru_with_max_size<K: std::hash::Hash + Eq + Clone, V: Clone>(
+    max_size: u64,
+) -> LruCache<K, V> {
+    let config = LruCacheConfig {
+        capacity: NonZeroUsize::new(16384).unwrap(),
+        max_size,
+    };
+    LruCache::init(config, None)
+}
+
+/// Helper to create an LfuCache with the given capacity
+fn make_lfu<K: std::hash::Hash + Eq + Clone, V: Clone>(cap: usize) -> LfuCache<K, V> {
+    let config = LfuCacheConfig {
+        capacity: NonZeroUsize::new(cap).unwrap(),
+        max_size: u64::MAX,
+    };
+    LfuCache::init(config, None)
+}
+
+/// Helper to create an LfuCache with max_size limit only (large capacity)
+fn make_lfu_with_max_size<K: std::hash::Hash + Eq + Clone, V: Clone>(
+    max_size: u64,
+) -> LfuCache<K, V> {
+    let config = LfuCacheConfig {
+        capacity: NonZeroUsize::new(16384).unwrap(),
+        max_size,
+    };
+    LfuCache::init(config, None)
+}
+
+/// Helper to create an LfudaCache with the given capacity
+fn make_lfuda<K: std::hash::Hash + Eq + Clone, V: Clone>(cap: usize) -> LfudaCache<K, V> {
+    let config = LfudaCacheConfig {
+        capacity: NonZeroUsize::new(cap).unwrap(),
+        initial_age: 0,
+        max_size: u64::MAX,
+    };
+    LfudaCache::init(config, None)
+}
+
+/// Helper to create an LfudaCache with max_size limit only (large capacity)
+fn make_lfuda_with_max_size<K: std::hash::Hash + Eq + Clone, V: Clone>(
+    max_size: u64,
+) -> LfudaCache<K, V> {
+    let config = LfudaCacheConfig {
+        capacity: NonZeroUsize::new(16384).unwrap(),
+        initial_age: 0,
+        max_size,
+    };
+    LfudaCache::init(config, None)
+}
+
+/// Helper to create an SlruCache with the given capacity and protected capacity
+fn make_slru<K: std::hash::Hash + Eq + Clone, V: Clone>(
+    cap: usize,
+    protected_cap: usize,
+) -> SlruCache<K, V> {
+    let config = SlruCacheConfig {
+        capacity: NonZeroUsize::new(cap).unwrap(),
+        protected_capacity: NonZeroUsize::new(protected_cap).unwrap(),
+        max_size: u64::MAX,
+    };
+    SlruCache::init(config, None)
+}
+
+/// Helper to create an SlruCache with max_size limit only (large capacity)
+fn make_slru_with_max_size<K: std::hash::Hash + Eq + Clone, V: Clone>(
+    max_size: u64,
+) -> SlruCache<K, V> {
+    let config = SlruCacheConfig {
+        capacity: NonZeroUsize::new(16384).unwrap(),
+        protected_capacity: NonZeroUsize::new(3276).unwrap(), // ~20%
+        max_size,
+    };
+    SlruCache::init(config, None)
+}
+
+/// Helper to create a GdsfCache with the given capacity
+fn make_gdsf<K: std::hash::Hash + Eq + Clone, V: Clone>(cap: usize) -> GdsfCache<K, V> {
+    let config = GdsfCacheConfig {
+        capacity: NonZeroUsize::new(cap).unwrap(),
+        initial_age: 0.0,
+        max_size: u64::MAX,
+    };
+    GdsfCache::init(config, None)
+}
 
 // ============================================================================
 // LRU CORRECTNESS
@@ -26,7 +142,7 @@ const OBJECT_SIZE: u64 = 1;
 
 #[test]
 fn test_lru_evicts_least_recently_used() {
-    let mut cache = LruCache::new(NonZeroUsize::new(3).unwrap());
+    let mut cache = make_lru(3);
 
     // Fill cache: order of insertion determines initial LRU order
     cache.put(1, 10);
@@ -68,7 +184,7 @@ fn test_lru_evicts_least_recently_used() {
 
 #[test]
 fn test_lru_eviction_order_is_predictable() {
-    let mut cache = LruCache::new(NonZeroUsize::new(5).unwrap());
+    let mut cache = make_lru(5);
 
     // Fill cache with keys 0..4
     for i in 0..5 {
@@ -107,7 +223,7 @@ fn test_lru_eviction_order_is_predictable() {
 
 #[test]
 fn test_lru_get_updates_recency() {
-    let mut cache = LruCache::new(NonZeroUsize::new(3).unwrap());
+    let mut cache = make_lru(3);
 
     // Fill cache
     cache.put(1, 10);
@@ -146,7 +262,7 @@ fn test_lru_get_updates_recency() {
 
 #[test]
 fn test_lfu_evicts_least_frequently_used() {
-    let mut cache = LfuCache::new(NonZeroUsize::new(3).unwrap());
+    let mut cache = make_lfu(3);
 
     // Fill cache
     cache.put(1, 10); // freq=1
@@ -175,7 +291,7 @@ fn test_lfu_evicts_least_frequently_used() {
 
 #[test]
 fn test_lfu_frequency_accumulates() {
-    let mut cache = LfuCache::new(NonZeroUsize::new(3).unwrap());
+    let mut cache = make_lfu(3);
 
     cache.put("hot", 1);
     cache.put("warm", 2);
@@ -208,7 +324,7 @@ fn test_lfu_frequency_accumulates() {
 
 #[test]
 fn test_lfu_same_frequency_uses_fifo() {
-    let mut cache = LfuCache::new(NonZeroUsize::new(3).unwrap());
+    let mut cache = make_lfu(3);
 
     // Insert 3 items - all have same frequency (1)
     cache.put(1, 10);
@@ -246,7 +362,7 @@ fn test_lfu_same_frequency_uses_fifo() {
 
 #[test]
 fn test_lfuda_evicts_lowest_priority() {
-    let mut cache = LfudaCache::new(NonZeroUsize::new(3).unwrap());
+    let mut cache = make_lfuda(3);
 
     // Fill cache
     cache.put(1, 10); // priority = freq + age = 1 + 0 = 1
@@ -278,7 +394,7 @@ fn test_lfuda_evicts_lowest_priority() {
 
 #[test]
 fn test_lfuda_aging_helps_new_items() {
-    let mut cache = LfudaCache::new(NonZeroUsize::new(3).unwrap());
+    let mut cache = make_lfuda(3);
 
     // Insert items
     cache.put(1, 10);
@@ -304,7 +420,7 @@ fn test_lfuda_aging_helps_new_items() {
 
 #[test]
 fn test_lfuda_basic_eviction() {
-    let mut cache = LfudaCache::new(NonZeroUsize::new(4).unwrap());
+    let mut cache = make_lfuda(4);
 
     // Fill cache
     cache.put(1, 10);
@@ -347,8 +463,7 @@ fn test_lfuda_basic_eviction() {
 #[test]
 fn test_slru_promotion_to_protected() {
     // Capacity 4, protected size 2
-    let protected = NonZeroUsize::new(2).unwrap();
-    let mut cache = SlruCache::new(NonZeroUsize::new(4).unwrap(), protected);
+    let mut cache = make_slru(4, 2);
 
     // Insert items - they start in probationary
     cache.put(1, 10);
@@ -383,8 +498,7 @@ fn test_slru_promotion_to_protected() {
 
 #[test]
 fn test_slru_probationary_evicted_first() {
-    let protected = NonZeroUsize::new(2).unwrap();
-    let mut cache = SlruCache::new(NonZeroUsize::new(4).unwrap(), protected);
+    let mut cache = make_slru(4, 2);
 
     // Insert 4 items (all in probationary initially)
     cache.put(1, 10);
@@ -422,8 +536,7 @@ fn test_slru_probationary_evicted_first() {
 
 #[test]
 fn test_slru_eviction_order_in_probationary() {
-    let protected = NonZeroUsize::new(1).unwrap();
-    let mut cache = SlruCache::new(NonZeroUsize::new(4).unwrap(), protected);
+    let mut cache = make_slru(4, 1);
 
     // Insert 4 items
     cache.put(1, 10);
@@ -472,7 +585,7 @@ fn test_slru_eviction_order_in_probationary() {
 
 #[test]
 fn test_gdsf_prefers_smaller_objects() {
-    let mut cache = GdsfCache::new(NonZeroUsize::new(3).unwrap());
+    let mut cache = make_gdsf(3);
 
     // Insert items with different sizes, same frequency
     cache.put(1, 10, 100); // Large object (size=100)
@@ -504,7 +617,7 @@ fn test_gdsf_prefers_smaller_objects() {
 
 #[test]
 fn test_gdsf_frequency_matters() {
-    let mut cache = GdsfCache::new(NonZeroUsize::new(3).unwrap());
+    let mut cache = make_gdsf(3);
 
     // Insert items with same size
     cache.put(1, 10, OBJECT_SIZE);
@@ -538,7 +651,7 @@ fn test_gdsf_frequency_matters() {
 
 #[test]
 fn test_gdsf_size_frequency_tradeoff() {
-    let mut cache = GdsfCache::new(NonZeroUsize::new(3).unwrap());
+    let mut cache = make_gdsf(3);
 
     // Large object with high frequency
     cache.put(1, 10, 100); // size=100
@@ -571,7 +684,7 @@ fn test_gdsf_size_frequency_tradeoff() {
 
 #[test]
 fn test_gdsf_eviction_order_by_priority() {
-    let mut cache = GdsfCache::new(NonZeroUsize::new(4).unwrap());
+    let mut cache = make_gdsf(4);
 
     // Insert items with varying size to create predictable priorities
     cache.put(1, 10, 10); // size=10, priority = 1/10 = 0.1
@@ -614,36 +727,35 @@ fn test_all_caches_basic_operations() {
     // Test that all caches implement basic operations correctly
 
     // LRU
-    let mut lru = LruCache::new(NonZeroUsize::new(10).unwrap());
+    let mut lru = make_lru(10);
     lru.put("key", 42);
     assert_eq!(lru.get(&"key"), Some(&42));
     assert_eq!(lru.remove(&"key"), Some(42));
     assert_eq!(lru.get(&"key"), None);
 
     // LFU
-    let mut lfu = LfuCache::new(NonZeroUsize::new(10).unwrap());
+    let mut lfu = make_lfu(10);
     lfu.put("key", 42);
     assert_eq!(lfu.get(&"key"), Some(&42));
     assert_eq!(lfu.remove(&"key"), Some(42));
     assert_eq!(lfu.get(&"key"), None);
 
     // LFUDA
-    let mut lfuda = LfudaCache::new(NonZeroUsize::new(10).unwrap());
+    let mut lfuda = make_lfuda(10);
     lfuda.put("key", 42);
     assert_eq!(lfuda.get(&"key"), Some(&42));
     assert_eq!(lfuda.remove(&"key"), Some(42));
     assert_eq!(lfuda.get(&"key"), None);
 
     // SLRU
-    let protected = NonZeroUsize::new(5).unwrap();
-    let mut slru = SlruCache::new(NonZeroUsize::new(10).unwrap(), protected);
+    let mut slru = make_slru(10, 5);
     slru.put("key", 42);
     assert_eq!(slru.get(&"key"), Some(&42));
     assert_eq!(slru.remove(&"key"), Some(42));
     assert_eq!(slru.get(&"key"), None);
 
     // GDSF - note: get() returns Option<V>, not Option<&V>
-    let mut gdsf = GdsfCache::new(NonZeroUsize::new(10).unwrap());
+    let mut gdsf = make_gdsf(10);
     gdsf.put("key", 42, 1);
     assert_eq!(gdsf.get(&"key"), Some(42));
     // GDSF doesn't have remove(), verify key exists then clear
@@ -653,39 +765,36 @@ fn test_all_caches_basic_operations() {
 
 #[test]
 fn test_all_caches_capacity_enforcement() {
-    let cap = NonZeroUsize::new(3).unwrap();
-
     // LRU
-    let mut lru = LruCache::new(cap);
+    let mut lru = make_lru(3);
     for i in 0..10 {
         lru.put(i, i);
     }
     assert_eq!(lru.len(), 3, "LRU should enforce capacity");
 
     // LFU
-    let mut lfu = LfuCache::new(cap);
+    let mut lfu = make_lfu(3);
     for i in 0..10 {
         lfu.put(i, i);
     }
     assert_eq!(lfu.len(), 3, "LFU should enforce capacity");
 
     // LFUDA
-    let mut lfuda = LfudaCache::new(cap);
+    let mut lfuda = make_lfuda(3);
     for i in 0..10 {
         lfuda.put(i, i);
     }
     assert_eq!(lfuda.len(), 3, "LFUDA should enforce capacity");
 
     // SLRU
-    let protected = NonZeroUsize::new(1).unwrap();
-    let mut slru = SlruCache::new(cap, protected);
+    let mut slru = make_slru(3, 1);
     for i in 0..10 {
         slru.put(i, i);
     }
     assert_eq!(slru.len(), 3, "SLRU should enforce capacity");
 
     // GDSF
-    let mut gdsf = GdsfCache::new(cap);
+    let mut gdsf = make_gdsf(3);
     for i in 0..10 {
         gdsf.put(i, i, 1);
     }
@@ -694,10 +803,8 @@ fn test_all_caches_capacity_enforcement() {
 
 #[test]
 fn test_all_caches_update_existing_key() {
-    let cap = NonZeroUsize::new(3).unwrap();
-
     // LRU - updating existing key should not change len
-    let mut lru = LruCache::new(cap);
+    let mut lru = make_lru(3);
     lru.put(1, 10);
     lru.put(2, 20);
     lru.put(1, 100); // Update key 1
@@ -705,7 +812,7 @@ fn test_all_caches_update_existing_key() {
     assert_eq!(lru.get(&1), Some(&100), "LRU: value should be updated");
 
     // LFU
-    let mut lfu = LfuCache::new(cap);
+    let mut lfu = make_lfu(3);
     lfu.put(1, 10);
     lfu.put(2, 20);
     lfu.put(1, 100);
@@ -713,7 +820,7 @@ fn test_all_caches_update_existing_key() {
     assert_eq!(lfu.get(&1), Some(&100), "LFU: value should be updated");
 
     // LFUDA
-    let mut lfuda = LfudaCache::new(cap);
+    let mut lfuda = make_lfuda(3);
     lfuda.put(1, 10);
     lfuda.put(2, 20);
     lfuda.put(1, 100);
@@ -721,8 +828,7 @@ fn test_all_caches_update_existing_key() {
     assert_eq!(lfuda.get(&1), Some(&100), "LFUDA: value should be updated");
 
     // SLRU
-    let protected = NonZeroUsize::new(1).unwrap();
-    let mut slru = SlruCache::new(cap, protected);
+    let mut slru = make_slru(3, 1);
     slru.put(1, 10);
     slru.put(2, 20);
     slru.put(1, 100);
@@ -730,7 +836,7 @@ fn test_all_caches_update_existing_key() {
     assert_eq!(slru.get(&1), Some(&100), "SLRU: value should be updated");
 
     // GDSF - note: get() returns Option<V>, not Option<&V>
-    let mut gdsf = GdsfCache::new(cap);
+    let mut gdsf = make_gdsf(3);
     gdsf.put(1, 10, 1);
     gdsf.put(2, 20, 1);
     gdsf.put(1, 100, 1);
@@ -740,10 +846,8 @@ fn test_all_caches_update_existing_key() {
 
 #[test]
 fn test_all_caches_clear() {
-    let cap = NonZeroUsize::new(5).unwrap();
-
     // LRU
-    let mut lru = LruCache::new(cap);
+    let mut lru = make_lru(5);
     for i in 0..5 {
         lru.put(i, i);
     }
@@ -755,7 +859,7 @@ fn test_all_caches_clear() {
     );
 
     // LFU
-    let mut lfu = LfuCache::new(cap);
+    let mut lfu = make_lfu(5);
     for i in 0..5 {
         lfu.put(i, i);
     }
@@ -763,7 +867,7 @@ fn test_all_caches_clear() {
     assert_eq!(lfu.len(), 0, "LFU: clear should empty cache");
 
     // LFUDA
-    let mut lfuda = LfudaCache::new(cap);
+    let mut lfuda = make_lfuda(5);
     for i in 0..5 {
         lfuda.put(i, i);
     }
@@ -771,8 +875,7 @@ fn test_all_caches_clear() {
     assert_eq!(lfuda.len(), 0, "LFUDA: clear should empty cache");
 
     // SLRU
-    let protected = NonZeroUsize::new(2).unwrap();
-    let mut slru = SlruCache::new(cap, protected);
+    let mut slru = make_slru(5, 2);
     for i in 0..5 {
         slru.put(i, i);
     }
@@ -780,7 +883,7 @@ fn test_all_caches_clear() {
     assert_eq!(slru.len(), 0, "SLRU: clear should empty cache");
 
     // GDSF
-    let mut gdsf = GdsfCache::new(cap);
+    let mut gdsf = make_gdsf(5);
     for i in 0..5 {
         gdsf.put(i, i, 1);
     }
@@ -802,7 +905,7 @@ fn test_all_caches_clear() {
 #[test]
 fn test_lru_size_tracking() {
     // Create cache with max_size=100 bytes (entry count effectively unlimited)
-    let mut cache = LruCache::with_max_size(100);
+    let mut cache = make_lru_with_max_size(100);
 
     // Insert items with sizes
     cache.put_with_size(1, "a", 30); // size=30, total=30
@@ -834,7 +937,7 @@ fn test_lru_size_tracking() {
 
 #[test]
 fn test_lru_size_tracking_accumulates() {
-    let mut cache = LruCache::with_max_size(1000);
+    let mut cache = make_lru_with_max_size(1000);
 
     // Insert multiple items and verify size accumulates
     for i in 0..10 {
@@ -852,10 +955,7 @@ fn test_lru_size_tracking_accumulates() {
 #[test]
 fn test_lru_entry_count_eviction_updates_size() {
     // Create cache with entry count limit of 3
-    let mut cache = LruCache::with_limits(
-        NonZeroUsize::new(3).unwrap(), // max 3 entries
-        1000,                          // max size (won't trigger)
-    );
+    let mut cache = make_lru_with_limits(3, 1000);
 
     cache.put_with_size(1, "a", 30);
     cache.put_with_size(2, "b", 40);
@@ -877,7 +977,7 @@ fn test_lru_entry_count_eviction_updates_size() {
 
 #[test]
 fn test_lfu_size_tracking() {
-    let mut cache = LfuCache::with_max_size(1000);
+    let mut cache = make_lfu_with_max_size(1000);
 
     cache.put_with_size(1, "a", 100);
     cache.put_with_size(2, "b", 200);
@@ -889,7 +989,7 @@ fn test_lfu_size_tracking() {
 
 #[test]
 fn test_lfuda_size_tracking() {
-    let mut cache = LfudaCache::with_max_size(1000);
+    let mut cache = make_lfuda_with_max_size(1000);
 
     cache.put_with_size(1, "a", 100);
     cache.put_with_size(2, "b", 200);
@@ -899,7 +999,7 @@ fn test_lfuda_size_tracking() {
 
 #[test]
 fn test_slru_size_tracking() {
-    let mut cache = SlruCache::with_max_size(1000);
+    let mut cache = make_slru_with_max_size(1000);
 
     cache.put_with_size(1, "a", 100);
     cache.put_with_size(2, "b", 200);
@@ -910,7 +1010,7 @@ fn test_slru_size_tracking() {
 
 #[test]
 fn test_size_reset_on_clear() {
-    let mut cache = LruCache::with_max_size(1000);
+    let mut cache = make_lru_with_max_size(1000);
 
     cache.put_with_size(1, "a", 30);
     cache.put_with_size(2, "b", 40);
@@ -923,7 +1023,7 @@ fn test_size_reset_on_clear() {
 
 #[test]
 fn test_max_size_getter() {
-    let cache: LruCache<i32, i32> = LruCache::with_max_size(500);
+    let cache: LruCache<i32, i32> = make_lru_with_max_size(500);
     assert_eq!(
         cache.max_size(),
         500,
@@ -931,7 +1031,7 @@ fn test_max_size_getter() {
     );
 
     // Count-only cache has max_size=u64::MAX
-    let cache2: LruCache<i32, i32> = LruCache::new(NonZeroUsize::new(10).unwrap());
+    let cache2: LruCache<i32, i32> = make_lru(10);
     assert_eq!(
         cache2.max_size(),
         u64::MAX,
@@ -941,7 +1041,7 @@ fn test_max_size_getter() {
 
 #[test]
 fn test_with_limits_constructor() {
-    let cache: LruCache<i32, i32> = LruCache::with_limits(NonZeroUsize::new(100).unwrap(), 50000);
+    let cache: LruCache<i32, i32> = make_lru_with_limits(100, 50000);
 
     assert_eq!(cache.max_size(), 50000);
     assert_eq!(cache.len(), 0);
@@ -955,7 +1055,7 @@ fn test_with_limits_constructor() {
 #[test]
 fn test_lru_capacity_one() {
     // Edge case: cache that can only hold 1 item
-    let mut cache = LruCache::new(NonZeroUsize::new(1).unwrap());
+    let mut cache = make_lru(1);
 
     cache.put(1, 10);
     assert_eq!(cache.get(&1), Some(&10));
@@ -973,7 +1073,7 @@ fn test_lru_capacity_one() {
 
 #[test]
 fn test_lru_update_moves_to_mru() {
-    let mut cache = LruCache::new(NonZeroUsize::new(3).unwrap());
+    let mut cache = make_lru(3);
 
     cache.put(1, 10);
     cache.put(2, 20);
@@ -1002,7 +1102,7 @@ fn test_lru_update_moves_to_mru() {
 
 #[test]
 fn test_lru_reverse_access_order() {
-    let mut cache = LruCache::new(NonZeroUsize::new(5).unwrap());
+    let mut cache = make_lru(5);
 
     // Insert 1, 2, 3, 4, 5
     for i in 1..=5 {
@@ -1027,7 +1127,7 @@ fn test_lru_reverse_access_order() {
 
 #[test]
 fn test_lru_remove_and_reinsert() {
-    let mut cache = LruCache::new(NonZeroUsize::new(3).unwrap());
+    let mut cache = make_lru(3);
 
     cache.put(1, 10);
     cache.put(2, 20);
@@ -1059,7 +1159,7 @@ fn test_lru_remove_and_reinsert() {
 fn test_lfu_all_equal_frequency_fifo() {
     // Critical corner case: all items have same frequency
     // Should use FIFO (insertion order) as tiebreaker
-    let mut cache = LfuCache::new(NonZeroUsize::new(4).unwrap());
+    let mut cache = make_lfu(4);
 
     // Insert 4 items - all have freq=1
     cache.put(1, 10);
@@ -1094,7 +1194,7 @@ fn test_lfu_all_equal_frequency_fifo() {
 #[test]
 fn test_lfu_new_item_lowest_frequency() {
     // New item has freq=1, could be immediately evicted
-    let mut cache = LfuCache::new(NonZeroUsize::new(3).unwrap());
+    let mut cache = make_lfu(3);
 
     cache.put(1, 10);
     cache.put(2, 20);
@@ -1126,7 +1226,7 @@ fn test_lfu_new_item_lowest_frequency() {
 
 #[test]
 fn test_lfu_capacity_one() {
-    let mut cache = LfuCache::new(NonZeroUsize::new(1).unwrap());
+    let mut cache = make_lfu(1);
 
     cache.put(1, 10);
     // Access many times
@@ -1145,7 +1245,7 @@ fn test_lfu_capacity_one() {
 
 #[test]
 fn test_lfu_update_preserves_frequency() {
-    let mut cache = LfuCache::new(NonZeroUsize::new(3).unwrap());
+    let mut cache = make_lfu(3);
 
     cache.put(1, 10);
     cache.put(2, 20);
@@ -1177,8 +1277,7 @@ fn test_lfu_update_preserves_frequency() {
 #[test]
 fn test_slru_all_in_probationary() {
     // No items get promoted - all stay in probationary
-    let protected = NonZeroUsize::new(3).unwrap();
-    let mut cache = SlruCache::new(NonZeroUsize::new(5).unwrap(), protected);
+    let mut cache = make_slru(5, 3);
 
     // Insert 5 items, access each only once (no promotion)
     for i in 1..=5 {
@@ -1201,8 +1300,7 @@ fn test_slru_all_in_probationary() {
 #[test]
 fn test_slru_protected_full_demotion() {
     // When protected is full, oldest protected item gets demoted
-    let protected = NonZeroUsize::new(2).unwrap();
-    let mut cache = SlruCache::new(NonZeroUsize::new(4).unwrap(), protected);
+    let mut cache = make_slru(4, 2);
 
     // Insert and promote 2 items to fill protected
     cache.put(1, 10);
@@ -1234,8 +1332,7 @@ fn test_slru_protected_full_demotion() {
 
 #[test]
 fn test_slru_access_in_protected_stays() {
-    let protected = NonZeroUsize::new(2).unwrap();
-    let mut cache = SlruCache::new(NonZeroUsize::new(4).unwrap(), protected);
+    let mut cache = make_slru(4, 2);
 
     cache.put(1, 10);
     cache.put(2, 20);
@@ -1274,8 +1371,7 @@ fn test_slru_access_in_protected_stays() {
 #[test]
 fn test_slru_probationary_larger_than_protected() {
     // Protected size smaller than probationary
-    let protected = NonZeroUsize::new(1).unwrap();
-    let mut cache = SlruCache::new(NonZeroUsize::new(5).unwrap(), protected);
+    let mut cache = make_slru(5, 1);
 
     // Fill cache
     for i in 1..=5 {
@@ -1307,7 +1403,7 @@ fn test_slru_probationary_larger_than_protected() {
 
 #[test]
 fn test_lfuda_all_equal_priority() {
-    let mut cache = LfudaCache::new(NonZeroUsize::new(4).unwrap());
+    let mut cache = make_lfuda(4);
 
     // Insert 4 items - all have same initial priority
     cache.put(1, 10);
@@ -1326,7 +1422,7 @@ fn test_lfuda_all_equal_priority() {
 
 #[test]
 fn test_lfuda_aging_reduces_priority_gap() {
-    let mut cache = LfudaCache::new(NonZeroUsize::new(3).unwrap());
+    let mut cache = make_lfuda(3);
 
     cache.put(1, 10);
     // Build very high frequency for key 1
@@ -1349,7 +1445,7 @@ fn test_lfuda_aging_reduces_priority_gap() {
 
 #[test]
 fn test_lfuda_capacity_one() {
-    let mut cache = LfudaCache::new(NonZeroUsize::new(1).unwrap());
+    let mut cache = make_lfuda(1);
 
     cache.put(1, 10);
     for _ in 0..100 {
@@ -1371,7 +1467,7 @@ fn test_lfuda_capacity_one() {
 #[test]
 fn test_gdsf_all_same_size_and_frequency() {
     // Same size and frequency = same priority, use tiebreaker
-    let mut cache = GdsfCache::new(NonZeroUsize::new(4).unwrap());
+    let mut cache = make_gdsf(4);
 
     for i in 1..=4 {
         cache.put(i, i * 10, 10); // All size=10
@@ -1388,7 +1484,7 @@ fn test_gdsf_all_same_size_and_frequency() {
 
 #[test]
 fn test_gdsf_tiny_vs_huge_size() {
-    let mut cache = GdsfCache::new(NonZeroUsize::new(3).unwrap());
+    let mut cache = make_gdsf(3);
 
     // Huge object with moderate frequency
     cache.put(1, 10, 1000);
@@ -1414,7 +1510,7 @@ fn test_gdsf_tiny_vs_huge_size() {
 #[test]
 fn test_gdsf_size_one_equals_lfu() {
     // When all sizes are 1, GDSF should behave like LFU
-    let mut cache = GdsfCache::new(NonZeroUsize::new(3).unwrap());
+    let mut cache = make_gdsf(3);
 
     cache.put(1, 10, 1);
     cache.put(2, 20, 1);
@@ -1438,7 +1534,7 @@ fn test_gdsf_size_one_equals_lfu() {
 
 #[test]
 fn test_gdsf_frequency_can_overcome_size() {
-    let mut cache = GdsfCache::new(NonZeroUsize::new(3).unwrap());
+    let mut cache = make_gdsf(3);
 
     // Large object with VERY high frequency
     cache.put(1, 10, 100);
@@ -1464,7 +1560,7 @@ fn test_gdsf_frequency_can_overcome_size() {
 
 #[test]
 fn test_gdsf_capacity_one() {
-    let mut cache = GdsfCache::new(NonZeroUsize::new(1).unwrap());
+    let mut cache = make_gdsf(1);
 
     cache.put(1, 10, 1);
     for _ in 0..100 {
@@ -1484,7 +1580,7 @@ fn test_gdsf_capacity_one() {
 
 #[test]
 fn test_operations_on_empty_cache() {
-    let mut lru: LruCache<i32, i32> = LruCache::new(NonZeroUsize::new(3).unwrap());
+    let mut lru: LruCache<i32, i32> = make_lru(3);
 
     // Get on empty cache
     assert_eq!(lru.get(&1), None);
@@ -1499,7 +1595,7 @@ fn test_operations_on_empty_cache() {
 
 #[test]
 fn test_remove_nonexistent_key() {
-    let mut cache = LruCache::new(NonZeroUsize::new(3).unwrap());
+    let mut cache = make_lru(3);
 
     cache.put(1, 10);
     cache.put(2, 20);
@@ -1515,7 +1611,7 @@ fn test_remove_nonexistent_key() {
 
 #[test]
 fn test_insert_after_clear() {
-    let mut cache = LruCache::new(NonZeroUsize::new(3).unwrap());
+    let mut cache = make_lru(3);
 
     cache.put(1, 10);
     cache.put(2, 20);
@@ -1535,7 +1631,7 @@ fn test_insert_after_clear() {
 
 #[test]
 fn test_rapid_update_same_key() {
-    let mut cache = LruCache::new(NonZeroUsize::new(3).unwrap());
+    let mut cache = make_lru(3);
 
     // Insert same key many times
     for i in 0..100 {
@@ -1548,7 +1644,7 @@ fn test_rapid_update_same_key() {
 
 #[test]
 fn test_alternating_keys() {
-    let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+    let mut cache = make_lru(2);
 
     // Alternating pattern that causes continuous eviction
     for i in 0..10 {
@@ -1561,7 +1657,7 @@ fn test_alternating_keys() {
 
 #[test]
 fn test_lfu_get_does_not_exist() {
-    let mut cache = LfuCache::new(NonZeroUsize::new(3).unwrap());
+    let mut cache = make_lfu(3);
 
     cache.put(1, 10);
 
@@ -1580,7 +1676,7 @@ fn test_lfu_get_does_not_exist() {
 
 #[test]
 fn test_gdsf_zero_size_handling() {
-    let mut cache = GdsfCache::new(NonZeroUsize::new(3).unwrap());
+    let mut cache = make_gdsf(3);
 
     // Size 0 edge case - implementation should handle gracefully
     // (might treat as size 1 or have special handling)
@@ -1608,10 +1704,7 @@ fn test_metrics_size_tracking_no_underflow() {
     // 3. On eviction, estimate_object_size() returns a larger value
     // 4. cache_size_bytes -= larger_value causes underflow
 
-    let mut cache = LruCache::with_limits(
-        NonZeroUsize::new(2).unwrap(), // Only 2 entries
-        1000,                          // Large max_size (won't trigger size eviction)
-    );
+    let mut cache = make_lru_with_limits(2, 1000);
 
     // Insert items with explicit small sizes
     cache.put_with_size(1, "a", 1); // Track as 1 byte
@@ -1639,8 +1732,7 @@ fn test_metrics_size_tracking_no_underflow() {
 #[test]
 fn test_metrics_size_mismatch_on_eviction() {
     // More aggressive test: insert with tiny explicit size, evict with estimated size
-    let mut cache: LruCache<i32, String> =
-        LruCache::with_limits(NonZeroUsize::new(3).unwrap(), 10000);
+    let mut cache: LruCache<i32, String> = make_lru_with_limits(3, 10000);
 
     // Insert items with size=1 but the actual values are larger
     // (estimate_object_size will calculate a bigger size)

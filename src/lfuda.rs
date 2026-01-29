@@ -57,9 +57,9 @@
 //!
 //! | Operation | Action | Time |
 //! |-----------|--------|------|
-//! | `get(key)` | Increment frequency, update age to global_age | O(1) |
-//! | `put(key, value)` | Insert with priority=global_age+1, evict min priority | O(1) |
-//! | `remove(key)` | Remove from priority list | O(1) |
+//! | `get(key)` | Increment frequency, update age to global_age | O(log P) |
+//! | `put(key, value)` | Insert with priority=global_age+1, evict min priority | O(log P) |
+//! | `remove(key)` | Remove from priority list | O(log P) |
 //!
 //! ## Aging Example
 //!
@@ -96,10 +96,13 @@
 //!
 //! | Metric | Value |
 //! |--------|-------|
-//! | Get | O(1) |
-//! | Put | O(1) |
-//! | Remove | O(1) |
+//! | Get | O(log P) |
+//! | Put | O(log P) amortized |
+//! | Remove | O(log P) |
 //! | Memory per entry | ~110 bytes overhead + key×2 + value |
+//!
+//! Where P = number of distinct priority values. Since priority = frequency + age,
+//! P can grow with the number of entries. BTreeMap provides O(log P) lookups.
 //!
 //! Slightly higher overhead than LFU due to age tracking per entry.
 //!
@@ -137,9 +140,15 @@
 //!
 //! ```
 //! use cache_rs::LfudaCache;
+//! use cache_rs::config::LfudaCacheConfig;
 //! use core::num::NonZeroUsize;
 //!
-//! let mut cache = LfudaCache::new(NonZeroUsize::new(3).unwrap());
+//! let config = LfudaCacheConfig {
+//!     capacity: NonZeroUsize::new(3).unwrap(),
+//!     initial_age: 0,
+//!     max_size: u64::MAX,
+//! };
+//! let mut cache = LfudaCache::init(config, None);
 //!
 //! cache.put("a", 1);
 //! cache.put("b", 2);
@@ -160,9 +169,15 @@
 //!
 //! ```
 //! use cache_rs::LfudaCache;
+//! use cache_rs::config::LfudaCacheConfig;
 //! use core::num::NonZeroUsize;
 //!
-//! let mut cache = LfudaCache::new(NonZeroUsize::new(100).unwrap());
+//! let config = LfudaCacheConfig {
+//!     capacity: NonZeroUsize::new(100).unwrap(),
+//!     initial_age: 0,
+//!     max_size: u64::MAX,
+//! };
+//! let mut cache = LfudaCache::init(config, None);
 //!
 //! // Populate cache with initial data
 //! for i in 0..100 {
@@ -257,27 +272,25 @@ unsafe impl<K: Send, V: Send, S: Send> Send for LfudaSegment<K, V, S> {}
 unsafe impl<K: Send, V: Send, S: Sync> Sync for LfudaSegment<K, V, S> {}
 
 impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
-    /// Creates a new LFUDA segment with the specified capacity and hash builder.
-    pub(crate) fn with_hasher(cap: NonZeroUsize, hash_builder: S) -> Self {
-        Self::with_hasher_and_size(cap, hash_builder, u64::MAX)
-    }
-
-    /// Creates a new LFUDA segment with the specified capacity, hash builder, and max size.
-    pub(crate) fn with_hasher_and_size(cap: NonZeroUsize, hash_builder: S, max_size: u64) -> Self {
-        let config = LfudaCacheConfig {
-            capacity: cap,
-            initial_age: 0,
-            max_size,
-        };
+    /// Creates a new LFUDA segment from a configuration.
+    ///
+    /// This is the **recommended** way to create an LFUDA segment. All configuration
+    /// is specified through the [`LfudaCacheConfig`] struct.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Configuration specifying capacity, initial age, and optional size limit
+    /// * `hasher` - Hash builder for the internal HashMap
+    #[allow(dead_code)] // Used by concurrent module when feature is enabled
+    pub(crate) fn init(config: LfudaCacheConfig, hasher: S) -> Self {
         let map_capacity = config.capacity.get().next_power_of_two();
-
         LfudaSegment {
             config,
-            global_age: 0,
+            global_age: config.initial_age as u64,
             min_priority: 0,
-            map: HashMap::with_capacity_and_hasher(map_capacity, hash_builder),
+            map: HashMap::with_capacity_and_hasher(map_capacity, hasher),
             priority_lists: BTreeMap::new(),
-            metrics: LfudaCacheMetrics::new(max_size),
+            metrics: LfudaCacheMetrics::new(config.max_size),
             current_size: 0,
         }
     }
@@ -682,10 +695,16 @@ impl<K, V, S> core::fmt::Debug for LfudaSegment<K, V, S> {
 ///
 /// ```
 /// use cache_rs::lfuda::LfudaCache;
+/// use cache_rs::config::LfudaCacheConfig;
 /// use core::num::NonZeroUsize;
 ///
 /// // Create an LFUDA cache with capacity 3
-/// let mut cache = LfudaCache::new(NonZeroUsize::new(3).unwrap());
+/// let config = LfudaCacheConfig {
+///     capacity: NonZeroUsize::new(3).unwrap(),
+///     initial_age: 0,
+///     max_size: u64::MAX,
+/// };
+/// let mut cache = LfudaCache::init(config, None);
 ///
 /// // Add some items
 /// cache.put("a", 1);
@@ -706,33 +725,6 @@ pub struct LfudaCache<K, V, S = DefaultHashBuilder> {
 }
 
 impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
-    /// Creates a new LFUDA cache with the specified capacity and hash builder.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use cache_rs::lfuda::LfudaCache;
-    /// use core::num::NonZeroUsize;
-    /// use std::collections::hash_map::RandomState;
-    ///
-    /// let cache: LfudaCache<&str, u32, _> = LfudaCache::with_hasher(
-    ///     NonZeroUsize::new(10).unwrap(),
-    ///     RandomState::new()
-    /// );
-    /// ```
-    pub fn with_hasher(cap: NonZeroUsize, hash_builder: S) -> Self {
-        Self {
-            segment: LfudaSegment::with_hasher(cap, hash_builder),
-        }
-    }
-
-    /// Creates a new LFUDA cache with the specified capacity, hash builder, and max size.
-    pub fn with_hasher_and_size(cap: NonZeroUsize, hash_builder: S, max_size: u64) -> Self {
-        Self {
-            segment: LfudaSegment::with_hasher_and_size(cap, hash_builder, max_size),
-        }
-    }
-
     /// Returns the maximum number of key-value pairs the cache can hold.
     #[inline]
     pub fn cap(&self) -> NonZeroUsize {
@@ -910,95 +902,9 @@ where
         config: LfudaCacheConfig,
         hasher: Option<DefaultHashBuilder>,
     ) -> LfudaCache<K, V, DefaultHashBuilder> {
-        LfudaCache::with_hasher_and_size(
-            config.capacity,
-            hasher.unwrap_or_default(),
-            config.max_size,
-        )
-    }
-
-    /// Creates a new LFUDA cache with the specified capacity.
-    ///
-    /// This is a convenience constructor that creates a cache with only a capacity limit.
-    /// For more control, use [`LfudaCache::init`] with an [`LfudaCacheConfig`].
-    ///
-    /// # Arguments
-    ///
-    /// * `cap` - The maximum number of entries the cache can hold.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use cache_rs::LfudaCache;
-    /// use core::num::NonZeroUsize;
-    ///
-    /// let mut cache = LfudaCache::new(NonZeroUsize::new(100).unwrap());
-    /// cache.put("key", 42);
-    /// ```
-    pub fn new(cap: NonZeroUsize) -> LfudaCache<K, V, DefaultHashBuilder> {
-        LfudaCache::init(
-            LfudaCacheConfig {
-                capacity: cap,
-                initial_age: 0,
-                max_size: u64::MAX,
-            },
-            None,
-        )
-    }
-
-    /// Creates a new LFUDA cache with both entry count and size limits.
-    ///
-    /// This is a convenience constructor. For more control, use [`LfudaCache::init`].
-    ///
-    /// # Arguments
-    ///
-    /// * `cap` - The maximum number of entries the cache can hold.
-    /// * `max_size` - The maximum total size in bytes (0 means unlimited).
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use cache_rs::LfudaCache;
-    /// use core::num::NonZeroUsize;
-    ///
-    /// // Cache with 1000 entries and 10MB size limit
-    /// let mut cache: LfudaCache<String, Vec<u8>> = LfudaCache::with_limits(
-    ///     NonZeroUsize::new(1000).unwrap(),
-    ///     10 * 1024 * 1024,
-    /// );
-    /// ```
-    pub fn with_limits(cap: NonZeroUsize, max_size: u64) -> LfudaCache<K, V, DefaultHashBuilder> {
-        LfudaCache::init(
-            LfudaCacheConfig {
-                capacity: cap,
-                initial_age: 0,
-                max_size,
-            },
-            None,
-        )
-    }
-
-    /// Creates a new LFUDA cache with only a size limit.
-    ///
-    /// This is a convenience constructor that creates a cache limited by total size
-    /// with a very high entry count limit.
-    ///
-    /// # Arguments
-    ///
-    /// * `max_size` - The maximum total size in bytes.
-    pub fn with_max_size(max_size: u64) -> LfudaCache<K, V, DefaultHashBuilder> {
-        // Use a reasonable default capacity for size-based caches.
-        // The HashMap will grow dynamically as needed, so we don't need
-        // to pre-allocate for billions of entries.
-        const DEFAULT_SIZE_BASED_CAPACITY: usize = 16384;
-        LfudaCache::init(
-            LfudaCacheConfig {
-                capacity: NonZeroUsize::new(DEFAULT_SIZE_BASED_CAPACITY).unwrap(),
-                initial_age: 0,
-                max_size,
-            },
-            None,
-        )
+        LfudaCache {
+            segment: LfudaSegment::init(config, hasher.unwrap_or_default()),
+        }
     }
 }
 
@@ -1008,11 +914,22 @@ mod tests {
     use alloc::string::ToString;
 
     use super::*;
+    use crate::config::LfudaCacheConfig;
     use alloc::string::String;
+
+    /// Helper to create an LfudaCache with the given capacity
+    fn make_cache<K: Hash + Eq + Clone, V: Clone>(cap: usize) -> LfudaCache<K, V> {
+        let config = LfudaCacheConfig {
+            capacity: NonZeroUsize::new(cap).unwrap(),
+            initial_age: 0,
+            max_size: u64::MAX,
+        };
+        LfudaCache::init(config, None)
+    }
 
     #[test]
     fn test_lfuda_basic() {
-        let mut cache = LfudaCache::new(NonZeroUsize::new(3).unwrap());
+        let mut cache = make_cache(3);
 
         // Add items
         assert_eq!(cache.put("a", 1), None);
@@ -1042,7 +959,7 @@ mod tests {
 
     #[test]
     fn test_lfuda_aging() {
-        let mut cache = LfudaCache::new(NonZeroUsize::new(2).unwrap());
+        let mut cache = make_cache(2);
 
         // Add items and access them
         cache.put("a", 1);
@@ -1072,7 +989,7 @@ mod tests {
 
     #[test]
     fn test_lfuda_priority_calculation() {
-        let mut cache = LfudaCache::new(NonZeroUsize::new(3).unwrap());
+        let mut cache = make_cache(3);
 
         cache.put("a", 1);
         assert_eq!(cache.global_age(), 0);
@@ -1094,7 +1011,7 @@ mod tests {
 
     #[test]
     fn test_lfuda_update_existing() {
-        let mut cache = LfudaCache::new(NonZeroUsize::new(2).unwrap());
+        let mut cache = make_cache(2);
 
         cache.put("a", 1);
         cache.get(&"a"); // Increase frequency
@@ -1114,7 +1031,7 @@ mod tests {
 
     #[test]
     fn test_lfuda_remove() {
-        let mut cache = LfudaCache::new(NonZeroUsize::new(3).unwrap());
+        let mut cache = make_cache(3);
 
         cache.put("a", 1);
         cache.put("b", 2);
@@ -1132,7 +1049,7 @@ mod tests {
 
     #[test]
     fn test_lfuda_clear() {
-        let mut cache = LfudaCache::new(NonZeroUsize::new(3).unwrap());
+        let mut cache = make_cache(3);
 
         cache.put("a", 1);
         cache.put("b", 2);
@@ -1157,7 +1074,7 @@ mod tests {
 
     #[test]
     fn test_lfuda_get_mut() {
-        let mut cache = LfudaCache::new(NonZeroUsize::new(2).unwrap());
+        let mut cache = make_cache(2);
 
         cache.put("a", 1);
 
@@ -1171,7 +1088,7 @@ mod tests {
 
     #[test]
     fn test_lfuda_complex_values() {
-        let mut cache = LfudaCache::new(NonZeroUsize::new(2).unwrap());
+        let mut cache = make_cache(2);
 
         #[derive(Debug, Clone, PartialEq)]
         struct ComplexValue {
@@ -1210,7 +1127,7 @@ mod tests {
 
     #[test]
     fn test_lfuda_aging_advantage() {
-        let mut cache = LfudaCache::new(NonZeroUsize::new(2).unwrap());
+        let mut cache = make_cache(2);
 
         // Add and heavily access an old item
         cache.put("old", 1);
@@ -1242,7 +1159,7 @@ mod tests {
     /// Test to validate the fix for Stacked Borrows violations detected by Miri.
     #[test]
     fn test_miri_stacked_borrows_fix() {
-        let mut cache = LfudaCache::new(NonZeroUsize::new(10).unwrap());
+        let mut cache = make_cache(10);
 
         // Insert some items
         cache.put("a", 1);
@@ -1268,8 +1185,13 @@ mod tests {
     // Test that LfudaSegment works correctly (internal tests)
     #[test]
     fn test_lfuda_segment_directly() {
+        let config = LfudaCacheConfig {
+            capacity: NonZeroUsize::new(3).unwrap(),
+            initial_age: 0,
+            max_size: u64::MAX,
+        };
         let mut segment: LfudaSegment<&str, i32, DefaultHashBuilder> =
-            LfudaSegment::with_hasher(NonZeroUsize::new(3).unwrap(), DefaultHashBuilder::default());
+            LfudaSegment::init(config, DefaultHashBuilder::default());
 
         assert_eq!(segment.len(), 0);
         assert!(segment.is_empty());
@@ -1292,7 +1214,7 @@ mod tests {
         use std::thread;
         use std::vec::Vec;
 
-        let cache = Arc::new(Mutex::new(LfudaCache::new(NonZeroUsize::new(100).unwrap())));
+        let cache = Arc::new(Mutex::new(make_cache::<String, i32>(100)));
         let num_threads = 4;
         let ops_per_thread = 100;
 
@@ -1321,7 +1243,7 @@ mod tests {
 
     #[test]
     fn test_lfuda_size_aware_tracking() {
-        let mut cache = LfudaCache::new(NonZeroUsize::new(10).unwrap());
+        let mut cache = make_cache(10);
 
         assert_eq!(cache.current_size(), 0);
         assert_eq!(cache.max_size(), u64::MAX);
@@ -1353,8 +1275,12 @@ mod tests {
 
     #[test]
     fn test_lfuda_with_limits_constructor() {
-        let cache: LfudaCache<String, String> =
-            LfudaCache::with_limits(NonZeroUsize::new(100).unwrap(), 1024 * 1024);
+        let config = LfudaCacheConfig {
+            capacity: NonZeroUsize::new(100).unwrap(),
+            initial_age: 0,
+            max_size: 1024 * 1024,
+        };
+        let cache: LfudaCache<String, String> = LfudaCache::init(config, None);
 
         assert_eq!(cache.current_size(), 0);
         assert_eq!(cache.max_size(), 1024 * 1024);

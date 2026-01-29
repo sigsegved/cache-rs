@@ -122,13 +122,16 @@
 //!
 //! ```
 //! use cache_rs::SlruCache;
+//! use cache_rs::config::SlruCacheConfig;
 //! use core::num::NonZeroUsize;
 //!
 //! // Total capacity 100, protected segment 20
-//! let mut cache = SlruCache::new(
-//!     NonZeroUsize::new(100).unwrap(),
-//!     NonZeroUsize::new(20).unwrap(),
-//! );
+//! let config = SlruCacheConfig {
+//!     capacity: NonZeroUsize::new(100).unwrap(),
+//!     protected_capacity: NonZeroUsize::new(20).unwrap(),
+//!     max_size: u64::MAX,
+//! };
+//! let mut cache = SlruCache::init(config, None);
 //!
 //! cache.put("a", 1);  // Enters probationary
 //! cache.get(&"a");    // Promoted to protected!
@@ -141,12 +144,15 @@
 //!
 //! ```
 //! use cache_rs::SlruCache;
+//! use cache_rs::config::SlruCacheConfig;
 //! use core::num::NonZeroUsize;
 //!
-//! let mut cache: SlruCache<i32, i32> = SlruCache::new(
-//!     NonZeroUsize::new(10).unwrap(),
-//!     NonZeroUsize::new(3).unwrap(),
-//! );
+//! let config = SlruCacheConfig {
+//!     capacity: NonZeroUsize::new(10).unwrap(),
+//!     protected_capacity: NonZeroUsize::new(3).unwrap(),
+//!     max_size: u64::MAX,
+//! };
+//! let mut cache: SlruCache<i32, i32> = SlruCache::init(config, None);
 //!
 //! // Establish hot items in protected segment
 //! for key in [1, 2, 3] {
@@ -244,28 +250,17 @@ unsafe impl<K: Send, V: Send, S: Send> Send for SlruSegment<K, V, S> {}
 unsafe impl<K: Send, V: Send, S: Sync> Sync for SlruSegment<K, V, S> {}
 
 impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruSegment<K, V, S> {
-    /// Creates a new SLRU segment with the specified capacity and hash builder.
-    pub(crate) fn with_hasher(
-        total_cap: NonZeroUsize,
-        protected_cap: NonZeroUsize,
-        hash_builder: S,
-    ) -> Self {
-        Self::with_hasher_and_size(total_cap, protected_cap, hash_builder, u64::MAX)
-    }
-
-    /// Creates a new SLRU segment with the specified capacity, hash builder, and max size.
-    pub(crate) fn with_hasher_and_size(
-        total_cap: NonZeroUsize,
-        protected_cap: NonZeroUsize,
-        hash_builder: S,
-        max_size: u64,
-    ) -> Self {
-        let config = SlruCacheConfig {
-            capacity: total_cap,
-            protected_capacity: protected_cap,
-            max_size,
-        };
-
+    /// Creates a new SLRU segment from a configuration.
+    ///
+    /// This is the **recommended** way to create an SLRU segment. All configuration
+    /// is specified through the [`SlruCacheConfig`] struct.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Configuration specifying capacity, protected capacity, and optional size limit
+    /// * `hasher` - Hash builder for the internal HashMap
+    #[allow(dead_code)] // Used by concurrent module when feature is enabled
+    pub(crate) fn init(config: SlruCacheConfig, hasher: S) -> Self {
         let probationary_max_size =
             NonZeroUsize::new(config.capacity.get() - config.protected_capacity.get()).unwrap();
 
@@ -275,11 +270,11 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruSegment<K, V, S> {
             protected: List::new(config.protected_capacity),
             map: HashMap::with_capacity_and_hasher(
                 config.capacity.get().next_power_of_two(),
-                hash_builder,
+                hasher,
             ),
-            metrics: SlruCacheMetrics::new(max_size, config.protected_capacity.get() as u64),
+            metrics: SlruCacheMetrics::new(config.max_size, config.protected_capacity.get() as u64),
             current_size: 0,
-            max_size,
+            max_size: config.max_size,
         }
     }
 
@@ -701,14 +696,17 @@ impl<K, V, S> core::fmt::Debug for SlruSegment<K, V, S> {
 ///
 /// ```
 /// use cache_rs::slru::SlruCache;
+/// use cache_rs::config::SlruCacheConfig;
 /// use core::num::NonZeroUsize;
 ///
 /// // Create an SLRU cache with a total capacity of 4,
 /// // with a protected capacity of 2 (half protected, half probationary)
-/// let mut cache = SlruCache::new(
-///     NonZeroUsize::new(4).unwrap(),
-///     NonZeroUsize::new(2).unwrap()
-/// );
+/// let config = SlruCacheConfig {
+///     capacity: NonZeroUsize::new(4).unwrap(),
+///     protected_capacity: NonZeroUsize::new(2).unwrap(),
+///     max_size: u64::MAX,
+/// };
+/// let mut cache = SlruCache::init(config, None);
 ///
 /// // Add some items
 /// cache.put("a", 1);
@@ -730,45 +728,6 @@ pub struct SlruCache<K, V, S = DefaultHashBuilder> {
 }
 
 impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruCache<K, V, S> {
-    /// Creates a new SLRU cache with the specified capacity and hash builder.
-    ///
-    /// # Parameters
-    ///
-    /// - `total_cap`: The total capacity of the cache. Must be a non-zero value.
-    /// - `protected_cap`: The maximum capacity of the protected segment.
-    ///   Must be a non-zero value and less than or equal to `total_cap`.
-    /// - `hash_builder`: The hash builder to use for the underlying hash map.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `protected_cap` is greater than `total_cap`.
-    pub fn with_hasher(
-        total_cap: NonZeroUsize,
-        protected_cap: NonZeroUsize,
-        hash_builder: S,
-    ) -> Self {
-        Self {
-            segment: SlruSegment::with_hasher(total_cap, protected_cap, hash_builder),
-        }
-    }
-
-    /// Creates a new SLRU cache with the specified capacity, hash builder, and max size.
-    pub fn with_hasher_and_size(
-        total_cap: NonZeroUsize,
-        protected_cap: NonZeroUsize,
-        hash_builder: S,
-        max_size: u64,
-    ) -> Self {
-        Self {
-            segment: SlruSegment::with_hasher_and_size(
-                total_cap,
-                protected_cap,
-                hash_builder,
-                max_size,
-            ),
-        }
-    }
-
     /// Returns the maximum number of key-value pairs the cache can hold.
     #[inline]
     pub fn cap(&self) -> NonZeroUsize {
@@ -904,7 +863,7 @@ where
 {
     /// Creates a new SLRU cache from a configuration.
     ///
-    /// This is the **recommended** way to create an SLRU cache. All configuration
+    /// This is the **only** way to create an SLRU cache. All configuration
     /// is specified through the [`SlruCacheConfig`] struct.
     ///
     /// # Arguments
@@ -940,111 +899,9 @@ where
         config: SlruCacheConfig,
         hasher: Option<DefaultHashBuilder>,
     ) -> SlruCache<K, V, DefaultHashBuilder> {
-        SlruCache::with_hasher_and_size(
-            config.capacity,
-            config.protected_capacity,
-            hasher.unwrap_or_default(),
-            config.max_size,
-        )
-    }
-
-    /// Creates a new SLRU cache with the specified total and protected capacities.
-    ///
-    /// This is a convenience constructor. For more control, use [`SlruCache::init`].
-    ///
-    /// # Arguments
-    ///
-    /// * `total_cap` - The maximum total number of entries (probationary + protected).
-    /// * `protected_cap` - The maximum number of entries in the protected segment.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use cache_rs::SlruCache;
-    /// use core::num::NonZeroUsize;
-    ///
-    /// // Cache with total 100 entries, 20 in protected segment
-    /// let mut cache = SlruCache::new(
-    ///     NonZeroUsize::new(100).unwrap(),
-    ///     NonZeroUsize::new(20).unwrap(),
-    /// );
-    /// cache.put("key", 42);
-    /// ```
-    pub fn new(
-        total_cap: NonZeroUsize,
-        protected_cap: NonZeroUsize,
-    ) -> SlruCache<K, V, DefaultHashBuilder> {
-        SlruCache::init(
-            SlruCacheConfig {
-                capacity: total_cap,
-                protected_capacity: protected_cap,
-                max_size: u64::MAX,
-            },
-            None,
-        )
-    }
-
-    /// Creates a new SLRU cache with entry count and size limits.
-    ///
-    /// This is a convenience constructor. For more control, use [`SlruCache::init`].
-    ///
-    /// # Arguments
-    ///
-    /// * `total_cap` - The maximum total number of entries (probationary + protected).
-    /// * `protected_cap` - The maximum number of entries in the protected segment.
-    /// * `max_size` - The maximum total size in bytes (0 means unlimited).
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use cache_rs::SlruCache;
-    /// use core::num::NonZeroUsize;
-    ///
-    /// // Cache with 1000 entries, 200 protected, and 10MB size limit
-    /// let mut cache: SlruCache<String, Vec<u8>> = SlruCache::with_limits(
-    ///     NonZeroUsize::new(1000).unwrap(),
-    ///     NonZeroUsize::new(200).unwrap(),
-    ///     10 * 1024 * 1024,
-    /// );
-    /// ```
-    pub fn with_limits(
-        total_cap: NonZeroUsize,
-        protected_cap: NonZeroUsize,
-        max_size: u64,
-    ) -> SlruCache<K, V, DefaultHashBuilder> {
-        SlruCache::init(
-            SlruCacheConfig {
-                capacity: total_cap,
-                protected_capacity: protected_cap,
-                max_size,
-            },
-            None,
-        )
-    }
-
-    /// Creates a new SLRU cache with only a size limit.
-    ///
-    /// This is a convenience constructor that creates a cache limited by total size
-    /// with very high entry count limits.
-    ///
-    /// # Arguments
-    ///
-    /// * `max_size` - The maximum total size in bytes.
-    pub fn with_max_size(max_size: u64) -> SlruCache<K, V, DefaultHashBuilder> {
-        // Use a reasonable default capacity for size-based caches.
-        // The HashMap will grow dynamically as needed, so we don't need
-        // to pre-allocate for billions of entries.
-        const DEFAULT_SIZE_BASED_CAPACITY: usize = 16384;
-        let default_cap = NonZeroUsize::new(DEFAULT_SIZE_BASED_CAPACITY).unwrap();
-        let default_protected = NonZeroUsize::new(DEFAULT_SIZE_BASED_CAPACITY / 5).unwrap();
-        SlruCache::init(
-            SlruCacheConfig {
-                capacity: default_cap,
-                protected_capacity: default_protected,
-                max_size,
-            },
-            None,
-        )
+        SlruCache {
+            segment: SlruSegment::init(config, hasher.unwrap_or_default()),
+        }
     }
 }
 
@@ -1064,14 +921,27 @@ mod tests {
     use std::string::ToString;
 
     use super::*;
+    use crate::config::SlruCacheConfig;
     use alloc::string::String;
+
+    /// Helper to create an SlruCache with the given capacity and protected capacity
+    fn make_cache<K: Hash + Eq + Clone, V: Clone>(
+        cap: usize,
+        protected_cap: usize,
+    ) -> SlruCache<K, V> {
+        let config = SlruCacheConfig {
+            capacity: NonZeroUsize::new(cap).unwrap(),
+            protected_capacity: NonZeroUsize::new(protected_cap).unwrap(),
+            max_size: u64::MAX,
+        };
+        SlruCache::init(config, None)
+    }
 
     #[test]
     fn test_slru_basic() {
         // Create a cache with capacity 4, with protected capacity 2
         // (2 probationary, 2 protected)
-        let mut cache =
-            SlruCache::new(NonZeroUsize::new(4).unwrap(), NonZeroUsize::new(2).unwrap());
+        let mut cache = make_cache(4, 2);
 
         // Add items to fill probationary segment
         assert_eq!(cache.put("a", 1), None);
@@ -1112,8 +982,7 @@ mod tests {
     #[test]
     fn test_slru_update() {
         // Create a cache with capacity 4, with protected capacity 2
-        let mut cache =
-            SlruCache::new(NonZeroUsize::new(4).unwrap(), NonZeroUsize::new(2).unwrap());
+        let mut cache = make_cache(4, 2);
 
         // Add items
         cache.put("a", 1);
@@ -1134,8 +1003,7 @@ mod tests {
     #[test]
     fn test_slru_remove() {
         // Create a cache with capacity 4, with protected capacity 2
-        let mut cache =
-            SlruCache::new(NonZeroUsize::new(4).unwrap(), NonZeroUsize::new(2).unwrap());
+        let mut cache = make_cache(4, 2);
 
         // Add items
         cache.put("a", 1);
@@ -1159,8 +1027,7 @@ mod tests {
     #[test]
     fn test_slru_clear() {
         // Create a cache with capacity 4, with protected capacity 2
-        let mut cache =
-            SlruCache::new(NonZeroUsize::new(4).unwrap(), NonZeroUsize::new(2).unwrap());
+        let mut cache = make_cache(4, 2);
 
         // Add items
         cache.put("a", 1);
@@ -1185,8 +1052,7 @@ mod tests {
     #[test]
     fn test_slru_complex_values() {
         // Create a cache with capacity 4, with protected capacity 2
-        let mut cache =
-            SlruCache::new(NonZeroUsize::new(4).unwrap(), NonZeroUsize::new(2).unwrap());
+        let mut cache = make_cache(4, 2);
 
         #[derive(Debug, Clone, PartialEq)]
         struct ComplexValue {
@@ -1225,8 +1091,7 @@ mod tests {
     #[test]
     fn test_slru_with_ratio() {
         // Test the with_ratio constructor
-        let mut cache =
-            SlruCache::new(NonZeroUsize::new(4).unwrap(), NonZeroUsize::new(2).unwrap());
+        let mut cache = make_cache(4, 2);
 
         assert_eq!(cache.cap().get(), 4);
         assert_eq!(cache.protected_max_size().get(), 2);
@@ -1253,11 +1118,13 @@ mod tests {
     // Test that SlruSegment works correctly (internal tests)
     #[test]
     fn test_slru_segment_directly() {
-        let mut segment: SlruSegment<&str, i32, DefaultHashBuilder> = SlruSegment::with_hasher(
-            NonZeroUsize::new(4).unwrap(),
-            NonZeroUsize::new(2).unwrap(),
-            DefaultHashBuilder::default(),
-        );
+        let config = SlruCacheConfig {
+            capacity: NonZeroUsize::new(4).unwrap(),
+            protected_capacity: NonZeroUsize::new(2).unwrap(),
+            max_size: u64::MAX,
+        };
+        let mut segment: SlruSegment<&str, i32, DefaultHashBuilder> =
+            SlruSegment::init(config, DefaultHashBuilder::default());
 
         assert_eq!(segment.len(), 0);
         assert!(segment.is_empty());
@@ -1280,10 +1147,7 @@ mod tests {
         use std::thread;
         use std::vec::Vec;
 
-        let cache = Arc::new(Mutex::new(SlruCache::new(
-            NonZeroUsize::new(100).unwrap(),
-            NonZeroUsize::new(50).unwrap(),
-        )));
+        let cache = Arc::new(Mutex::new(make_cache::<String, i32>(100, 50)));
         let num_threads = 4;
         let ops_per_thread = 100;
 
@@ -1312,10 +1176,7 @@ mod tests {
 
     #[test]
     fn test_slru_size_aware_tracking() {
-        let mut cache = SlruCache::new(
-            NonZeroUsize::new(10).unwrap(),
-            NonZeroUsize::new(3).unwrap(),
-        );
+        let mut cache = make_cache(10, 3);
 
         assert_eq!(cache.current_size(), 0);
         assert_eq!(cache.max_size(), u64::MAX);
@@ -1347,11 +1208,12 @@ mod tests {
 
     #[test]
     fn test_slru_with_limits_constructor() {
-        let cache: SlruCache<String, String> = SlruCache::with_limits(
-            NonZeroUsize::new(100).unwrap(),
-            NonZeroUsize::new(30).unwrap(),
-            1024 * 1024,
-        );
+        let config = SlruCacheConfig {
+            capacity: NonZeroUsize::new(100).unwrap(),
+            protected_capacity: NonZeroUsize::new(30).unwrap(),
+            max_size: 1024 * 1024,
+        };
+        let cache: SlruCache<String, String> = SlruCache::init(config, None);
 
         assert_eq!(cache.current_size(), 0);
         assert_eq!(cache.max_size(), 1024 * 1024);
@@ -1363,10 +1225,7 @@ mod tests {
     fn test_slru_record_miss() {
         use crate::metrics::CacheMetrics;
 
-        let mut cache: SlruCache<String, i32> = SlruCache::new(
-            NonZeroUsize::new(100).unwrap(),
-            NonZeroUsize::new(30).unwrap(),
-        );
+        let mut cache: SlruCache<String, i32> = make_cache(100, 30);
 
         cache.record_miss(100);
         cache.record_miss(200);
@@ -1377,10 +1236,7 @@ mod tests {
 
     #[test]
     fn test_slru_get_mut() {
-        let mut cache: SlruCache<String, i32> = SlruCache::new(
-            NonZeroUsize::new(100).unwrap(),
-            NonZeroUsize::new(30).unwrap(),
-        );
+        let mut cache: SlruCache<String, i32> = make_cache(100, 30);
 
         cache.put("key".to_string(), 10);
         assert_eq!(cache.get(&"key".to_string()), Some(&10));

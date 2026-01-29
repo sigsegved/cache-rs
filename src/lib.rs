@@ -15,9 +15,14 @@
 //!
 //! ```rust
 //! use cache_rs::LruCache;
+//! use cache_rs::config::LruCacheConfig;
 //! use core::num::NonZeroUsize;
 //!
-//! let mut cache = LruCache::new(NonZeroUsize::new(100).unwrap());
+//! let config = LruCacheConfig {
+//!     capacity: NonZeroUsize::new(100).unwrap(),
+//!     max_size: u64::MAX,
+//! };
+//! let mut cache = LruCache::init(config, None);
 //! cache.put("key", "value");
 //! assert_eq!(cache.get(&"key"), Some(&"value"));
 //! ```
@@ -121,13 +126,15 @@
 //!
 //! ```rust
 //! use cache_rs::LruCache;
+//! use cache_rs::config::LruCacheConfig;
 //! use core::num::NonZeroUsize;
 //!
 //! // Limit by both count (1000 entries) AND size (10MB)
-//! let mut cache: LruCache<String, Vec<u8>> = LruCache::with_limits(
-//!     NonZeroUsize::new(1000).unwrap(),
-//!     10 * 1024 * 1024,
-//! );
+//! let config = LruCacheConfig {
+//!     capacity: NonZeroUsize::new(1000).unwrap(),
+//!     max_size: 10 * 1024 * 1024,
+//! };
+//! let mut cache: LruCache<String, Vec<u8>> = LruCache::init(config, None);
 //!
 //! // Track size explicitly
 //! let data = vec![0u8; 1024];
@@ -150,9 +157,14 @@
 //! ```rust
 //! // Works in embedded environments!
 //! use cache_rs::LruCache;
+//! use cache_rs::config::LruCacheConfig;
 //! use core::num::NonZeroUsize;
 //!
-//! let mut cache = LruCache::new(NonZeroUsize::new(100).unwrap());
+//! let config = LruCacheConfig {
+//!     capacity: NonZeroUsize::new(100).unwrap(),
+//!     max_size: u64::MAX,
+//! };
+//! let mut cache = LruCache::init(config, None);
 //! cache.put("sensor_1", 42.5f32);
 //! ```
 //!
@@ -165,9 +177,14 @@
 //!
 //! ```rust
 //! use cache_rs::LruCache;
+//! use cache_rs::config::LruCacheConfig;
 //! use core::num::NonZeroUsize;
 //!
-//! let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+//! let config = LruCacheConfig {
+//!     capacity: NonZeroUsize::new(2).unwrap(),
+//!     max_size: u64::MAX,
+//! };
+//! let mut cache = LruCache::init(config, None);
 //! cache.put("a", 1);
 //! cache.put("b", 2);
 //! cache.get(&"a");      // "a" becomes most recently used
@@ -182,12 +199,15 @@
 //!
 //! ```rust
 //! use cache_rs::SlruCache;
+//! use cache_rs::config::SlruCacheConfig;
 //! use core::num::NonZeroUsize;
 //!
-//! let mut cache = SlruCache::new(
-//!     NonZeroUsize::new(100).unwrap(),  // total capacity
-//!     NonZeroUsize::new(20).unwrap(),   // protected segment (20%)
-//! );
+//! let config = SlruCacheConfig {
+//!     capacity: NonZeroUsize::new(100).unwrap(),
+//!     protected_capacity: NonZeroUsize::new(20).unwrap(),
+//!     max_size: u64::MAX,
+//! };
+//! let mut cache = SlruCache::init(config, None);
 //!
 //! cache.put("hot", 1);
 //! cache.get(&"hot");  // Promoted to protected segment!
@@ -200,9 +220,14 @@
 //!
 //! ```rust
 //! use cache_rs::LfuCache;
+//! use cache_rs::config::LfuCacheConfig;
 //! use core::num::NonZeroUsize;
 //!
-//! let mut cache = LfuCache::new(NonZeroUsize::new(2).unwrap());
+//! let config = LfuCacheConfig {
+//!     capacity: NonZeroUsize::new(2).unwrap(),
+//!     max_size: u64::MAX,
+//! };
+//! let mut cache = LfuCache::init(config, None);
 //! cache.put("rare", 1);
 //! cache.put("popular", 2);
 //!
@@ -220,9 +245,15 @@
 //!
 //! ```rust
 //! use cache_rs::LfudaCache;
+//! use cache_rs::config::LfudaCacheConfig;
 //! use core::num::NonZeroUsize;
 //!
-//! let mut cache = LfudaCache::new(NonZeroUsize::new(100).unwrap());
+//! let config = LfudaCacheConfig {
+//!     capacity: NonZeroUsize::new(100).unwrap(),
+//!     initial_age: 0,
+//!     max_size: u64::MAX,
+//! };
+//! let mut cache = LfudaCache::init(config, None);
 //!
 //! // Old popular items will eventually age out if not accessed
 //! for i in 0..100 {
@@ -237,12 +268,15 @@
 //!
 //! ```rust
 //! use cache_rs::GdsfCache;
+//! use cache_rs::config::GdsfCacheConfig;
 //! use core::num::NonZeroUsize;
 //!
-//! let mut cache: GdsfCache<String, Vec<u8>> = GdsfCache::with_limits(
-//!     NonZeroUsize::new(1000).unwrap(),
-//!     10 * 1024 * 1024,  // 10MB
-//! );
+//! let config = GdsfCacheConfig {
+//!     capacity: NonZeroUsize::new(1000).unwrap(),
+//!     initial_age: 0.0,
+//!     max_size: 10 * 1024 * 1024,  // 10MB
+//! };
+//! let mut cache: GdsfCache<String, Vec<u8>> = GdsfCache::init(config, None);
 //!
 //! // Size-aware insertion
 //! cache.put("small.txt".to_string(), vec![0u8; 100], 100);

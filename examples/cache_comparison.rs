@@ -1,5 +1,8 @@
 extern crate cache_rs;
 
+use cache_rs::config::{
+    GdsfCacheConfig, LfuCacheConfig, LfudaCacheConfig, LruCacheConfig, SlruCacheConfig,
+};
 use cache_rs::{GdsfCache, LfuCache, LfudaCache, LruCache, SlruCache};
 use core::num::NonZeroUsize;
 
@@ -16,13 +19,39 @@ fn main() {
     let cap = NonZeroUsize::new(3).unwrap();
     let protected_cap = NonZeroUsize::new(2).unwrap();
 
-    // Using constructors that take capacity directly
-    // The refactoring appears to be incomplete with some caches still using the old API
-    let mut lru_cache = LruCache::new(cap);
-    let mut slru_cache = SlruCache::new(cap, protected_cap);
-    let mut lfu_cache = LfuCache::new(cap);
-    let mut lfuda_cache = LfudaCache::new(cap);
-    let mut gdsf_cache = GdsfCache::new(cap);
+    // Using the init pattern for all caches
+    let lru_config = LruCacheConfig {
+        capacity: cap,
+        max_size: u64::MAX,
+    };
+    let mut lru_cache = LruCache::init(lru_config, None);
+
+    let slru_config = SlruCacheConfig {
+        capacity: cap,
+        protected_capacity: protected_cap,
+        max_size: u64::MAX,
+    };
+    let mut slru_cache = SlruCache::init(slru_config, None);
+
+    let lfu_config = LfuCacheConfig {
+        capacity: cap,
+        max_size: u64::MAX,
+    };
+    let mut lfu_cache = LfuCache::init(lfu_config, None);
+
+    let lfuda_config = LfudaCacheConfig {
+        capacity: cap,
+        initial_age: 0,
+        max_size: u64::MAX,
+    };
+    let mut lfuda_cache = LfudaCache::init(lfuda_config, None);
+
+    let gdsf_config = GdsfCacheConfig {
+        capacity: cap,
+        initial_age: 0.0,
+        max_size: u64::MAX,
+    };
+    let mut gdsf_cache = GdsfCache::init(gdsf_config, None);
 
     // Test data
     let data = vec![("apple", 1), ("banana", 2), ("cherry", 3), ("date", 4)];
