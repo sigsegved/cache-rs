@@ -231,9 +231,9 @@ where
     V: Clone + Send,
     S: BuildHasher + Clone + Send,
 {
-    /// Creates a concurrent LRU cache with a custom hash builder.
-    ///
     /// Returns the segment index for the given key.
+    ///
+    /// This is used internally for routing operations to the correct segment.
     #[inline]
     fn segment_index<Q>(&self, key: &Q) -> usize
     where

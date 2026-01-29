@@ -261,8 +261,17 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruSegment<K, V, S> {
     /// * `hasher` - Hash builder for the internal HashMap
     #[allow(dead_code)] // Used by concurrent module when feature is enabled
     pub(crate) fn init(config: SlruCacheConfig, hasher: S) -> Self {
-        let probationary_max_size =
-            NonZeroUsize::new(config.capacity.get() - config.protected_capacity.get()).unwrap();
+        let capacity = config.capacity.get();
+        let protected = config.protected_capacity.get();
+
+        assert!(
+            protected < capacity,
+            "SlruCacheConfig invalid: protected_capacity ({}) must be strictly less than capacity ({})",
+            protected,
+            capacity
+        );
+
+        let probationary_max_size = NonZeroUsize::new(capacity - protected).unwrap();
 
         SlruSegment {
             config,

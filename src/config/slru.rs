@@ -78,7 +78,7 @@ use core::num::NonZeroUsize;
 ///
 /// - `capacity`: Total number of entries the cache can hold. Each entry has
 ///   memory overhead (~64-128 bytes) for keys, pointers, and metadata.
-/// - `protected_capacity`: Size of the protected segment (must be <= capacity).
+/// - `protected_capacity`: Size of the protected segment (must be < capacity).
 ///   Typically 20% of total capacity for hot items.
 /// - `max_size`: Maximum total size in bytes for cached values. Set this based
 ///   on your memory budget, not to `u64::MAX`. See module docs for sizing guidance.
@@ -120,7 +120,7 @@ pub struct SlruCacheConfig {
     /// Total capacity of the cache (protected + probationary).
     /// Account for ~64-128 bytes overhead per entry beyond value size.
     pub capacity: NonZeroUsize,
-    /// Maximum size for the protected segment (must be <= capacity).
+    /// Maximum size for the protected segment (must be < capacity).
     /// Typically 20% of capacity for frequently accessed "hot" items.
     pub protected_capacity: NonZeroUsize,
     /// Maximum total size in bytes for cached values.
