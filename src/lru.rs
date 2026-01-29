@@ -94,9 +94,14 @@
 //!
 //! ```
 //! use cache_rs::LruCache;
+//! use cache_rs::config::LruCacheConfig;
 //! use core::num::NonZeroUsize;
 //!
-//! let mut cache = LruCache::new(NonZeroUsize::new(3).unwrap());
+//! let config = LruCacheConfig {
+//!     capacity: NonZeroUsize::new(3).unwrap(),
+//!     max_size: u64::MAX,
+//! };
+//! let mut cache = LruCache::init(config, None);
 //!
 //! cache.put("a", 1);
 //! cache.put("b", 2);
@@ -112,13 +117,15 @@
 //!
 //! ```
 //! use cache_rs::LruCache;
+//! use cache_rs::config::LruCacheConfig;
 //! use core::num::NonZeroUsize;
 //!
 //! // Cache with max 1000 entries and 10MB total size
-//! let mut cache: LruCache<String, Vec<u8>> = LruCache::with_limits(
-//!     NonZeroUsize::new(1000).unwrap(),
-//!     10 * 1024 * 1024,
-//! );
+//! let config = LruCacheConfig {
+//!     capacity: NonZeroUsize::new(1000).unwrap(),
+//!     max_size: 10 * 1024 * 1024,
+//! };
+//! let mut cache: LruCache<String, Vec<u8>> = LruCache::init(config, None);
 //!
 //! let data = vec![0u8; 1024];  // 1KB
 //! cache.put_with_size("file.bin".to_string(), data.clone(), 1024);
@@ -183,25 +190,23 @@ unsafe impl<K: Send, V: Send, S: Send> Send for LruSegment<K, V, S> {}
 unsafe impl<K: Send, V: Send, S: Sync> Sync for LruSegment<K, V, S> {}
 
 impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
-    pub(crate) fn with_hasher(cap: NonZeroUsize, hash_builder: S) -> Self {
-        Self::with_hasher_and_size(cap, hash_builder, u64::MAX)
-    }
-
-    pub(crate) fn with_hasher_and_size(
-        cap: NonZeroUsize,
-        hash_builder: S,
-        max_size_bytes: u64,
-    ) -> Self {
-        let map_capacity = cap.get().next_power_of_two();
-        let config = LruCacheConfig {
-            capacity: cap,
-            max_size: max_size_bytes,
-        };
+    /// Creates a new LRU segment from a configuration.
+    ///
+    /// This is the **recommended** way to create an LRU segment. All configuration
+    /// is specified through the [`LruCacheConfig`] struct.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Configuration specifying capacity and optional size limit
+    /// * `hasher` - Hash builder for the internal HashMap
+    #[allow(dead_code)] // Used by concurrent module when feature is enabled
+    pub(crate) fn init(config: LruCacheConfig, hasher: S) -> Self {
+        let map_capacity = config.capacity.get().next_power_of_two();
         LruSegment {
             config,
-            list: List::new(cap),
-            map: HashMap::with_capacity_and_hasher(map_capacity, hash_builder),
-            metrics: LruCacheMetrics::new(max_size_bytes),
+            list: List::new(config.capacity),
+            map: HashMap::with_capacity_and_hasher(map_capacity, hasher),
+            metrics: LruCacheMetrics::new(config.max_size),
             current_size: 0,
         }
     }
@@ -416,9 +421,14 @@ impl<K, V, S> core::fmt::Debug for LruSegment<K, V, S> {
 ///
 /// ```
 /// use cache_rs::LruCache;
+/// use cache_rs::config::LruCacheConfig;
 /// use core::num::NonZeroUsize;
 ///
-/// let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+/// let config = LruCacheConfig {
+///     capacity: NonZeroUsize::new(2).unwrap(),
+///     max_size: u64::MAX,
+/// };
+/// let mut cache = LruCache::init(config, None);
 ///
 /// cache.put("apple", 1);
 /// cache.put("banana", 2);
@@ -434,34 +444,6 @@ pub struct LruCache<K, V, S = DefaultHashBuilder> {
 }
 
 impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruCache<K, V, S> {
-    /// Creates a new LRU cache with a custom hash builder.
-    ///
-    /// Use this when you need a specific hasher (e.g., for deterministic hashing
-    /// or DoS resistance).
-    ///
-    /// # Arguments
-    ///
-    /// * `cap` - Maximum number of entries the cache can hold
-    /// * `hash_builder` - The hash builder to use for hashing keys
-    pub fn with_hasher(cap: NonZeroUsize, hash_builder: S) -> Self {
-        Self {
-            segment: LruSegment::with_hasher(cap, hash_builder),
-        }
-    }
-
-    /// Creates a new LRU cache with custom hash builder and size limit.
-    ///
-    /// # Arguments
-    ///
-    /// * `cap` - Maximum number of entries
-    /// * `hash_builder` - The hash builder for hashing keys
-    /// * `max_size_bytes` - Maximum total size of cached content
-    pub fn with_hasher_and_size(cap: NonZeroUsize, hash_builder: S, max_size_bytes: u64) -> Self {
-        Self {
-            segment: LruSegment::with_hasher_and_size(cap, hash_builder, max_size_bytes),
-        }
-    }
-
     /// Returns the maximum number of entries the cache can hold.
     #[inline]
     pub fn cap(&self) -> NonZeroUsize {
@@ -506,9 +488,14 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruCache<K, V, S> {
     ///
     /// ```
     /// use cache_rs::LruCache;
+    /// use cache_rs::config::LruCacheConfig;
     /// use core::num::NonZeroUsize;
     ///
-    /// let mut cache = LruCache::new(NonZeroUsize::new(10).unwrap());
+    /// let config = LruCacheConfig {
+    ///     capacity: NonZeroUsize::new(10).unwrap(),
+    ///     max_size: u64::MAX,
+    /// };
+    /// let mut cache = LruCache::init(config, None);
     /// cache.put("key", 42);
     ///
     /// assert_eq!(cache.get(&"key"), Some(&42));
@@ -545,9 +532,14 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruCache<K, V, S> {
     ///
     /// ```
     /// use cache_rs::LruCache;
+    /// use cache_rs::config::LruCacheConfig;
     /// use core::num::NonZeroUsize;
     ///
-    /// let mut cache = LruCache::new(NonZeroUsize::new(10).unwrap());
+    /// let config = LruCacheConfig {
+    ///     capacity: NonZeroUsize::new(10).unwrap(),
+    ///     max_size: u64::MAX,
+    /// };
+    /// let mut cache = LruCache::init(config, None);
     /// cache.put("counter", 0);
     ///
     /// if let Some(val) = cache.get_mut(&"counter") {
@@ -583,9 +575,14 @@ impl<K: Hash + Eq + Clone, V: Clone, S: BuildHasher> LruCache<K, V, S> {
     ///
     /// ```
     /// use cache_rs::LruCache;
+    /// use cache_rs::config::LruCacheConfig;
     /// use core::num::NonZeroUsize;
     ///
-    /// let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+    /// let config = LruCacheConfig {
+    ///     capacity: NonZeroUsize::new(2).unwrap(),
+    ///     max_size: u64::MAX,
+    /// };
+    /// let mut cache = LruCache::init(config, None);
     ///
     /// assert_eq!(cache.put("a", 1), None);           // New entry
     /// assert_eq!(cache.put("b", 2), None);           // New entry
@@ -616,12 +613,14 @@ impl<K: Hash + Eq + Clone, V: Clone, S: BuildHasher> LruCache<K, V, S> {
     ///
     /// ```
     /// use cache_rs::LruCache;
+    /// use cache_rs::config::LruCacheConfig;
     /// use core::num::NonZeroUsize;
     ///
-    /// let mut cache: LruCache<String, Vec<u8>> = LruCache::with_limits(
-    ///     NonZeroUsize::new(100).unwrap(),
-    ///     1024 * 1024,  // 1MB max
-    /// );
+    /// let config = LruCacheConfig {
+    ///     capacity: NonZeroUsize::new(100).unwrap(),
+    ///     max_size: 1024 * 1024,  // 1MB max
+    /// };
+    /// let mut cache: LruCache<String, Vec<u8>> = LruCache::init(config, None);
     ///
     /// let data = vec![0u8; 1000];
     /// cache.put_with_size("file".to_string(), data, 1000);
@@ -641,9 +640,14 @@ impl<K: Hash + Eq + Clone, V: Clone, S: BuildHasher> LruCache<K, V, S> {
     ///
     /// ```
     /// use cache_rs::LruCache;
+    /// use cache_rs::config::LruCacheConfig;
     /// use core::num::NonZeroUsize;
     ///
-    /// let mut cache = LruCache::new(NonZeroUsize::new(10).unwrap());
+    /// let config = LruCacheConfig {
+    ///     capacity: NonZeroUsize::new(10).unwrap(),
+    ///     max_size: u64::MAX,
+    /// };
+    /// let mut cache = LruCache::init(config, None);
     /// cache.put("key", 42);
     ///
     /// assert_eq!(cache.remove(&"key"), Some(42));
@@ -691,7 +695,7 @@ where
 {
     /// Creates a new LRU cache from a configuration with an optional hasher.
     ///
-    /// This is the **recommended** way to create an LRU cache.
+    /// This is the **only** way to create an LRU cache.
     ///
     /// # Arguments
     ///
@@ -724,97 +728,9 @@ where
         config: LruCacheConfig,
         hasher: Option<DefaultHashBuilder>,
     ) -> LruCache<K, V, DefaultHashBuilder> {
-        LruCache::with_hasher_and_size(config.capacity, hasher.unwrap_or_default(), config.max_size)
-    }
-
-    /// Creates a new LRU cache with the specified capacity.
-    ///
-    /// This is a convenience constructor that creates a cache with only a capacity limit.
-    /// For more control, use [`LruCache::init`] with an [`LruCacheConfig`].
-    ///
-    /// # Arguments
-    ///
-    /// * `cap` - The maximum number of entries the cache can hold.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use cache_rs::LruCache;
-    /// use core::num::NonZeroUsize;
-    ///
-    /// let mut cache = LruCache::new(NonZeroUsize::new(100).unwrap());
-    /// cache.put("key", 42);
-    /// ```
-    pub fn new(cap: NonZeroUsize) -> LruCache<K, V, DefaultHashBuilder> {
-        LruCache::init(
-            LruCacheConfig {
-                capacity: cap,
-                max_size: u64::MAX,
-            },
-            None,
-        )
-    }
-
-    /// Creates a new LRU cache with both entry count and size limits.
-    ///
-    /// This is a convenience constructor. For more control, use [`LruCache::init`].
-    ///
-    /// # Arguments
-    ///
-    /// * `cap` - The maximum number of entries the cache can hold.
-    /// * `max_size` - The maximum total size in bytes (0 means unlimited).
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use cache_rs::LruCache;
-    /// use core::num::NonZeroUsize;
-    ///
-    /// // Cache with 1000 entries and 10MB size limit
-    /// let mut cache: LruCache<String, Vec<u8>> = LruCache::with_limits(
-    ///     NonZeroUsize::new(1000).unwrap(),
-    ///     10 * 1024 * 1024,
-    /// );
-    /// ```
-    pub fn with_limits(cap: NonZeroUsize, max_size: u64) -> LruCache<K, V, DefaultHashBuilder> {
-        LruCache::init(
-            LruCacheConfig {
-                capacity: cap,
-                max_size,
-            },
-            None,
-        )
-    }
-
-    /// Creates a new LRU cache with only a size limit.
-    ///
-    /// This is a convenience constructor that creates a cache limited by total size
-    /// with a very high entry count limit.
-    ///
-    /// # Arguments
-    ///
-    /// * `max_size` - The maximum total size in bytes.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use cache_rs::LruCache;
-    ///
-    /// // Cache limited to 10MB
-    /// let mut cache: LruCache<String, Vec<u8>> = LruCache::with_max_size(10 * 1024 * 1024);
-    /// ```
-    pub fn with_max_size(max_size: u64) -> LruCache<K, V, DefaultHashBuilder> {
-        // Use a reasonable default capacity for size-based caches.
-        // The HashMap will grow dynamically as needed, so we don't need
-        // to pre-allocate for billions of entries.
-        const DEFAULT_SIZE_BASED_CAPACITY: usize = 16384;
-        LruCache::init(
-            LruCacheConfig {
-                capacity: NonZeroUsize::new(DEFAULT_SIZE_BASED_CAPACITY).unwrap(),
-                max_size,
-            },
-            None,
-        )
+        LruCache {
+            segment: LruSegment::init(config, hasher.unwrap_or_default()),
+        }
     }
 }
 
@@ -839,11 +755,21 @@ pub struct IterMut<'a, K, V> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::LruCacheConfig;
     use alloc::string::String;
+
+    /// Helper to create an LruCache with the given capacity
+    fn make_cache<K: Hash + Eq + Clone, V: Clone>(cap: usize) -> LruCache<K, V> {
+        let config = LruCacheConfig {
+            capacity: NonZeroUsize::new(cap).unwrap(),
+            max_size: u64::MAX,
+        };
+        LruCache::init(config, None)
+    }
 
     #[test]
     fn test_lru_get_put() {
-        let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+        let mut cache = make_cache(2);
         assert_eq!(cache.put("apple", 1), None);
         assert_eq!(cache.put("banana", 2), None);
         assert_eq!(cache.get(&"apple"), Some(&1));
@@ -859,7 +785,7 @@ mod tests {
 
     #[test]
     fn test_lru_get_mut() {
-        let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+        let mut cache = make_cache(2);
         cache.put("apple", 1);
         cache.put("banana", 2);
         if let Some(v) = cache.get_mut(&"apple") {
@@ -874,7 +800,7 @@ mod tests {
 
     #[test]
     fn test_lru_remove() {
-        let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+        let mut cache = make_cache(2);
         cache.put("apple", 1);
         cache.put("banana", 2);
         assert_eq!(cache.get(&"apple"), Some(&1));
@@ -892,7 +818,7 @@ mod tests {
 
     #[test]
     fn test_lru_clear() {
-        let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+        let mut cache = make_cache(2);
         cache.put("apple", 1);
         cache.put("banana", 2);
         assert_eq!(cache.len(), 2);
@@ -905,7 +831,7 @@ mod tests {
 
     #[test]
     fn test_lru_capacity_limits() {
-        let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+        let mut cache = make_cache(2);
         cache.put("apple", 1);
         cache.put("banana", 2);
         cache.put("cherry", 3);
@@ -917,7 +843,7 @@ mod tests {
 
     #[test]
     fn test_lru_string_keys() {
-        let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+        let mut cache = make_cache(2);
         let key1 = String::from("apple");
         let key2 = String::from("banana");
         cache.put(key1.clone(), 1);
@@ -937,7 +863,7 @@ mod tests {
 
     #[test]
     fn test_lru_complex_values() {
-        let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+        let mut cache = make_cache(2);
         let key1 = String::from("apple");
         let key2 = String::from("banana");
         let fruit1 = ComplexValue {
@@ -966,7 +892,7 @@ mod tests {
     #[test]
     fn test_lru_metrics() {
         use crate::metrics::CacheMetrics;
-        let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+        let mut cache = make_cache(2);
         let metrics = cache.metrics();
         assert_eq!(metrics.get("requests").unwrap(), &0.0);
         assert_eq!(metrics.get("cache_hits").unwrap(), &0.0);
@@ -990,8 +916,12 @@ mod tests {
 
     #[test]
     fn test_lru_segment_directly() {
+        let config = LruCacheConfig {
+            capacity: NonZeroUsize::new(2).unwrap(),
+            max_size: u64::MAX,
+        };
         let mut segment: LruSegment<&str, i32, DefaultHashBuilder> =
-            LruSegment::with_hasher(NonZeroUsize::new(2).unwrap(), DefaultHashBuilder::default());
+            LruSegment::init(config, DefaultHashBuilder::default());
         assert_eq!(segment.len(), 0);
         assert!(segment.is_empty());
         assert_eq!(segment.cap().get(), 2);
@@ -1009,7 +939,7 @@ mod tests {
         use std::thread;
         use std::vec::Vec;
 
-        let cache = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(100).unwrap())));
+        let cache = Arc::new(Mutex::new(make_cache::<String, i32>(100)));
         let num_threads = 4;
         let ops_per_thread = 100;
 
@@ -1056,7 +986,7 @@ mod tests {
         use std::thread;
         use std::vec::Vec;
 
-        let cache = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(50).unwrap())));
+        let cache = Arc::new(Mutex::new(make_cache::<String, i32>(50)));
         let num_threads = 8;
         let ops_per_thread = 500;
 
@@ -1093,7 +1023,7 @@ mod tests {
         use std::thread;
         use std::vec::Vec;
 
-        let cache = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(100).unwrap())));
+        let cache = Arc::new(Mutex::new(make_cache::<String, i32>(100)));
         let num_threads = 8;
         let ops_per_thread = 1000;
 
@@ -1141,7 +1071,7 @@ mod tests {
     #[test]
     fn test_lru_size_aware_tracking() {
         // Test that current_size and max_size are tracked correctly
-        let mut cache = LruCache::new(NonZeroUsize::new(10).unwrap());
+        let mut cache = make_cache(10);
 
         assert_eq!(cache.current_size(), 0);
         assert_eq!(cache.max_size(), u64::MAX);
@@ -1179,8 +1109,11 @@ mod tests {
     #[test]
     fn test_lru_with_limits_constructor() {
         // Test the with_limits constructor
-        let cache: LruCache<String, String> =
-            LruCache::with_limits(NonZeroUsize::new(100).unwrap(), 1024 * 1024);
+        let config = LruCacheConfig {
+            capacity: NonZeroUsize::new(100).unwrap(),
+            max_size: 1024 * 1024,
+        };
+        let cache: LruCache<String, String> = LruCache::init(config, None);
 
         assert_eq!(cache.current_size(), 0);
         assert_eq!(cache.max_size(), 1024 * 1024);

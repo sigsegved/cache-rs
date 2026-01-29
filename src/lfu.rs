@@ -36,9 +36,11 @@
 //!
 //! | Operation | Action | Time |
 //! |-----------|--------|------|
-//! | `get(key)` | Increment frequency, move to new frequency list | O(1) |
-//! | `put(key, value)` | Insert at frequency 1, evict lowest freq if full | O(1) |
-//! | `remove(key)` | Remove from frequency list, update min_frequency | O(1) |
+//! | `get(key)` | Increment frequency, move to new frequency list | O(log F)* |
+//! | `put(key, value)` | Insert at frequency 1, evict lowest freq if full | O(log F)* |
+//! | `remove(key)` | Remove from frequency list, update min_frequency | O(log F)* |
+//!
+//! *Effectively O(1) since F (distinct frequencies) is bounded to a small constant.
 //!
 //! ## Access Pattern Example
 //!
@@ -66,10 +68,14 @@
 //!
 //! | Metric | Value |
 //! |--------|-------|
-//! | Get | O(1) |
-//! | Put | O(1) |
-//! | Remove | O(1) |
+//! | Get | O(log F) amortized, effectively O(1) |
+//! | Put | O(log F) amortized, effectively O(1) |
+//! | Remove | O(log F) amortized, effectively O(1) |
 //! | Memory per entry | ~100 bytes overhead + key×2 + value |
+//!
+//! Where F = number of distinct frequency values. Since frequencies are small integers
+//! (1, 2, 3, ...), F is typically bounded to a small constant (< 100 in practice),
+//! making operations effectively O(1).
 //!
 //! Memory overhead includes: list node pointers (16B), `CacheEntry` metadata (32B),
 //! frequency metadata (8B), HashMap bucket (~24B), BTreeMap overhead (~16B).
@@ -107,9 +113,14 @@
 //!
 //! ```
 //! use cache_rs::LfuCache;
+//! use cache_rs::config::LfuCacheConfig;
 //! use core::num::NonZeroUsize;
 //!
-//! let mut cache = LfuCache::new(NonZeroUsize::new(3).unwrap());
+//! let config = LfuCacheConfig {
+//!     capacity: NonZeroUsize::new(3).unwrap(),
+//!     max_size: u64::MAX,
+//! };
+//! let mut cache = LfuCache::init(config, None);
 //!
 //! cache.put("a", 1);
 //! cache.put("b", 2);
@@ -130,13 +141,15 @@
 //!
 //! ```
 //! use cache_rs::LfuCache;
+//! use cache_rs::config::LfuCacheConfig;
 //! use core::num::NonZeroUsize;
 //!
 //! // Cache with max 1000 entries and 10MB total size
-//! let mut cache: LfuCache<String, Vec<u8>> = LfuCache::with_limits(
-//!     NonZeroUsize::new(1000).unwrap(),
-//!     10 * 1024 * 1024,
-//! );
+//! let config = LfuCacheConfig {
+//!     capacity: NonZeroUsize::new(1000).unwrap(),
+//!     max_size: 10 * 1024 * 1024,
+//! };
+//! let mut cache: LfuCache<String, Vec<u8>> = LfuCache::init(config, None);
 //!
 //! let data = vec![0u8; 1024];  // 1KB
 //! cache.put_with_size("file.bin".to_string(), data.clone(), 1024);
@@ -214,24 +227,24 @@ unsafe impl<K: Send, V: Send, S: Send> Send for LfuSegment<K, V, S> {}
 unsafe impl<K: Send, V: Send, S: Sync> Sync for LfuSegment<K, V, S> {}
 
 impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
-    /// Creates a new LFU segment with the specified capacity and hash builder.
-    pub(crate) fn with_hasher(cap: NonZeroUsize, hash_builder: S) -> Self {
-        Self::with_hasher_and_size(cap, hash_builder, u64::MAX)
-    }
-
-    /// Creates a new LFU segment with the specified capacity, hash builder, and max size.
-    pub(crate) fn with_hasher_and_size(cap: NonZeroUsize, hash_builder: S, max_size: u64) -> Self {
-        let config = LfuCacheConfig {
-            capacity: cap,
-            max_size,
-        };
+    /// Creates a new LFU segment from a configuration.
+    ///
+    /// This is the **recommended** way to create an LFU segment. All configuration
+    /// is specified through the [`LfuCacheConfig`] struct.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Configuration specifying capacity and optional size limit
+    /// * `hasher` - Hash builder for the internal HashMap
+    #[allow(dead_code)] // Used by concurrent module when feature is enabled
+    pub(crate) fn init(config: LfuCacheConfig, hasher: S) -> Self {
         let map_capacity = config.capacity.get().next_power_of_two();
         LfuSegment {
             config,
             min_frequency: 1,
-            map: HashMap::with_capacity_and_hasher(map_capacity, hash_builder),
+            map: HashMap::with_capacity_and_hasher(map_capacity, hasher),
             frequency_lists: BTreeMap::new(),
-            metrics: LfuCacheMetrics::new(max_size),
+            metrics: LfuCacheMetrics::new(config.max_size),
             current_size: 0,
         }
     }
@@ -606,10 +619,15 @@ impl<K, V, S> core::fmt::Debug for LfuSegment<K, V, S> {
 ///
 /// ```
 /// use cache_rs::lfu::LfuCache;
+/// use cache_rs::config::LfuCacheConfig;
 /// use core::num::NonZeroUsize;
 ///
 /// // Create an LFU cache with capacity 3
-/// let mut cache = LfuCache::new(NonZeroUsize::new(3).unwrap());
+/// let config = LfuCacheConfig {
+///     capacity: NonZeroUsize::new(3).unwrap(),
+///     max_size: u64::MAX,
+/// };
+/// let mut cache = LfuCache::init(config, None);
 ///
 /// // Add some items
 /// cache.put("a", 1);
@@ -630,33 +648,6 @@ pub struct LfuCache<K, V, S = DefaultHashBuilder> {
 }
 
 impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
-    /// Creates a new LFU cache with the specified capacity and hash builder.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use cache_rs::lfu::LfuCache;
-    /// use core::num::NonZeroUsize;
-    /// use std::collections::hash_map::RandomState;
-    ///
-    /// let cache: LfuCache<&str, u32, _> = LfuCache::with_hasher(
-    ///     NonZeroUsize::new(10).unwrap(),
-    ///     RandomState::new()
-    /// );
-    /// ```
-    pub fn with_hasher(cap: NonZeroUsize, hash_builder: S) -> Self {
-        Self {
-            segment: LfuSegment::with_hasher(cap, hash_builder),
-        }
-    }
-
-    /// Creates a new LFU cache with the specified capacity, hash builder, and max size.
-    pub fn with_hasher_and_size(cap: NonZeroUsize, hash_builder: S, max_size: u64) -> Self {
-        Self {
-            segment: LfuSegment::with_hasher_and_size(cap, hash_builder, max_size),
-        }
-    }
-
     /// Returns the maximum number of key-value pairs the cache can hold.
     #[inline]
     pub fn cap(&self) -> NonZeroUsize {
@@ -815,88 +806,9 @@ where
         config: LfuCacheConfig,
         hasher: Option<DefaultHashBuilder>,
     ) -> LfuCache<K, V, DefaultHashBuilder> {
-        LfuCache::with_hasher_and_size(config.capacity, hasher.unwrap_or_default(), config.max_size)
-    }
-
-    /// Creates a new LFU cache with the specified capacity.
-    ///
-    /// This is a convenience constructor that creates a cache with only a capacity limit.
-    /// For more control, use [`LfuCache::init`] with an [`LfuCacheConfig`].
-    ///
-    /// # Arguments
-    ///
-    /// * `cap` - The maximum number of entries the cache can hold.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use cache_rs::LfuCache;
-    /// use core::num::NonZeroUsize;
-    ///
-    /// let mut cache = LfuCache::new(NonZeroUsize::new(100).unwrap());
-    /// cache.put("key", 42);
-    /// ```
-    pub fn new(cap: NonZeroUsize) -> LfuCache<K, V, DefaultHashBuilder> {
-        LfuCache::init(
-            LfuCacheConfig {
-                capacity: cap,
-                max_size: u64::MAX,
-            },
-            None,
-        )
-    }
-
-    /// Creates a new LFU cache with both entry count and size limits.
-    ///
-    /// This is a convenience constructor. For more control, use [`LfuCache::init`].
-    ///
-    /// # Arguments
-    ///
-    /// * `cap` - The maximum number of entries the cache can hold.
-    /// * `max_size` - The maximum total size in bytes (0 means unlimited).
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use cache_rs::LfuCache;
-    /// use core::num::NonZeroUsize;
-    ///
-    /// // Cache with 1000 entries and 10MB size limit
-    /// let mut cache: LfuCache<String, Vec<u8>> = LfuCache::with_limits(
-    ///     NonZeroUsize::new(1000).unwrap(),
-    ///     10 * 1024 * 1024,
-    /// );
-    /// ```
-    pub fn with_limits(cap: NonZeroUsize, max_size: u64) -> LfuCache<K, V, DefaultHashBuilder> {
-        LfuCache::init(
-            LfuCacheConfig {
-                capacity: cap,
-                max_size,
-            },
-            None,
-        )
-    }
-
-    /// Creates a new LFU cache with only a size limit.
-    ///
-    /// This is a convenience constructor that creates a cache limited by total size
-    /// with a very high entry count limit.
-    ///
-    /// # Arguments
-    ///
-    /// * `max_size` - The maximum total size in bytes.
-    pub fn with_max_size(max_size: u64) -> LfuCache<K, V, DefaultHashBuilder> {
-        // Use a reasonable default capacity for size-based caches.
-        // The HashMap will grow dynamically as needed, so we don't need
-        // to pre-allocate for billions of entries.
-        const DEFAULT_SIZE_BASED_CAPACITY: usize = 16384;
-        LfuCache::init(
-            LfuCacheConfig {
-                capacity: NonZeroUsize::new(DEFAULT_SIZE_BASED_CAPACITY).unwrap(),
-                max_size,
-            },
-            None,
-        )
+        LfuCache {
+            segment: LfuSegment::init(config, hasher.unwrap_or_default()),
+        }
     }
 }
 
@@ -916,11 +828,21 @@ mod tests {
     use std::string::ToString;
 
     use super::*;
+    use crate::config::LfuCacheConfig;
     use alloc::string::String;
+
+    /// Helper to create an LfuCache with the given capacity
+    fn make_cache<K: Hash + Eq + Clone, V: Clone>(cap: usize) -> LfuCache<K, V> {
+        let config = LfuCacheConfig {
+            capacity: NonZeroUsize::new(cap).unwrap(),
+            max_size: u64::MAX,
+        };
+        LfuCache::init(config, None)
+    }
 
     #[test]
     fn test_lfu_basic() {
-        let mut cache = LfuCache::new(NonZeroUsize::new(3).unwrap());
+        let mut cache = make_cache(3);
 
         // Add items
         assert_eq!(cache.put("a", 1), None);
@@ -950,7 +872,7 @@ mod tests {
 
     #[test]
     fn test_lfu_frequency_ordering() {
-        let mut cache = LfuCache::new(NonZeroUsize::new(2).unwrap());
+        let mut cache = make_cache(2);
 
         // Add items
         cache.put("a", 1);
@@ -975,7 +897,7 @@ mod tests {
 
     #[test]
     fn test_lfu_update_existing() {
-        let mut cache = LfuCache::new(NonZeroUsize::new(2).unwrap());
+        let mut cache = make_cache(2);
 
         cache.put("a", 1);
         cache.get(&"a"); // frequency becomes 2
@@ -995,7 +917,7 @@ mod tests {
 
     #[test]
     fn test_lfu_remove() {
-        let mut cache = LfuCache::new(NonZeroUsize::new(3).unwrap());
+        let mut cache = make_cache(3);
 
         cache.put("a", 1);
         cache.put("b", 2);
@@ -1013,7 +935,7 @@ mod tests {
 
     #[test]
     fn test_lfu_clear() {
-        let mut cache = LfuCache::new(NonZeroUsize::new(3).unwrap());
+        let mut cache = make_cache(3);
 
         cache.put("a", 1);
         cache.put("b", 2);
@@ -1031,7 +953,7 @@ mod tests {
 
     #[test]
     fn test_lfu_get_mut() {
-        let mut cache = LfuCache::new(NonZeroUsize::new(2).unwrap());
+        let mut cache = make_cache(2);
 
         cache.put("a", 1);
 
@@ -1045,7 +967,7 @@ mod tests {
 
     #[test]
     fn test_lfu_complex_values() {
-        let mut cache = LfuCache::new(NonZeroUsize::new(2).unwrap());
+        let mut cache = make_cache(2);
 
         #[derive(Debug, Clone, PartialEq)]
         struct ComplexValue {
@@ -1085,7 +1007,7 @@ mod tests {
     /// Test to validate the fix for Stacked Borrows violations detected by Miri.
     #[test]
     fn test_miri_stacked_borrows_fix() {
-        let mut cache = LfuCache::new(NonZeroUsize::new(10).unwrap());
+        let mut cache = make_cache(10);
 
         // Insert some items
         cache.put("a", 1);
@@ -1111,8 +1033,12 @@ mod tests {
     // Test that LfuSegment works correctly (internal tests)
     #[test]
     fn test_lfu_segment_directly() {
+        let config = LfuCacheConfig {
+            capacity: NonZeroUsize::new(3).unwrap(),
+            max_size: u64::MAX,
+        };
         let mut segment: LfuSegment<&str, i32, DefaultHashBuilder> =
-            LfuSegment::with_hasher(NonZeroUsize::new(3).unwrap(), DefaultHashBuilder::default());
+            LfuSegment::init(config, DefaultHashBuilder::default());
 
         assert_eq!(segment.len(), 0);
         assert!(segment.is_empty());
@@ -1135,7 +1061,7 @@ mod tests {
         use std::thread;
         use std::vec::Vec;
 
-        let cache = Arc::new(Mutex::new(LfuCache::new(NonZeroUsize::new(100).unwrap())));
+        let cache = Arc::new(Mutex::new(make_cache::<String, i32>(100)));
         let num_threads = 4;
         let ops_per_thread = 100;
 
@@ -1168,7 +1094,7 @@ mod tests {
 
     #[test]
     fn test_lfu_size_aware_tracking() {
-        let mut cache = LfuCache::new(NonZeroUsize::new(10).unwrap());
+        let mut cache = make_cache(10);
 
         assert_eq!(cache.current_size(), 0);
         assert_eq!(cache.max_size(), u64::MAX);
@@ -1199,8 +1125,11 @@ mod tests {
 
     #[test]
     fn test_lfu_with_limits_constructor() {
-        let cache: LfuCache<String, String> =
-            LfuCache::with_limits(NonZeroUsize::new(100).unwrap(), 1024 * 1024);
+        let config = LfuCacheConfig {
+            capacity: NonZeroUsize::new(100).unwrap(),
+            max_size: 1024 * 1024,
+        };
+        let cache: LfuCache<String, String> = LfuCache::init(config, None);
 
         assert_eq!(cache.current_size(), 0);
         assert_eq!(cache.max_size(), 1024 * 1024);

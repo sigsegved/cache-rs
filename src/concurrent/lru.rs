@@ -207,10 +207,13 @@ where
         let hash_builder = hasher.unwrap_or_default();
         let segments: Vec<_> = (0..segment_count)
             .map(|_| {
-                Mutex::new(crate::lru::LruSegment::with_hasher_and_size(
-                    segment_cap,
+                let segment_config = crate::config::LruCacheConfig {
+                    capacity: segment_cap,
+                    max_size: segment_max_size,
+                };
+                Mutex::new(crate::lru::LruSegment::init(
+                    segment_config,
                     hash_builder.clone(),
-                    segment_max_size,
                 ))
             })
             .collect();
@@ -228,43 +231,9 @@ where
     V: Clone + Send,
     S: BuildHasher + Clone + Send,
 {
-    /// Creates a concurrent LRU cache with a custom hash builder.
-    ///
-    /// Use this for deterministic hashing or DoS-resistant hashers.
-    ///
-    /// # Arguments
-    ///
-    /// * `config` - Configuration specifying capacity and segments
-    /// * `hash_builder` - Custom hash builder (will be cloned for each segment)
-    pub fn init_with_hasher(
-        config: crate::config::ConcurrentLruCacheConfig,
-        hash_builder: S,
-    ) -> Self {
-        let segment_count = config.segments;
-        let capacity = config.base.capacity;
-        let max_size = config.base.max_size;
-
-        let segment_capacity = capacity.get() / segment_count;
-        let segment_cap = NonZeroUsize::new(segment_capacity.max(1)).unwrap();
-        let segment_max_size = max_size / segment_count as u64;
-
-        let segments: Vec<_> = (0..segment_count)
-            .map(|_| {
-                Mutex::new(LruSegment::with_hasher_and_size(
-                    segment_cap,
-                    hash_builder.clone(),
-                    segment_max_size,
-                ))
-            })
-            .collect();
-
-        Self {
-            segments: segments.into_boxed_slice(),
-            hash_builder,
-        }
-    }
-
     /// Returns the segment index for the given key.
+    ///
+    /// This is used internally for routing operations to the correct segment.
     #[inline]
     fn segment_index<Q>(&self, key: &Q) -> usize
     where
@@ -821,18 +790,6 @@ mod tests {
 
         cache.put("b".to_string(), 2);
         assert!(cache.len() <= 16);
-    }
-
-    #[test]
-    fn test_init_with_hasher() {
-        let hasher = DefaultHashBuilder::default();
-        let config = make_config(100, 4);
-        let cache: ConcurrentLruCache<String, i32, _> =
-            ConcurrentLruCache::init_with_hasher(config, hasher);
-
-        cache.put("test".to_string(), 42);
-        assert_eq!(cache.get(&"test".to_string()), Some(42));
-        assert_eq!(cache.segment_count(), 4);
     }
 
     #[test]

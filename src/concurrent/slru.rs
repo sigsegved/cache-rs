@@ -179,12 +179,12 @@ where
 
         let segments: Vec<_> = (0..segment_count)
             .map(|_| {
-                Mutex::new(SlruSegment::with_hasher_and_size(
-                    segment_cap,
-                    segment_protected_cap,
-                    hash_builder.clone(),
-                    segment_max_size,
-                ))
+                let segment_config = crate::config::SlruCacheConfig {
+                    capacity: segment_cap,
+                    protected_capacity: segment_protected_cap,
+                    max_size: segment_max_size,
+                };
+                Mutex::new(SlruSegment::init(segment_config, hash_builder.clone()))
             })
             .collect();
 
@@ -201,39 +201,6 @@ where
     V: Clone + Send,
     S: BuildHasher + Clone + Send,
 {
-    /// Creates a concurrent SLRU cache with a custom hash builder.
-    pub fn init_with_hasher(
-        config: crate::config::ConcurrentSlruCacheConfig,
-        hash_builder: S,
-    ) -> Self {
-        let segment_count = config.segments;
-        let capacity = config.base.capacity;
-        let protected_capacity = config.base.protected_capacity;
-        let max_size = config.base.max_size;
-
-        let segment_capacity = capacity.get() / segment_count;
-        let segment_protected = protected_capacity.get() / segment_count;
-        let segment_cap = NonZeroUsize::new(segment_capacity.max(1)).unwrap();
-        let segment_protected_cap = NonZeroUsize::new(segment_protected.max(1)).unwrap();
-        let segment_max_size = max_size / segment_count as u64;
-
-        let segments: Vec<_> = (0..segment_count)
-            .map(|_| {
-                Mutex::new(SlruSegment::with_hasher_and_size(
-                    segment_cap,
-                    segment_protected_cap,
-                    hash_builder.clone(),
-                    segment_max_size,
-                ))
-            })
-            .collect();
-
-        Self {
-            segments: segments.into_boxed_slice(),
-            hash_builder,
-        }
-    }
-
     #[inline]
     fn segment_index<Q>(&self, key: &Q) -> usize
     where
@@ -607,18 +574,6 @@ mod tests {
         assert_eq!(cache.get(&"missing".to_string()), None);
         assert_eq!(cache.remove(&"missing".to_string()), None);
         assert!(!cache.contains_key(&"missing".to_string()));
-    }
-
-    #[test]
-    fn test_init_with_hasher() {
-        let hasher = DefaultHashBuilder::default();
-        let config = make_config(100, 50, 4);
-        let cache: ConcurrentSlruCache<String, i32, _> =
-            ConcurrentSlruCache::init_with_hasher(config, hasher);
-
-        cache.put("test".to_string(), 42);
-        assert_eq!(cache.get(&"test".to_string()), Some(42));
-        assert_eq!(cache.segment_count(), 4);
     }
 
     #[test]

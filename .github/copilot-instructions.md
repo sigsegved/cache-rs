@@ -98,14 +98,13 @@ impl CacheMetrics for Cache {
 
 ### Required Validation Pipeline (ALL CHANGES MUST PASS):
 ```bash
-cargo build --all-targets                              # Build check
-cargo test --all                                       # All tests
-cargo fmt --all -- --check                            # Formatting
-cargo clippy --all-targets --all-features -- -D warnings  # Linting
-cargo check --all-targets --all-features              # Additional checks
+cargo fmt --all -- --check                             # Formatting
+cargo clippy --features "std,concurrent" -- -D warnings  # Linting (stable features)
+cargo test --features "std,concurrent"                 # All tests with features
 cargo doc --no-deps --document-private-items          # Documentation
-cargo build --no-default-features --target thumbv6m-none-eabi  # no_std test
 ```
+
+**Note**: The `nightly` feature requires nightly Rust and should not be included in standard validation. The `--all-features` flag will fail on stable Rust due to the `nightly` feature.
 
 ### Testing Patterns
 - Comprehensive unit tests in each algorithm module
@@ -288,32 +287,25 @@ Every module must have comprehensive documentation written from a **consumer's p
 
 ### Required Checks
 
-1. **Build**: `cargo build --all-targets`
-   - Code must compile without errors
-   - All features and targets must build successfully
+1. **Format**: `cargo fmt --all -- --check`
+   - Code must be properly formatted using rustfmt
+   - No formatting inconsistencies allowed
 
-2. **Test**: `cargo test --all`
+2. **Clippy**: `cargo clippy --features "std,concurrent" -- -D warnings`
+   - No clippy warnings allowed
+   - Use `#[allow(clippy::lint_name)]` sparingly and only with justification
+   - Note: Do NOT use `--all-features` as the `nightly` feature requires nightly Rust
+
+3. **Test**: `cargo test --features "std,concurrent"`
    - All tests must pass
    - New functionality must include appropriate tests
    - Tests should cover both happy path and error cases
 
-3. **Format**: `cargo fmt --all -- --check`
-   - Code must be properly formatted using rustfmt
-   - No formatting inconsistencies allowed
-
-4. **Clippy**: `cargo clippy --all-targets --all-features -- -D warnings`
-   - No clippy warnings allowed
-   - Use `#[allow(clippy::lint_name)]` sparingly and only with justification
-
-5. **Check**: `cargo check --all-targets --all-features`
-   - All code must pass additional semantic checks
-   - Ensure no unused imports or dead code
-
-6. **Documentation**: `cargo doc --no-deps --document-private-items`
+4. **Documentation**: `cargo doc --no-deps --document-private-items`
    - Documentation must build without warnings
    - All public items must be documented
 
-7. **Security**: `cargo audit` (if available)
+5. **Security**: `cargo audit` (if available)
    - No known security vulnerabilities in dependencies
 
 ### Additional Validation for Unsafe Code

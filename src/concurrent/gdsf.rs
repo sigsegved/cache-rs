@@ -67,10 +67,12 @@
 //!
 //! | Metric | Value |
 //! |--------|-------|
-//! | Get/Put/Remove | O(1) average |
+//! | Get/Put/Remove | O(log P) per segment |
 //! | Concurrency | Near-linear scaling up to segment count |
 //! | Memory overhead | ~170 bytes per entry + one Mutex per segment |
 //! | Size-awareness | Excellent (per-segment size tracking) |
+//!
+//! Where P = distinct priority buckets per segment. Priority = (frequency/size) + age.
 //!
 //! # When to Use
 //!
@@ -220,6 +222,7 @@ where
         let segment_count = config.segments;
         let capacity = config.base.capacity;
         let max_size = config.base.max_size;
+        let initial_age = config.base.initial_age;
 
         let segment_capacity = capacity.get() / segment_count;
         let segment_cap = NonZeroUsize::new(segment_capacity.max(1)).unwrap();
@@ -229,11 +232,12 @@ where
 
         let segments: Vec<_> = (0..segment_count)
             .map(|_| {
-                Mutex::new(GdsfSegment::with_hasher_and_size(
-                    segment_cap,
-                    hash_builder.clone(),
-                    segment_max_size,
-                ))
+                let segment_config = crate::config::GdsfCacheConfig {
+                    capacity: segment_cap,
+                    initial_age,
+                    max_size: segment_max_size,
+                };
+                Mutex::new(GdsfSegment::init(segment_config, hash_builder.clone()))
             })
             .collect();
 
@@ -250,40 +254,6 @@ where
     V: Clone + Send,
     S: BuildHasher + Clone + Send,
 {
-    /// Creates a concurrent GDSF cache with a custom hash builder.
-    ///
-    /// # Arguments
-    ///
-    /// * `config` - The cache configuration specifying capacity, max size, and segments
-    /// * `hash_builder` - Custom hash builder for key hashing
-    pub fn init_with_hasher(
-        config: crate::config::ConcurrentGdsfCacheConfig,
-        hash_builder: S,
-    ) -> Self {
-        let segment_count = config.segments;
-        let capacity = config.base.capacity;
-        let max_size = config.base.max_size;
-
-        let segment_capacity = capacity.get() / segment_count;
-        let segment_cap = NonZeroUsize::new(segment_capacity.max(1)).unwrap();
-        let segment_max_size = max_size / segment_count as u64;
-
-        let segments: Vec<_> = (0..segment_count)
-            .map(|_| {
-                Mutex::new(GdsfSegment::with_hasher_and_size(
-                    segment_cap,
-                    hash_builder.clone(),
-                    segment_max_size,
-                ))
-            })
-            .collect();
-
-        Self {
-            segments: segments.into_boxed_slice(),
-            hash_builder,
-        }
-    }
-
     #[inline]
     fn segment_index<Q>(&self, key: &Q) -> usize
     where
@@ -670,18 +640,6 @@ mod tests {
         assert_eq!(cache.get(&"missing".to_string()), None);
         assert_eq!(cache.remove(&"missing".to_string()), None);
         assert!(!cache.contains_key(&"missing".to_string()));
-    }
-
-    #[test]
-    fn test_init_with_hasher() {
-        let hasher = DefaultHashBuilder::default();
-        let config = make_config(10000, 4);
-        let cache: ConcurrentGdsfCache<String, i32, _> =
-            ConcurrentGdsfCache::init_with_hasher(config, hasher);
-
-        cache.put("test".to_string(), 42, 100);
-        assert_eq!(cache.get(&"test".to_string()), Some(42));
-        assert_eq!(cache.segment_count(), 4);
     }
 
     #[test]

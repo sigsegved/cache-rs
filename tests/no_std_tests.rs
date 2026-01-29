@@ -5,6 +5,9 @@ extern crate cache_rs;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+use cache_rs::config::{
+    GdsfCacheConfig, LfuCacheConfig, LfudaCacheConfig, LruCacheConfig, SlruCacheConfig,
+};
 use cache_rs::GdsfCache;
 use cache_rs::LfuCache;
 use cache_rs::LfudaCache;
@@ -12,9 +15,56 @@ use cache_rs::LruCache;
 use cache_rs::SlruCache;
 use core::num::NonZeroUsize;
 
+// Helper functions to create caches with the init pattern
+fn make_lru<K: core::hash::Hash + Eq + Clone, V: Clone>(cap: usize) -> LruCache<K, V> {
+    let config = LruCacheConfig {
+        capacity: NonZeroUsize::new(cap).unwrap(),
+        max_size: u64::MAX,
+    };
+    LruCache::init(config, None)
+}
+
+fn make_lfu<K: core::hash::Hash + Eq + Clone, V: Clone>(cap: usize) -> LfuCache<K, V> {
+    let config = LfuCacheConfig {
+        capacity: NonZeroUsize::new(cap).unwrap(),
+        max_size: u64::MAX,
+    };
+    LfuCache::init(config, None)
+}
+
+fn make_lfuda<K: core::hash::Hash + Eq + Clone, V: Clone>(cap: usize) -> LfudaCache<K, V> {
+    let config = LfudaCacheConfig {
+        capacity: NonZeroUsize::new(cap).unwrap(),
+        initial_age: 0,
+        max_size: u64::MAX,
+    };
+    LfudaCache::init(config, None)
+}
+
+fn make_slru<K: core::hash::Hash + Eq + Clone, V: Clone>(
+    cap: usize,
+    protected_cap: usize,
+) -> SlruCache<K, V> {
+    let config = SlruCacheConfig {
+        capacity: NonZeroUsize::new(cap).unwrap(),
+        protected_capacity: NonZeroUsize::new(protected_cap).unwrap(),
+        max_size: u64::MAX,
+    };
+    SlruCache::init(config, None)
+}
+
+fn make_gdsf<K: core::hash::Hash + Eq + Clone, V: Clone>(cap: usize) -> GdsfCache<K, V> {
+    let config = GdsfCacheConfig {
+        capacity: NonZeroUsize::new(cap).unwrap(),
+        initial_age: 0.0,
+        max_size: u64::MAX,
+    };
+    GdsfCache::init(config, None)
+}
+
 #[test]
 fn test_lru_in_no_std() {
-    let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+    let mut cache = make_lru(2);
 
     // Using String as it requires the alloc crate
     let key1 = String::from("key1");
@@ -38,7 +88,7 @@ fn test_lru_in_no_std() {
 
 #[test]
 fn test_lfu_in_no_std() {
-    let mut cache = LfuCache::new(NonZeroUsize::new(2).unwrap());
+    let mut cache = make_lfu(2);
 
     let key1 = String::from("key1");
     let key2 = String::from("key2");
@@ -61,7 +111,7 @@ fn test_lfu_in_no_std() {
 
 #[test]
 fn test_lfuda_in_no_std() {
-    let mut cache = LfudaCache::new(NonZeroUsize::new(2).unwrap());
+    let mut cache = make_lfuda(2);
 
     let key1 = String::from("key1");
     let key2 = String::from("key2");
@@ -83,7 +133,7 @@ fn test_lfuda_in_no_std() {
 
 #[test]
 fn test_slru_in_no_std() {
-    let mut cache = SlruCache::new(NonZeroUsize::new(4).unwrap(), NonZeroUsize::new(2).unwrap());
+    let mut cache = make_slru(4, 2);
 
     let keys: Vec<String> = (0..5).map(|i| format!("key{i}")).collect();
 
@@ -120,7 +170,7 @@ fn test_slru_in_no_std() {
 fn test_gdsf_in_no_std() {
     // We'll simply test basic operations of GDSF in no_std
     // Create a cache with small capacity
-    let mut cache = GdsfCache::new(NonZeroUsize::new(100).unwrap());
+    let mut cache = make_gdsf(100);
 
     // Add some items
     let key1 = String::from("key1");
@@ -155,7 +205,7 @@ fn test_gdsf_in_no_std() {
 #[test]
 fn test_complex_types_in_no_std() {
     // Test with more complex types that require alloc
-    let mut cache = LruCache::new(NonZeroUsize::new(2).unwrap());
+    let mut cache = make_lru(2);
 
     let key1 = Vec::<u8>::from([1, 2, 3]);
     let value1 = Vec::<i32>::from([10, 20, 30]);
