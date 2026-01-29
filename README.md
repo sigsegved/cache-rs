@@ -58,15 +58,15 @@ All cache types support these core operations:
 | `put_with_size(key, value, size)` | Insert with explicit size for size-limited caches. |
 | `get(&key)` | Retrieve a reference to the value. Updates access metadata (e.g., moves to front in LRU). |
 | `get_mut(&key)` | Retrieve a mutable reference. Updates access metadata. |
-| `peek(&key)` | Retrieve without updating access metadata. |
 | `remove(&key)` | Remove and return an entry. |
-| `contains(&key)` | Check if key exists. |
 | `len()` | Number of entries. |
 | `is_empty()` | Whether cache is empty. |
 | `clear()` | Remove all entries. |
-| `capacity()` | Maximum number of entries. |
+| `cap()` | Maximum capacity (LRU/LFU/LFUDA/SLRU). |
 
-**GDSF note**: Use `put(key, value, size)` — GDSF requires size for priority calculation.
+**Algorithm-specific methods:**
+- **GDSF**: Use `put(key, value, size)` (requires size for priority calculation) and `contains_key(&key)` to check existence.
+- **GDSF**: Use `pop(&key)` instead of `remove(&key)` to remove entries.
 
 ### Example: Basic Usage
 
@@ -88,12 +88,9 @@ cache.put("user:1002", "Bob");
 // Retrieve (updates LRU position)
 assert_eq!(cache.get(&"user:1001"), Some(&"Alice"));
 
-// Peek (does not update LRU position)
-assert_eq!(cache.peek(&"user:1002"), Some(&"Bob"));
-
-// Check existence
-assert!(cache.contains(&"user:1001"));
-assert!(!cache.contains(&"user:9999"));
+// Check existence (also updates LRU position if present)
+assert!(cache.get(&"user:1001").is_some());
+assert!(cache.get(&"user:9999").is_none());
 
 // Remove
 cache.remove(&"user:1001");
