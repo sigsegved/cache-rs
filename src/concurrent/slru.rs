@@ -174,7 +174,15 @@ where
         let segment_capacity = capacity.get() / segment_count;
         let segment_protected = protected_capacity.get() / segment_count;
         let segment_cap = NonZeroUsize::new(segment_capacity.max(1)).unwrap();
-        let segment_protected_cap = NonZeroUsize::new(segment_protected.max(1)).unwrap();
+
+        // Ensure segment_protected is strictly less than segment_capacity
+        // If they would be equal after division, reduce protected by 1
+        let adjusted_protected = if segment_protected >= segment_capacity {
+            segment_capacity.saturating_sub(1).max(1)
+        } else {
+            segment_protected.max(1)
+        };
+        let segment_protected_cap = NonZeroUsize::new(adjusted_protected).unwrap();
         let segment_max_size = max_size / segment_count as u64;
 
         let segments: Vec<_> = (0..segment_count)
