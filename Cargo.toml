@@ -1,6 +1,6 @@
 [package]
 name = "cache-rs"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["sigsegved"]
 categories = ["caching", "no-std", "concurrency"]
 description = "A high-performance, memory-efficient cache implementation supporting multiple eviction policies including LRU, LFU, LFUDA, SLRU and GDSF"
