@@ -31,7 +31,7 @@ cache-rs gives you the eviction intelligence without dictating your storage arch
 
 ```toml
 [dependencies]
-cache-rs = "0.2.0"
+cache-rs = "0.3.0"
 ```
 
 All caches follow a unified initialization pattern: create a config struct for your chosen algorithm, then call `init(config, hasher)`. The second parameter accepts an optional custom hasher—pass `None` to use the default.
@@ -232,7 +232,7 @@ For multi-threaded workloads, enable the `concurrent` feature:
 
 ```toml
 [dependencies]
-cache-rs = { version = "0.2.0", features = ["concurrent"] }
+cache-rs = { version = "0.3.0", features = ["concurrent"] }
 ```
 
 Concurrent caches use **lock striping**—data is partitioned across multiple segments, each with its own lock. Threads accessing different segments proceed in parallel; only threads hitting the same segment contend.

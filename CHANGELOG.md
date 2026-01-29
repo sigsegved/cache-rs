@@ -5,7 +5,89 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.0] - 2026-01-14
+## [0.3.0] - 2026-01-29
+
+### ⚠️ BREAKING CHANGES
+
+This release contains significant breaking changes to the cache initialization API. All deprecated initialization methods have been removed in favor of a unified `init(config, hasher)` pattern.
+
+#### **Removed Initialization Methods**
+
+All caches previously supported multiple initialization methods which have now been removed:
+- `new()` → Use `init(config, None)`
+- `with_limits()` → Use `init(config, None)`
+- `with_max_size()` → Use `init(config, None)`
+- `with_hasher()` → Use `init(config, Some(hasher))`
+- `with_hasher_and_size()` → Use `init(config, Some(hasher))`
+- `init_with_hasher()` → Use `init(config, Some(hasher))`
+
+#### **Migration Guide**
+
+**Before (0.2.0):**
+```rust
+// Old API with multiple constructors
+let cache = LruCache::new(100);
+let cache = LruCache::with_hasher(100, hasher);
+let cache = SlruCache::with_limits(1000, 200);
+```
+
+**After (0.3.0):**
+```rust
+use cache_rs::config::{LruCacheConfig, SlruCacheConfig};
+use std::num::NonZeroUsize;
+
+// Unified init(config, hasher) API
+let config = LruCacheConfig {
+    capacity: NonZeroUsize::new(100).unwrap(),
+    max_size: u64::MAX,
+};
+let cache = LruCache::init(config, None);
+
+// With custom hasher
+let cache = LruCache::init(config, Some(my_hasher));
+
+// SLRU example
+let config = SlruCacheConfig {
+    capacity: NonZeroUsize::new(1000).unwrap(),
+    protected_capacity: NonZeroUsize::new(200).unwrap(),
+    max_size: u64::MAX,
+};
+let cache = SlruCache::init(config, None);
+```
+
+All cache types (LRU, SLRU, LFU, LFUDA, GDSF, and their concurrent variants) now follow this unified pattern.
+
+### ✨ Added
+
+- **Unified Configuration System**: All caches now use typed configuration structs (`LruCacheConfig`, `SlruCacheConfig`, etc.) for consistent initialization
+- **Algorithm Comparison Guide**: New [ALGORITHM_GUIDE.md](ALGORITHM_GUIDE.md) with detailed use cases, trade-offs, and decision framework
+- **Enhanced Documentation**: Complete README rewrite covering both in-memory and disk-backed caching patterns
+
+### 🔧 Changed
+
+- **Standardized Initialization**: Single `init(config, hasher)` method across all cache types
+- **Accurate Complexity Documentation**: Updated time complexity documentation:
+  - LRU/SLRU: O(1)
+  - LFU: O(log F) - effectively O(1) since F (frequency values) is bounded
+  - LFUDA/GDSF: O(log P) where P = distinct priority values
+- **Improved Configuration Ergonomics**: Configuration structs provide better compile-time safety and discoverability
+
+### 📝 Documentation
+
+- Comprehensive README with unified API documentation
+- New ALGORITHM_GUIDE.md with real-world examples and decision framework
+- Updated all examples to use new initialization pattern
+- Added disk-backed cache pattern documentation
+
+### 🔒 Backwards Compatibility
+
+**This is a breaking release.** Users of v0.2.0 and earlier will need to migrate their initialization code to use the new `init(config, hasher)` pattern. The core cache operations (`get`, `put`, `remove`, etc.) remain unchanged.
+
+---
+
+**Full Changelog**: https://github.com/sigsegved/cache-rs/compare/v0.2.0...v0.3.0
+
+## [0.2.0] - 2026-01-14 (DEPRECATED - Use 0.3.0)
 
 ### ✨ Added
 
@@ -66,7 +148,7 @@ Benchmark results for 8-thread mixed workload (get/put operations):
 
 **Full Changelog**: https://github.com/sigsegved/cache-rs/compare/v0.1.1...v0.2.0
 
-## [0.1.1] - 2026-01-05
+## [0.1.1] - 2026-01-05 (DEPRECATED - Use 0.3.0)
 
 ### 🐛 Fixed
 
@@ -97,7 +179,7 @@ Benchmark results for 8-thread mixed workload (get/put operations):
 
 **Full Changelog**: https://github.com/sigsegved/cache-rs/compare/v0.1.0...v0.1.1
 
-## [0.1.0] - 2025-08-04
+## [0.1.0] - 2025-08-04 (DEPRECATED - Use 0.3.0)
 
 ### ✨ Added
 
