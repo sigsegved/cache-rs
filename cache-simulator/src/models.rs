@@ -239,7 +239,7 @@ pub struct LatencyStats {
 
 /// Latency percentiles
 #[derive(Debug, Clone, Default)]
-#[allow(dead_code)]  // Fields are used for metrics/analysis, not all consumed in every code path
+#[allow(dead_code)] // Fields are used for metrics/analysis, not all consumed in every code path
 pub struct LatencyPercentiles {
     pub p50_ns: u64,
     pub p90_ns: u64,

@@ -184,7 +184,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             output_csv,
             use_size,
         }) => run_simulator(
-            input_dir, capacity, max_size, algorithms, mode, segments, threads, output_csv, use_size,
+            input_dir, capacity, max_size, algorithms, mode, segments, threads, output_csv,
+            use_size,
         ),
 
         None => {

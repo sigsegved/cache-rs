@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "cache-simulator"]
+
 [package]
 name = "cache-rs"
 version = "0.2.0"

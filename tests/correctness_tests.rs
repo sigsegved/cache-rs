@@ -1754,3 +1754,163 @@ fn test_metrics_size_mismatch_on_eviction() {
     // If underflow occurred, it would be a huge number
     assert!(size < 1000, "Size should not have underflowed: {}", size);
 }
+
+// ============================================================================
+// MAX_SIZE EVICTION TESTS
+// ============================================================================
+// These tests verify that each cache algorithm properly evicts items when
+// the max_size limit would be exceeded, not just when entry count is reached.
+
+/// Helper to create an SlruCache with explicit max_size limit
+fn make_slru_with_limits<K: std::hash::Hash + Eq + Clone, V: Clone>(
+    cap: usize,
+    protected_cap: usize,
+    max_size: u64,
+) -> SlruCache<K, V> {
+    let config = SlruCacheConfig {
+        capacity: NonZeroUsize::new(cap).unwrap(),
+        protected_capacity: NonZeroUsize::new(protected_cap).unwrap(),
+        max_size,
+    };
+    SlruCache::init(config, None)
+}
+
+#[test]
+fn test_lru_max_size_triggers_eviction() {
+    // Create LRU with large entry capacity but small max_size
+    // Size limit (100 bytes) should be the constraint, not entry count (1000)
+    let mut cache: LruCache<String, i32> = make_lru_with_limits(1000, 100);
+
+    // Insert items that fit within max_size
+    cache.put_with_size("a".to_string(), 1, 30); // total: 30
+    cache.put_with_size("b".to_string(), 2, 30); // total: 60
+    cache.put_with_size("c".to_string(), 3, 30); // total: 90
+
+    assert_eq!(cache.len(), 3, "Should have 3 items");
+    assert_eq!(cache.current_size(), 90, "Size should be 90");
+
+    // Insert item that would exceed max_size (90 + 20 = 110 > 100)
+    // LRU should evict "a" to stay within max_size
+    cache.put_with_size("d".to_string(), 4, 20);
+
+    // Verify LRU respects max_size
+    assert!(
+        cache.current_size() <= 100,
+        "LRU should respect max_size limit. current_size={}, max_size=100",
+        cache.current_size()
+    );
+
+    // "a" should have been evicted (LRU)
+    assert!(
+        cache.get(&"a".to_string()).is_none(),
+        "Item 'a' should be evicted when max_size exceeded"
+    );
+    assert!(
+        cache.get(&"b".to_string()).is_some(),
+        "Item 'b' should remain"
+    );
+    assert!(
+        cache.get(&"c".to_string()).is_some(),
+        "Item 'c' should remain"
+    );
+    assert!(
+        cache.get(&"d".to_string()).is_some(),
+        "Item 'd' should be inserted"
+    );
+}
+
+#[test]
+fn test_slru_max_size_triggers_eviction() {
+    // Create SLRU with large entry capacity but small max_size
+    // Size limit (100 bytes) should be the constraint, not entry count (1000)
+    let mut cache: SlruCache<String, i32> = make_slru_with_limits(1000, 200, 100);
+
+    // Insert items that fit within max_size
+    cache.put_with_size("a".to_string(), 1, 30); // total: 30
+    cache.put_with_size("b".to_string(), 2, 30); // total: 60
+    cache.put_with_size("c".to_string(), 3, 30); // total: 90
+
+    assert_eq!(cache.len(), 3, "Should have 3 items");
+    assert_eq!(cache.current_size(), 90, "Size should be 90");
+
+    // Insert item that would exceed max_size (90 + 20 = 110 > 100)
+    // SLRU should evict to stay within max_size
+    cache.put_with_size("d".to_string(), 4, 20);
+
+    // BUG: SLRU does NOT evict based on max_size - only entry count!
+    // This test exposes the bug by asserting the expected behavior
+    assert!(
+        cache.current_size() <= 100,
+        "SLRU BUG: current_size {} exceeds max_size 100. \
+         SLRU should evict items when max_size would be exceeded, like LRU does.",
+        cache.current_size()
+    );
+}
+
+#[test]
+fn test_lfu_max_size_triggers_eviction() {
+    // Create LFU with large entry capacity but small max_size
+    let mut cache: LfuCache<String, i32> = make_lfu_with_max_size(100);
+
+    cache.put_with_size("a".to_string(), 1, 30);
+    cache.put_with_size("b".to_string(), 2, 30);
+    cache.put_with_size("c".to_string(), 3, 30);
+
+    assert_eq!(cache.current_size(), 90);
+
+    // Insert item that would exceed max_size
+    cache.put_with_size("d".to_string(), 4, 20);
+
+    assert!(
+        cache.current_size() <= 100,
+        "LFU should respect max_size limit. current_size={}, max_size=100",
+        cache.current_size()
+    );
+}
+
+#[test]
+fn test_lfuda_max_size_triggers_eviction() {
+    // Create LFUDA with large entry capacity but small max_size
+    let mut cache: LfudaCache<String, i32> = make_lfuda_with_max_size(100);
+
+    cache.put_with_size("a".to_string(), 1, 30);
+    cache.put_with_size("b".to_string(), 2, 30);
+    cache.put_with_size("c".to_string(), 3, 30);
+
+    assert_eq!(cache.current_size(), 90);
+
+    // Insert item that would exceed max_size
+    cache.put_with_size("d".to_string(), 4, 20);
+
+    assert!(
+        cache.current_size() <= 100,
+        "LFUDA should respect max_size limit. current_size={}, max_size=100",
+        cache.current_size()
+    );
+}
+
+#[test]
+fn test_slru_max_size_should_evict_multiple_items() {
+    // Test that SLRU can evict multiple items if needed to fit a large new item
+    let mut cache: SlruCache<String, i32> = make_slru_with_limits(1000, 200, 100);
+
+    // Fill with small items
+    for i in 0..10 {
+        cache.put_with_size(format!("key{}", i), i as i32, 10); // 10 items × 10 bytes = 100
+    }
+
+    assert_eq!(cache.len(), 10);
+    assert_eq!(cache.current_size(), 100, "Cache should be at max_size");
+
+    // Insert a large item (50 bytes) - should evict multiple small items
+    cache.put_with_size("big".to_string(), 999, 50);
+
+    // Expected: evict enough items to fit the new 50-byte item
+    // Final size should be <= 100
+    assert!(
+        cache.current_size() <= 100,
+        "SLRU BUG: current_size {} exceeds max_size 100 after inserting large item. \
+         Multiple items should be evicted to make room.",
+        cache.current_size()
+    );
+}
