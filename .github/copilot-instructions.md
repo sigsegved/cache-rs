@@ -96,6 +96,24 @@ impl CacheMetrics for Cache {
 
 ## Development Workflow
 
+### Git Commands
+
+When running git commands, always use `cat` as the pager to avoid interactive pagers like `less` that block output:
+
+```bash
+GIT_PAGER=cat git log ...
+GIT_PAGER=cat git show ...
+GIT_PAGER=cat git diff ...
+```
+
+Alternatively, use `git --no-pager`:
+
+```bash
+git --no-pager log ...
+git --no-pager show ...
+git --no-pager diff ...
+```
+
 ### Required Validation Pipeline (ALL CHANGES MUST PASS):
 ```bash
 cargo fmt --all -- --check                             # Formatting
