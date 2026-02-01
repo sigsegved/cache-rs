@@ -1837,12 +1837,9 @@ fn test_slru_max_size_triggers_eviction() {
     // SLRU should evict to stay within max_size
     cache.put_with_size("d".to_string(), 4, 20);
 
-    // BUG: SLRU does NOT evict based on max_size - only entry count!
-    // This test exposes the bug by asserting the expected behavior
     assert!(
         cache.current_size() <= 100,
-        "SLRU BUG: current_size {} exceeds max_size 100. \
-         SLRU should evict items when max_size would be exceeded, like LRU does.",
+        "current_size {} exceeds max_size 100",
         cache.current_size()
     );
 }
