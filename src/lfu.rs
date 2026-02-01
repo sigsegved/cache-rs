@@ -1133,6 +1133,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Skip under Miri: performance benchmark test
     fn test_lfu_frequency_list_accumulation() {
         // This test investigates the LFU performance issue seen in simulations:
         // Social traffic at 500 capacity: 896 seconds (vs 3s for LRU)
