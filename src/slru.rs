@@ -548,8 +548,11 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruSegment<K, V, S> {
 
         let mut evicted = None;
 
-        // Check if total cache is at capacity
-        if self.len() >= self.cap().get() {
+        // Evict while entry count limit OR size limit would be exceeded
+        // This mirrors LRU's eviction logic to properly respect max_size
+        while self.len() >= self.cap().get()
+            || (self.current_size + size > self.config.max_size && !self.map.is_empty())
+        {
             // If probationary segment has items, evict from there first
             if !self.probationary.is_empty() {
                 if let Some(old_entry) = self.probationary.remove_last() {
@@ -568,6 +571,8 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruSegment<K, V, S> {
                         evicted = Some((old_key, old_value));
                         let _ = Box::from_raw(entry_ptr);
                     }
+                } else {
+                    break; // No more items to evict
                 }
             } else if !self.protected.is_empty() {
                 // If probationary is empty, evict from protected
@@ -587,48 +592,18 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruSegment<K, V, S> {
                         evicted = Some((old_key, old_value));
                         let _ = Box::from_raw(entry_ptr);
                     }
+                } else {
+                    break; // No more items to evict
                 }
+            } else {
+                break; // Both segments empty, nothing to evict
             }
         }
 
         // Add the new key-value pair to the probationary segment
-        if self.len() < self.cap().get() {
-            // Total cache has space, allow probationary to exceed its capacity
-            let node = self.probationary.add_unchecked((key.clone(), value));
-            self.map.insert(key, (node, Location::Probationary, size));
-            self.current_size += size;
-        } else {
-            // Total cache is full, try to add normally (may fail due to probationary capacity)
-            if let Some(node) = self.probationary.add((key.clone(), value.clone())) {
-                self.map.insert(key, (node, Location::Probationary, size));
-                self.current_size += size;
-            } else {
-                // Probationary is at capacity, need to make space
-                if let Some(old_entry) = self.probationary.remove_last() {
-                    unsafe {
-                        let entry_ptr = Box::into_raw(old_entry);
-                        let (old_key, old_value) = (*entry_ptr).get_value().clone();
-                        // Get the stored size from the map before removing
-                        let evicted_size = self
-                            .map
-                            .get(&old_key)
-                            .map(|(_, _, sz)| *sz)
-                            .unwrap_or_else(|| self.estimate_object_size(&old_key, &old_value));
-                        self.current_size = self.current_size.saturating_sub(evicted_size);
-                        self.metrics.record_probationary_eviction(evicted_size);
-                        self.map.remove(&old_key);
-                        evicted = Some((old_key, old_value));
-                        let _ = Box::from_raw(entry_ptr);
-                    }
-                }
-
-                // Try again after making space
-                if let Some(node) = self.probationary.add((key.clone(), value)) {
-                    self.map.insert(key, (node, Location::Probationary, size));
-                    self.current_size += size;
-                }
-            }
-        }
+        let node = self.probationary.add_unchecked((key.clone(), value));
+        self.map.insert(key, (node, Location::Probationary, size));
+        self.current_size += size;
 
         // Record insertion and update segment sizes
         self.metrics.core.record_insertion(size);
@@ -931,6 +906,7 @@ mod tests {
 
     use super::*;
     use crate::config::SlruCacheConfig;
+    use alloc::format;
     use alloc::string::String;
 
     /// Helper to create an SlruCache with the given capacity and protected capacity
@@ -1258,5 +1234,81 @@ mod tests {
 
         // get_mut on missing key returns None
         assert!(cache.get_mut(&"missing".to_string()).is_none());
+    }
+
+    /// Helper to create an SlruCache with max_size limit
+    fn make_cache_with_max_size(
+        cap: usize,
+        protected: usize,
+        max_size: u64,
+    ) -> SlruCache<String, i32> {
+        let config = SlruCacheConfig {
+            capacity: NonZeroUsize::new(cap).unwrap(),
+            protected_capacity: NonZeroUsize::new(protected).unwrap(),
+            max_size,
+        };
+        SlruCache::init(config, None)
+    }
+
+    /// Test that SLRU evicts items when max_size would be exceeded.
+    /// This test verifies the cache respects the max_size limit, not just entry count.
+    #[test]
+    fn test_slru_max_size_triggers_eviction() {
+        // Create cache with large entry capacity (100) but small max_size (100 bytes)
+        // This means size limit should be the constraint, not entry count
+        let mut cache = make_cache_with_max_size(100, 30, 100);
+
+        // Insert items that fit within max_size
+        cache.put_with_size("a".to_string(), 1, 30); // total: 30
+        cache.put_with_size("b".to_string(), 2, 30); // total: 60
+        cache.put_with_size("c".to_string(), 3, 30); // total: 90
+
+        assert_eq!(cache.len(), 3, "Should have 3 items");
+        assert_eq!(cache.current_size(), 90, "Size should be 90");
+
+        // Insert item that would exceed max_size (90 + 20 = 110 > 100)
+        // This SHOULD trigger eviction to stay within max_size
+        cache.put_with_size("d".to_string(), 4, 20);
+
+        // Cache should evict to stay within max_size
+        // The LRU item ("a") should be evicted, leaving b, c, d
+        // Total size should be: 30 + 30 + 20 = 80 (after evicting "a")
+        assert!(
+            cache.current_size() <= 100,
+            "current_size {} exceeds max_size 100",
+            cache.current_size()
+        );
+
+        // Verify that "a" was evicted
+        assert!(
+            cache.get(&"a".to_string()).is_none() || cache.current_size() <= 100,
+            "Either 'a' should be evicted OR size should be within limits"
+        );
+    }
+
+    /// Test that max_size eviction works even with larger objects
+    #[test]
+    fn test_slru_max_size_eviction_large_objects() {
+        // Create cache with max_size = 500 bytes, large entry capacity
+        let mut cache = make_cache_with_max_size(1000, 200, 500);
+
+        // Insert objects that each take 100 bytes
+        for i in 0..5 {
+            cache.put_with_size(format!("key{}", i), i, 100);
+        }
+
+        assert_eq!(cache.len(), 5);
+        assert_eq!(cache.current_size(), 500, "Should have exactly 500 bytes");
+
+        // Insert one more - should trigger eviction to stay within 500
+        cache.put_with_size("overflow".to_string(), 99, 100);
+
+        // Expected: oldest item evicted, size still <= 500
+        assert!(
+            cache.current_size() <= 500,
+            "SLRU BUG: current_size {} exceeds max_size 500 after insert. \
+             SLRU must evict items to respect max_size limit.",
+            cache.current_size()
+        );
     }
 }

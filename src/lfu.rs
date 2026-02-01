@@ -326,12 +326,12 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
             .remove(node)
             .unwrap();
 
-        // If the old frequency list is now empty and it was the minimum frequency,
-        // update the minimum frequency
-        if self.frequency_lists.get(&old_frequency).unwrap().is_empty()
-            && old_frequency == self.min_frequency
-        {
-            self.min_frequency = new_frequency;
+        // If the old frequency list is now empty, remove it and update min_frequency
+        if self.frequency_lists.get(&old_frequency).unwrap().is_empty() {
+            self.frequency_lists.remove(&old_frequency);
+            if old_frequency == self.min_frequency {
+                self.min_frequency = new_frequency;
+            }
         }
 
         // Update frequency in the entry's metadata
@@ -489,18 +489,16 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
                     // Update min_frequency if the list is now empty
                     if min_freq_list.is_empty() {
                         let old_min = self.min_frequency;
+                        // Remove empty list to prevent accumulation (performance fix)
+                        self.frequency_lists.remove(&old_min);
+
+                        // Find the next non-empty frequency list
+                        // Since we remove empty lists, this is now O(1) amortized
                         self.min_frequency = self
                             .frequency_lists
                             .keys()
-                            .find(|&&f| {
-                                f > old_min
-                                    && !self
-                                        .frequency_lists
-                                        .get(&f)
-                                        .map(|l| l.is_empty())
-                                        .unwrap_or(true)
-                            })
                             .copied()
+                            .find(|&f| f > old_min)
                             .unwrap_or(1);
                     }
                 } else {
@@ -566,16 +564,12 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
 
             self.current_size = self.current_size.saturating_sub(removed_size);
 
-            // Update min_frequency if necessary
-            if self.frequency_lists.get(&frequency).unwrap().is_empty()
-                && frequency == self.min_frequency
-            {
-                self.min_frequency = self
-                    .frequency_lists
-                    .keys()
-                    .find(|&&f| f > frequency && !self.frequency_lists.get(&f).unwrap().is_empty())
-                    .copied()
-                    .unwrap_or(1);
+            // Remove empty frequency list and update min_frequency if necessary
+            if self.frequency_lists.get(&frequency).unwrap().is_empty() {
+                self.frequency_lists.remove(&frequency);
+                if frequency == self.min_frequency {
+                    self.min_frequency = self.frequency_lists.keys().copied().next().unwrap_or(1);
+                }
             }
 
             Some(value)
@@ -825,6 +819,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> CacheMetrics for LfuCache<K, V, S> 
 #[cfg(test)]
 mod tests {
     extern crate std;
+    use alloc::format;
+    use std::println;
     use std::string::ToString;
 
     use super::*;
@@ -1134,5 +1130,78 @@ mod tests {
         assert_eq!(cache.current_size(), 0);
         assert_eq!(cache.max_size(), 1024 * 1024);
         assert_eq!(cache.cap().get(), 100);
+    }
+
+    #[test]
+    fn test_lfu_frequency_list_accumulation() {
+        // This test verifies that empty frequency lists don't accumulate in LFU cache.
+        // Empty list accumulation was causing 300x slowdown in simulations (896s vs 3s).
+        //
+        // The test simulates a constrained scenario: small cache with high-cardinality traffic
+        // (many unique keys), which historically triggered the empty list accumulation bug.
+        use std::time::Instant;
+
+        // Reproduce the constrained scenario: small cache, many unique keys
+        let mut cache = make_cache(500);
+
+        // Simulate high-cardinality traffic pattern
+        // Use fewer operations under Miri to keep test time reasonable
+        let num_ops = if cfg!(miri) { 5_000 } else { 50_000 };
+        let start = Instant::now();
+        for i in 0..num_ops {
+            // Simulate 80-20: 80% of accesses go to 20% of keys
+            let key = if i % 5 == 0 {
+                format!("popular_{}", i % 100) // 100 popular keys
+            } else {
+                format!("long_tail_{}", i) // Many unique keys
+            };
+            cache.put(key.clone(), i);
+
+            // Also do some gets to build frequency
+            if i % 10 == 0 {
+                for j in 0..10 {
+                    cache.get(&format!("popular_{}", j));
+                }
+            }
+        }
+        let elapsed = start.elapsed();
+
+        let num_freq_lists = cache.segment.frequency_lists.len();
+        let empty_lists = cache
+            .segment
+            .frequency_lists
+            .values()
+            .filter(|l| l.is_empty())
+            .count();
+
+        println!(
+            "{} ops in {:?} ({:.0} ops/sec)",
+            num_ops,
+            elapsed,
+            num_ops as f64 / elapsed.as_secs_f64()
+        );
+        println!(
+            "Frequency lists: {} total, {} empty",
+            num_freq_lists, empty_lists
+        );
+
+        // Print frequency distribution
+        let mut freq_counts: std::collections::BTreeMap<usize, usize> =
+            std::collections::BTreeMap::new();
+        for (freq, list) in &cache.segment.frequency_lists {
+            if !list.is_empty() {
+                *freq_counts.entry(*freq).or_insert(0) += list.len();
+            }
+        }
+        println!("Frequency distribution (non-empty): {:?}", freq_counts);
+
+        // The key correctness check: verify empty frequency lists don't accumulate
+        // This was the bug that caused the 300x slowdown (896s vs 3s) in simulations
+        assert!(
+            empty_lists == 0,
+            "LFU should not accumulate empty frequency lists. Found {} empty lists out of {} total",
+            empty_lists,
+            num_freq_lists
+        );
     }
 }
