@@ -1270,24 +1270,19 @@ mod tests {
         // This SHOULD trigger eviction to stay within max_size
         cache.put_with_size("d".to_string(), 4, 20);
 
-        // EXPECTED BEHAVIOR: Cache should evict to stay within max_size
+        // Cache should evict to stay within max_size
         // The LRU item ("a") should be evicted, leaving b, c, d
         // Total size should be: 30 + 30 + 20 = 80 (after evicting "a")
-
-        // BUG: Currently SLRU does NOT evict based on max_size!
-        // This assertion will fail, exposing the bug:
         assert!(
             cache.current_size() <= 100,
-            "SLRU BUG: current_size {} exceeds max_size 100. \
-             SLRU should evict items when max_size would be exceeded.",
+            "current_size {} exceeds max_size 100",
             cache.current_size()
         );
 
-        // Additional check: if max_size is respected, "a" should be evicted
-        // (This will also fail due to the bug - no eviction happens)
+        // Verify that "a" was evicted
         assert!(
             cache.get(&"a".to_string()).is_none() || cache.current_size() <= 100,
-            "SLRU BUG: Either 'a' should be evicted OR size should be within limits"
+            "Either 'a' should be evicted OR size should be within limits"
         );
     }
 
