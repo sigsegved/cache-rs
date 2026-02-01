@@ -137,7 +137,7 @@ impl OpLatencyTracker {
         // Reservoir sampling for percentiles
         if self.samples.len() < self.max_samples {
             self.samples.push(latency_ns);
-        } else {
+        } else if self.count > 0 {
             let idx = (self.count as usize) % self.max_samples;
             if rand::random::<usize>() % (self.count as usize) < self.max_samples {
                 self.samples[idx] = latency_ns;
@@ -156,10 +156,10 @@ impl OpLatencyTracker {
         let len = self.samples.len();
 
         LatencyPercentiles {
-            p50_ns: self.samples[len * 50 / 100],
-            p90_ns: self.samples[len * 90 / 100],
-            p99_ns: self.samples[len * 99 / 100],
-            p999_ns: self.samples[len.saturating_sub(1).min(len * 999 / 1000)],
+            p50_ns: self.samples[(len - 1) * 50 / 100],
+            p90_ns: self.samples[(len - 1) * 90 / 100],
+            p99_ns: self.samples[(len - 1) * 99 / 100],
+            p999_ns: self.samples[(len - 1) * 999 / 1000],
         }
     }
 
@@ -970,3 +970,85 @@ impl SimulationRunner {
         Ok(stats.result(duration, unique_objects_count, cache_capacity))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::OpLatencyTracker;
+
+    #[test]
+    fn test_percentile_calculation_with_exact_100_samples() {
+        let mut tracker = OpLatencyTracker::new();
+        
+        // Add exactly 100 samples (0..100)
+        for i in 0..100 {
+            tracker.record(i);
+        }
+        
+        let percentiles = tracker.percentiles();
+        
+        // With 100 samples (0-99), using (len-1) formula:
+        // p50: (100-1) * 50 / 100 = 99 * 50 / 100 = 49 (should be index 49, value 49)
+        // p90: (100-1) * 90 / 100 = 99 * 90 / 100 = 89 (should be index 89, value 89)
+        // p99: (100-1) * 99 / 100 = 99 * 99 / 100 = 98 (should be index 98, value 98)
+        assert_eq!(percentiles.p50_ns, 49);
+        assert_eq!(percentiles.p90_ns, 89);
+        assert_eq!(percentiles.p99_ns, 98);
+    }
+
+    #[test]
+    fn test_percentile_calculation_with_single_sample() {
+        let mut tracker = OpLatencyTracker::new();
+        tracker.record(100);
+        
+        let percentiles = tracker.percentiles();
+        
+        // With 1 sample, all percentiles should be the same value
+        // (1-1) * 50 / 100 = 0, so index 0
+        assert_eq!(percentiles.p50_ns, 100);
+        assert_eq!(percentiles.p90_ns, 100);
+        assert_eq!(percentiles.p99_ns, 100);
+        assert_eq!(percentiles.p999_ns, 100);
+    }
+
+    #[test]
+    fn test_percentile_calculation_with_two_samples() {
+        let mut tracker = OpLatencyTracker::new();
+        tracker.record(10);
+        tracker.record(20);
+        
+        let percentiles = tracker.percentiles();
+        
+        // With 2 samples [10, 20]:
+        // (2-1) * 50 / 100 = 0 -> index 0 -> value 10
+        // (2-1) * 90 / 100 = 0 -> index 0 -> value 10
+        assert_eq!(percentiles.p50_ns, 10);
+        assert_eq!(percentiles.p90_ns, 10);
+    }
+
+    #[test]
+    fn test_empty_samples_returns_default() {
+        let mut tracker = OpLatencyTracker::new();
+        let percentiles = tracker.percentiles();
+        
+        // Empty samples should return default (all zeros)
+        assert_eq!(percentiles.p50_ns, 0);
+        assert_eq!(percentiles.p90_ns, 0);
+        assert_eq!(percentiles.p99_ns, 0);
+        assert_eq!(percentiles.p999_ns, 0);
+    }
+
+    #[test]
+    fn test_reservoir_sampling_does_not_panic() {
+        let mut tracker = OpLatencyTracker::new();
+        
+        // Fill up to max_samples (5000) and beyond
+        for i in 0..10000 {
+            tracker.record(i);
+        }
+        
+        // Should not panic and should have max_samples samples
+        assert_eq!(tracker.samples.len(), tracker.max_samples);
+        assert_eq!(tracker.count, 10000);
+    }
+}
+
