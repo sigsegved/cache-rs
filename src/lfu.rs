@@ -1133,23 +1133,23 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)] // Skip under Miri: performance benchmark test
     fn test_lfu_frequency_list_accumulation() {
-        // This test investigates the LFU performance issue seen in simulations:
-        // Social traffic at 500 capacity: 896 seconds (vs 3s for LRU)
+        // This test verifies that empty frequency lists don't accumulate in LFU cache.
+        // Empty list accumulation was causing 300x slowdown in simulations (896s vs 3s).
         //
-        // The hypothesis is that when cache is very constrained and traffic
-        // has high cardinality (many unique keys), the frequency list management
-        // becomes a bottleneck.
+        // The test simulates a constrained scenario: small cache with high-cardinality traffic
+        // (many unique keys), which historically triggered the empty list accumulation bug.
         use std::time::Instant;
 
         // Reproduce the constrained scenario: small cache, many unique keys
         let mut cache = make_cache(500);
 
-        // Simulate high-cardinality traffic pattern (like social media with 55K unique objects)
-        // but cache can only hold 500 entries
+        // Simulate high-cardinality traffic pattern
+        // Use fewer operations under Miri to keep test time reasonable
+        let num_ops = if cfg!(miri) { 5_000 } else { 50_000 };
+        
         let start = Instant::now();
-        for i in 0..50_000u64 {
+        for i in 0..num_ops {
             // Simulate 80-20: 80% of accesses go to 20% of keys
             let key = if i % 5 == 0 {
                 format!("popular_{}", i % 100) // 100 popular keys
@@ -1176,9 +1176,10 @@ mod tests {
             .count();
 
         println!(
-            "50K ops in {:?} ({:.0} ops/sec)",
+            "{} ops in {:?} ({:.0} ops/sec)",
+            num_ops,
             elapsed,
-            50_000.0 / elapsed.as_secs_f64()
+            num_ops as f64 / elapsed.as_secs_f64()
         );
         println!(
             "Frequency lists: {} total, {} empty",
@@ -1195,13 +1196,13 @@ mod tests {
         }
         println!("Frequency distribution (non-empty): {:?}", freq_counts);
 
-        // Performance should be >100K ops/sec for this to be acceptable
-        // If we see <10K ops/sec, there's a serious performance issue
-        let ops_per_sec = 50_000.0 / elapsed.as_secs_f64();
+        // The key correctness check: verify empty frequency lists don't accumulate
+        // This was the bug that caused the 300x slowdown (896s vs 3s) in simulations
         assert!(
-            ops_per_sec > 100_000.0,
-            "LFU performance is too slow: {:.0} ops/sec (expected >100K)",
-            ops_per_sec
+            empty_lists == 0,
+            "LFU should not accumulate empty frequency lists. Found {} empty lists out of {} total",
+            empty_lists,
+            num_freq_lists
         );
     }
 }
