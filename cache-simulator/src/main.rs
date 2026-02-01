@@ -61,6 +61,12 @@ enum Commands {
         #[arg(long)]
         segments: Option<usize>,
 
+        /// Number of worker threads for concurrent benchmarks (default: 1)
+        /// Note: Currently only affects concurrent caches. Higher thread counts
+        /// stress-test the cache's concurrency handling.
+        #[arg(long, default_value = "1")]
+        threads: usize,
+
         /// Export results to CSV file
         #[arg(long, value_name = "PATH")]
         output_csv: Option<PathBuf>,
@@ -174,10 +180,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             algorithms,
             mode,
             segments,
+            threads,
             output_csv,
             use_size,
         }) => run_simulator(
-            input_dir, capacity, max_size, algorithms, mode, segments, output_csv, use_size,
+            input_dir, capacity, max_size, algorithms, mode, segments, threads, output_csv, use_size,
         ),
 
         None => {
@@ -189,6 +196,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 args.algorithms,
                 "both".to_string(),
                 None,
+                1, // default threads
                 None,
                 false,
             )
@@ -218,6 +226,7 @@ fn run_simulator(
     algorithms: Option<Vec<String>>,
     mode: String,
     segments: Option<usize>,
+    threads: usize,
     output_csv: Option<PathBuf>,
     use_size: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -286,6 +295,11 @@ fn run_simulator(
     if let Some(seg) = segments {
         println!("Concurrent segments: {seg}");
     }
+    if threads > 1 {
+        println!("Worker threads: {threads}");
+        println!("  Note: Multi-threaded execution is a planned feature.");
+        println!("  Currently runs single-threaded but uses thread-safe caches.");
+    }
     println!();
 
     // Create simulation configuration
@@ -296,6 +310,7 @@ fn run_simulator(
         algorithms,
         modes,
         segment_count: segments,
+        thread_count: threads,
         use_size,
     };
 

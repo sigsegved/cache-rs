@@ -133,6 +133,10 @@ pub struct SimulationConfig {
     pub modes: Vec<CacheMode>,
     /// Number of segments for concurrent caches (None = auto)
     pub segment_count: Option<usize>,
+    /// Number of worker threads for concurrent benchmarks
+    /// Note: Multi-threaded execution is a planned feature.
+    #[allow(dead_code)]
+    pub thread_count: usize,
     /// Use size-based eviction (uses max_size instead of capacity)
     pub use_size: bool,
 }
