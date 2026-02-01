@@ -1147,7 +1147,6 @@ mod tests {
         // Simulate high-cardinality traffic pattern
         // Use fewer operations under Miri to keep test time reasonable
         let num_ops = if cfg!(miri) { 5_000 } else { 50_000 };
-        
         let start = Instant::now();
         for i in 0..num_ops {
             // Simulate 80-20: 80% of accesses go to 20% of keys
@@ -1156,7 +1155,7 @@ mod tests {
             } else {
                 format!("long_tail_{}", i) // Many unique keys
             };
-            cache.put(key.clone(), i as i32);
+            cache.put(key.clone(), i);
 
             // Also do some gets to build frequency
             if i % 10 == 0 {
