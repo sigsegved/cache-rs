@@ -978,14 +978,14 @@ mod tests {
     #[test]
     fn test_percentile_calculation_with_exact_100_samples() {
         let mut tracker = OpLatencyTracker::new();
-        
+
         // Add exactly 100 samples (0..100)
         for i in 0..100 {
             tracker.record(i);
         }
-        
+
         let percentiles = tracker.percentiles();
-        
+
         // With 100 samples (0-99), using (len-1) formula:
         // p50: (100-1) * 50 / 100 = 99 * 50 / 100 = 49 (should be index 49, value 49)
         // p90: (100-1) * 90 / 100 = 99 * 90 / 100 = 89 (should be index 89, value 89)
@@ -999,9 +999,9 @@ mod tests {
     fn test_percentile_calculation_with_single_sample() {
         let mut tracker = OpLatencyTracker::new();
         tracker.record(100);
-        
+
         let percentiles = tracker.percentiles();
-        
+
         // With 1 sample, all percentiles should be the same value
         // (1-1) * 50 / 100 = 0, so index 0
         assert_eq!(percentiles.p50_ns, 100);
@@ -1015,9 +1015,9 @@ mod tests {
         let mut tracker = OpLatencyTracker::new();
         tracker.record(10);
         tracker.record(20);
-        
+
         let percentiles = tracker.percentiles();
-        
+
         // With 2 samples [10, 20]:
         // (2-1) * 50 / 100 = 0 -> index 0 -> value 10
         // (2-1) * 90 / 100 = 0 -> index 0 -> value 10
@@ -1029,7 +1029,7 @@ mod tests {
     fn test_empty_samples_returns_default() {
         let mut tracker = OpLatencyTracker::new();
         let percentiles = tracker.percentiles();
-        
+
         // Empty samples should return default (all zeros)
         assert_eq!(percentiles.p50_ns, 0);
         assert_eq!(percentiles.p90_ns, 0);
@@ -1040,15 +1040,14 @@ mod tests {
     #[test]
     fn test_reservoir_sampling_does_not_panic() {
         let mut tracker = OpLatencyTracker::new();
-        
+
         // Fill up to max_samples (5000) and beyond
         for i in 0..10000 {
             tracker.record(i);
         }
-        
+
         // Should not panic and should have max_samples samples
         assert_eq!(tracker.samples.len(), tracker.max_samples);
         assert_eq!(tracker.count, 10000);
     }
 }
-
