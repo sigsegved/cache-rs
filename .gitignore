@@ -6,3 +6,18 @@ lcov.info
 
 # Miri files
 .miri_cache/
+
+# Simulation traffic data (generated for testing)
+traffic_*/
+simulation_data/social_traffic/
+simulation_data/video_traffic/
+simulation_data/web_traffic/
+simulation_results/
+1h_1k_10mb.csv/
+
+# Simulation result files (analysis outputs)
+simulation_data/results/
+simulation_data/results_v2/
+
+# Test data that shouldn't be committed
+cache-simulator/test_data/
