@@ -1893,7 +1893,7 @@ fn test_slru_max_size_should_evict_multiple_items() {
 
     // Fill with small items
     for i in 0..10 {
-        cache.put_with_size(format!("key{}", i), i as i32, 10); // 10 items × 10 bytes = 100
+        cache.put_with_size(format!("key{}", i), i, 10); // 10 items × 10 bytes = 100
     }
 
     assert_eq!(cache.len(), 10);
