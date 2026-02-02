@@ -7,25 +7,31 @@
 
 A high-performance cache library for Rust with multiple eviction algorithms, `no_std` support, and thread-safe concurrent variants.
 
-## Overview
+> **⚠️ Pre-1.0 Notice:** cache-rs is under active development and the API may change between minor versions. We're rapidly iterating toward a stable 1.0.0 release. Pin your dependency version if you need stability, and check the [CHANGELOG](CHANGELOG.md) when upgrading.
 
-cache-rs provides the cache metadata layer for both in-memory and disk-persisted content systems. Rather than storing actual content in memory, production systems typically use cache-rs to track *what* is cached and *where*—enabling intelligent eviction decisions while the content itself lives on disk, in object storage, or elsewhere.
+## The Problem with "One Size Fits All" Caching
 
-This separation of concerns is critical for real-world caching infrastructure:
+There is no universally optimal cache eviction algorithm. LRU works beautifully for session stores where recent activity predicts future access, but deploy it on a CDN and a single sequential scan can flush your entire hot working set. LFU excels when popularity is stable, keeping your most-requested assets warm, until yesterday's viral content blocks today's trending items from ever getting cached. GDSF maximizes hit rates for variable-sized objects by favoring small popular files, but adds complexity you don't need when all your cached items are the same size.
 
-- **CDN edge servers** store content on disk but need in-memory metadata to decide which files to keep
-- **Database buffer pools** track page locations and access patterns without duplicating page data
-- **Object storage gateways** maintain cache indexes mapping keys to storage locations
+Real-world caching infrastructure demands the right algorithm for the job. A database buffer pool needs scan resistance (SLRU). A news feed cache needs frequency tracking with aging (LFUDA). A CDN metadata index needs size-aware eviction (GDSF). Benchmarks across 47 million requests show that algorithm selection can mean the difference between a 30% hit rate and a 90% hit rate. Size-aware algorithms provide **50-90 percentage point improvements** when storage constraints dominate.
 
-cache-rs gives you the eviction intelligence without dictating your storage architecture.
+cache-rs gives you the full toolkit: five battle-tested eviction algorithms with a unified API, so you can choose the right strategy for your workload without rewriting your caching layer.
 
-### Key Capabilities
+## Why cache-rs?
 
-**Multiple Eviction Algorithms** — Five algorithms (LRU, SLRU, LFU, LFUDA, GDSF) cover different access patterns from simple recency-based eviction to sophisticated size-aware frequency tracking.
+cache-rs is a high-performance in-memory cache library that gives you control over how your cache behaves. Instead of a one-size-fits-all eviction policy, you choose from five algorithms (LRU, SLRU, LFU, LFUDA, and GDSF) behind a unified API. Start with LRU for simplicity and speed, swap in SLRU if sequential scans are polluting your cache, or GDSF if your objects vary in size. The API remains the same; only the eviction behavior changes.
 
-**Concurrent Cache Support** — Thread-safe variants of all algorithms use lock striping to minimize contention. Enable with the `concurrent` feature flag.
+The library fits into multiple architectural patterns. Use it as a straightforward in-memory cache for database query results, API responses, or computed values. Use it as a metadata index for disk-backed CDN caches, where you store file locations and headers in cache-rs while the actual content lives on disk. Use it as a cache lookup layer for shared memory systems, where cache-rs tracks keys and offsets while another process or subsystem manages the raw data. The eviction logic stays the same regardless of where your data actually lives, be it in-memory local to cache-rs, or on disk or on shared-memory.
 
-**`no_std` Compatible** — Works in embedded and resource-constrained environments. The default build uses `hashbrown` and requires only `alloc`.
+The core design prioritizes predictable, low-latency operations. LRU and SLRU run in O(1) time. The frequency-based algorithms (LFU, LFUDA, GDSF) run in O(log P) where P is the number of distinct priority buckets, though in practice this is often small. The cache stores pointers in a HashMap while values live in cache-friendly linked structures, minimizing memory overhead and cache misses.
+
+For multi-threaded applications, every algorithm has a concurrent counterpart. These use segmented locking rather than a single global lock: keys hash to independent segments, so threads accessing different parts of the cache proceed in parallel. Enable concurrent caches with the `concurrent` feature flag and wrap in `Arc` for shared ownership across threads.
+
+You can set dual capacity limits: one for entry count (to bound memory overhead from metadata) and one for total content size (to bound actual data storage). Eviction triggers when either limit is exceeded, giving you precise control over memory consumption.
+
+The library works in `no_std` environments out of the box. The default build uses `hashbrown` and requires only `alloc`, making it suitable for embedded systems and kernel development. If you need standard library features or concurrent caches, opt in with the `std` or `concurrent` feature flags.
+
+cache-rs is production-hardened: extensive test coverage, Miri-verified for memory safety, and benchmarked across realistic workloads. It serves as the foundation for cache simulation research, so the algorithms have been validated against real-world access patterns. For a deep dive into how each algorithm performs under different workloads, see our [Analysis Report](ANALYSIS_REPORT.md), which covers 47 million cache operations across video streaming, social media, web content, and on-disk caching scenarios.
 
 ## Quick Start
 
@@ -34,7 +40,7 @@ cache-rs gives you the eviction intelligence without dictating your storage arch
 cache-rs = "0.3.0"
 ```
 
-All caches follow a unified initialization pattern: create a config struct for your chosen algorithm, then call `init(config, hasher)`. The second parameter accepts an optional custom hasher—pass `None` to use the default.
+All caches follow a unified initialization pattern: create a config struct for your chosen algorithm, then call `init(config, hasher)`. The second parameter accepts an optional custom hasher; pass `None` to use the default.
 
 ```rust
 use cache_rs::LruCache;
@@ -99,9 +105,32 @@ assert_eq!(cache.get(&"user:1001"), None);
 
 ---
 
-## Eviction Algorithms
+### Quick Reference
 
-Each algorithm optimizes for different access patterns. See [ALGORITHM_GUIDE.md](ALGORITHM_GUIDE.md) for detailed use cases and examples.
+| Scenario | Algorithm | Why |
+|----------|-----------|-----|
+| General purpose, simple workload | **LRU** | Fastest, lowest overhead, predictable behavior |
+| Database buffer pool, file cache | **SLRU** | Scan resistance protects hot working set |
+| CDN with stable popular content | **LFU** | Frequency tracking keeps popular items cached |
+| Long-running service, trends change | **LFUDA** | Aging prevents stale popular items from persisting |
+| Variable-sized objects (images, files) | **GDSF** | Size-aware eviction maximizes hit rate |
+
+### Test with Your Own Traffic
+
+Not sure which algorithm fits your workload? The repository includes a **cache-simulator** tool that replays your traffic logs against all five algorithms and reports hit rates, byte hit rates, and latency statistics. Feed it your production access patterns and let the data guide your decision.
+
+```bash
+cd cache-simulator
+cargo run --release -- --input your-traffic.log --cache-size 1000
+```
+
+See [cache-simulator/README.md](cache-simulator/README.md) for input format and options.
+
+See [ALGORITHM_GUIDE.md](ALGORITHM_GUIDE.md) for detailed use cases and code examples.
+
+---
+
+## Eviction Algorithms
 
 ### LRU (Least Recently Used)
 
@@ -129,7 +158,7 @@ let mut cache = LruCache::init(config, None);
 
 Divides the cache into two segments: **probationary** and **protected**. New entries start in probationary. A second access promotes them to protected. Eviction happens from probationary first.
 
-**Eviction policy**: Entries must prove their worth by being accessed twice before gaining protection. This provides scan resistance—a sequential read of many items won't evict your hot working set.
+**Eviction policy**: Entries must prove their worth by being accessed twice before gaining protection. This provides scan resistance: a sequential read of many items won't evict your hot working set.
 
 **When to use**: Database buffer pools, file system caches, any workload mixing random access with sequential scans.
 
@@ -178,7 +207,7 @@ Extends LFU with a global age counter that increases on each eviction. New entri
 
 **Eviction policy**: Priority = frequency + age_at_insertion. The global age increases each eviction. This prevents old popular items from permanently occupying cache space.
 
-**When to use**: Long-running services where popularity changes—news feeds, social media, e-commerce with seasonal trends.
+**When to use**: Long-running services where popularity changes (news feeds, social media, e-commerce with seasonal trends).
 
 **Time complexity**: O(log P) where P = distinct priority values. Priority = frequency + age, so P can grow with cache size.
 
@@ -235,7 +264,16 @@ For multi-threaded workloads, enable the `concurrent` feature:
 cache-rs = { version = "0.3.0", features = ["concurrent"] }
 ```
 
-Concurrent caches use **lock striping**—data is partitioned across multiple segments, each with its own lock. Threads accessing different segments proceed in parallel; only threads hitting the same segment contend.
+### Why Mutex, Not RwLock?
+
+You might expect a cache to use `RwLock` so multiple readers can proceed in parallel. However, cache algorithms like LRU, LFU, and SLRU require **mutable access even for reads**:
+
+- **LRU**: `get()` moves the accessed item to the front of the recency list
+- **LFU**: `get()` increments the frequency counter and may move items between buckets
+- **SLRU**: `get()` may promote items from probationary to protected segment
+- **LFUDA/GDSF**: `get()` updates priority calculations
+
+Since every `get()` mutates internal state, `RwLock` would provide no benefit; all operations need exclusive access anyway. cache-rs uses `parking_lot::Mutex` for lower overhead and achieves concurrency through **segmentation**: different keys hash to different segments and can be accessed in parallel.
 
 ### Available Types
 
@@ -308,9 +346,11 @@ let sum: Option<u8> = cache.get_with(&"data".to_string(), |bytes| {
 
 ---
 
-## Managing Disk-Persisted Content
+## Advanced: Disk-Backed and Tiered Caches
 
-cache-rs excels as the metadata layer for disk-backed caching systems. The pattern: store content on disk, use cache-rs to track what's cached and make eviction decisions.
+While cache-rs works great as a standalone in-memory cache, it also excels as the metadata layer for disk-backed caching systems. In this pattern, you store actual content on disk (or in object storage, or any external system), while cache-rs tracks *what* is cached and makes eviction decisions. When cache-rs evicts an entry, you use that signal to delete the corresponding file from disk.
+
+This separation is common in production infrastructure: CDN edge servers keep files on disk but need in-memory metadata to decide which files to keep. Database buffer pools track page locations without duplicating page data. Object storage gateways maintain indexes mapping keys to storage backends. The example below shows this two-tier pattern in action.
 
 ### Two-Tier Cache Pattern
 
@@ -424,7 +464,7 @@ LfudaCacheConfig {
 GdsfCacheConfig {
     capacity: NonZeroUsize,
     initial_age: f64,  // Starting value for global age
-    max_size: u64,     // Important for GDSF—limits total cached size
+    max_size: u64,     // Important for GDSF: limits total cached size
 }
 ```
 
@@ -485,24 +525,43 @@ cache.put(String::from("key"), "value");
 
 ---
 
-## Documentation
+## Roadmap & Contributing
 
-- [API Documentation](https://docs.rs/cache-rs)
-- [Algorithm Guide](ALGORITHM_GUIDE.md)
-- [Examples](examples/)
-- [Benchmarks](benches/)
-- [Miri Analysis](MIRI_ANALYSIS.md)
+cache-rs provides a solid foundation for cache eviction, but several features commonly needed in production systems are not yet implemented. **Contributions are welcome!**
 
-## Contributing
+### Planned Features
+
+| Feature | Description | Status |
+|---------|-------------|--------|
+| **TTL Support** | Time-based expiration for cache entries | Not started |
+| **Eviction Callbacks** | Hooks to notify when entries are evicted (for cleanup, persistence, metrics) | Not started |
+| **Admission Policies** | Decide whether to cache an item at all (e.g., TinyLFU admission) | Not started |
+| **Enhanced Metrics** | Hit/miss counters, eviction counts, latency histograms | Basic |
+| **Async Support** | `async`-compatible concurrent caches | Not started |
+| **Weighted Entries** | Custom cost functions beyond simple size | Not started |
+
+### How to Contribute
 
 ```bash
+# Run the full validation suite before submitting
 cargo test --features "std,concurrent"
 cargo fmt --all -- --check
 cargo clippy --features "std,concurrent" -- -D warnings
 cargo doc --no-deps --document-private-items
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
+
+---
+
+## Documentation
+
+- [API Documentation](https://docs.rs/cache-rs)
+- [Algorithm Guide](ALGORITHM_GUIDE.md): Detailed examples and use cases for each algorithm
+- [Analysis Report](ANALYSIS_REPORT.md): Empirical evaluation across 47M requests
+- [Examples](examples/)
+- [Benchmarks](benches/)
+- [Miri Analysis](MIRI_ANALYSIS.md): Memory safety verification
 
 ## License
 

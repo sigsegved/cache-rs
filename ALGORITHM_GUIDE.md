@@ -1,6 +1,44 @@
 # Cache Algorithm Guide
 
-This guide provides detailed information about each eviction algorithm in cache-rs, including use cases, code examples, and guidance on when to use each one.
+This guide provides detailed information about each eviction algorithm in cache-rs, including when to use them, how they work internally, and complete code examples for real-world scenarios.
+
+## Why Algorithm Selection Matters
+
+The difference between the right and wrong cache algorithm isn't marginal. It can mean the difference between a 30% hit rate and a 90% hit rate. Our benchmarks across 47 million cache requests reveal:
+
+- **GDSF achieves 50-90 percentage points higher hit rates** than LRU when storage-constrained with variable-sized objects
+- **SLRU provides 5-10 percentage points improvement** over LRU for workloads mixing random access with sequential scans
+- **At 20% cache capacity, frequency-based algorithms (LFU, LFUDA) approach 75% hit rates**, validating the 80-20 rule
+- **Algorithm differences diminish above 40% capacity**: when cache is large enough, even simple LRU performs well
+
+The key insight: algorithm selection matters most when cache capacity is constrained. If you can cache your entire working set, any algorithm works. When you can only cache 10-20% of your data, the right algorithm is critical.
+
+## Decision Flowchart
+
+```mermaid
+flowchart TD
+    Start([What describes your workload?]) --> Recency{Recently accessed<br/>items are hot?}
+    
+    Recency -->|Yes| Scan{Worried about<br/>sequential scans?}
+    Scan -->|Yes| SLRU[**SLRU**<br/>Scan-resistant LRU]
+    Scan -->|No| LRU[**LRU**<br/>Simple & fast]
+    
+    Recency -->|No| Frequency{Frequently accessed<br/>items are hot?}
+    Frequency -->|Yes| Popularity{Does popularity<br/>change over time?}
+    Popularity -->|Yes| LFUDA[**LFUDA**<br/>LFU with aging]
+    Popularity -->|No| LFU[**LFU**<br/>Frequency-based]
+    
+    Frequency -->|No| Size{Variable-sized<br/>objects?}
+    Size -->|Yes| GDSF[**GDSF**<br/>Size-aware eviction]
+    Size -->|No| LRU2[**LRU**<br/>Default choice]
+
+    style LRU fill:#e1f5fe
+    style LRU2 fill:#e1f5fe
+    style SLRU fill:#f3e5f5
+    style LFU fill:#e8f5e9
+    style LFUDA fill:#fff3e0
+    style GDSF fill:#fce4ec
+```
 
 ## Table of Contents
 
@@ -18,7 +56,7 @@ This guide provides detailed information about each eviction algorithm in cache-
 
 ### When to Use
 
-LRU is ideal when your workload exhibits **temporal locality**—recently accessed items are likely to be accessed again soon.
+LRU is ideal when your workload exhibits **temporal locality**: recently accessed items are likely to be accessed again soon.
 
 **Best for:**
 - Web session storage
@@ -296,7 +334,7 @@ fn serve_request(
 
 ### Decision Guide
 
-1. **Start with LRU** if you're unsure—it works well for most workloads
+1. **Start with LRU** if you're unsure. It works well for most workloads
 2. **Switch to SLRU** if sequential scans are hurting your hit rate
 3. **Switch to LFU** if some items are consistently more popular
 4. **Switch to LFUDA** if popularity changes over time
@@ -308,7 +346,7 @@ fn serve_request(
 
 ### Web Application Session Cache
 
-Use **LRU**. Sessions have strong temporal locality—active users access their sessions repeatedly, and inactive sessions should be evicted.
+Use **LRU**. Sessions have strong temporal locality: active users access their sessions repeatedly, and inactive sessions should be evicted.
 
 ```rust
 use cache_rs::LruCache;
@@ -488,7 +526,7 @@ fn check_rate_limit(
 
 ### News Feed / Social Media
 
-Use **LFUDA**. Content popularity changes rapidly—yesterday's viral post shouldn't block today's trending content from being cached.
+Use **LFUDA**. Content popularity changes rapidly. Yesterday's viral post shouldn't block today's trending content from being cached.
 
 ```rust
 use cache_rs::LfudaCache;
@@ -562,6 +600,7 @@ fn serve_asset(
 
 ## Further Reading
 
-- [README.md](README.md) - Main documentation and quick start
-- [API Documentation](https://docs.rs/cache-rs) - Complete API reference
-- [Benchmarks](benches/) - Performance measurements
+- [README.md](README.md): Quick start and overview
+- [ANALYSIS_REPORT.md](ANALYSIS_REPORT.md): Empirical evaluation across 47 million requests with detailed performance data
+- [API Documentation](https://docs.rs/cache-rs): Complete API reference
+- [Benchmarks](benches/): Performance measurements
