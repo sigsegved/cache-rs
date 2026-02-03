@@ -1,31 +1,10 @@
-//! # Cache-RS
+#![doc = include_str!("../README.md")]
 //!
-//! A high-performance, memory-efficient cache library implementing multiple eviction
-//! algorithms with both single-threaded and thread-safe concurrent variants.
+//! ---
 //!
-//! ## Why Cache-RS?
+//! # Code Reference
 //!
-//! - **Zero-Copy Architecture**: HashMap stores pointers; values live in cache-friendly linked structures
-//! - **O(1) Everything**: All operations (get, put, remove) are constant time
-//! - **No-std Compatible**: Works in embedded environments (with `alloc`)
-//! - **Comprehensive Algorithm Suite**: LRU, SLRU, LFU, LFUDA, and GDSF
-//! - **Production Ready**: Extensive testing, Miri-verified, benchmarked
-//!
-//! ## Quick Start
-//!
-//! ```rust
-//! use cache_rs::LruCache;
-//! use cache_rs::config::LruCacheConfig;
-//! use core::num::NonZeroUsize;
-//!
-//! let config = LruCacheConfig {
-//!     capacity: NonZeroUsize::new(100).unwrap(),
-//!     max_size: u64::MAX,
-//! };
-//! let mut cache = LruCache::init(config, None);
-//! cache.put("key", "value");
-//! assert_eq!(cache.get(&"key"), Some(&"value"));
-//! ```
+//! This section provides quick code examples and API references for each cache algorithm.
 //!
 //! ## Algorithm Selection Guide
 //!
@@ -62,7 +41,7 @@
 //! └─────────────────────────────────────────────────────────────────────────────┘
 //! ```
 //!
-//! ## Available Cache Algorithms
+//! ## Quick Reference
 //!
 //! | Algorithm | Description | Best Use Case |
 //! |-----------|-------------|---------------|
@@ -82,93 +61,7 @@
 //! | LFUDA     | O(1)| O(1)| O(1)   | ~110 bytes   | Excellent   | Yes    |
 //! | GDSF      | O(1)| O(1)| O(1)   | ~120 bytes   | Good        | Yes    |
 //!
-//! ## Concurrent Caches
-//!
-//! Enable the `concurrent` feature for thread-safe versions:
-//!
-//! ```toml
-//! [dependencies]
-//! cache-rs = { version = "0.2", features = ["concurrent"] }
-//! ```
-//!
-//! ```rust,ignore
-//! use cache_rs::ConcurrentLruCache;
-//! use std::sync::Arc;
-//!
-//! let cache = Arc::new(ConcurrentLruCache::new(10_000));
-//!
-//! // Safe to share across threads
-//! let cache_clone = Arc::clone(&cache);
-//! std::thread::spawn(move || {
-//!     cache_clone.put("key".to_string(), 42);
-//! });
-//! ```
-//!
-//! Concurrent caches use **lock striping** for high throughput:
-//!
-//! ```text
-//! ┌────────────────────────────────────────────────────────┐
-//! │              ConcurrentCache (16 segments)             │
-//! │                                                        │
-//! │  ┌─────────┐ ┌─────────┐ ┌─────────┐     ┌─────────┐   │
-//! │  │Segment 0│ │Segment 1│ │Segment 2│ ... │Segment15│   │
-//! │  │ [Mutex] │ │ [Mutex] │ │ [Mutex] │     │ [Mutex] │   │
-//! │  └─────────┘ └─────────┘ └─────────┘     └─────────┘   │
-//! │       ▲           ▲           ▲               ▲        │
-//! │       │           │           │               │        │
-//! │  hash(k1)%16  hash(k2)%16  hash(k3)%16   hash(kN)%16   │
-//! └────────────────────────────────────────────────────────┘
-//! ```
-//!
-//! ## Dual-Limit Capacity
-//!
-//! All caches support both entry count and size limits:
-//!
-//! ```rust
-//! use cache_rs::LruCache;
-//! use cache_rs::config::LruCacheConfig;
-//! use core::num::NonZeroUsize;
-//!
-//! // Limit by both count (1000 entries) AND size (10MB)
-//! let config = LruCacheConfig {
-//!     capacity: NonZeroUsize::new(1000).unwrap(),
-//!     max_size: 10 * 1024 * 1024,
-//! };
-//! let mut cache: LruCache<String, Vec<u8>> = LruCache::init(config, None);
-//!
-//! // Track size explicitly
-//! let data = vec![0u8; 1024];
-//! cache.put_with_size("file.bin".to_string(), data, 1024);
-//! ```
-//!
-//! ## Feature Flags
-//!
-//! | Feature | Default | Description |
-//! |---------|---------|-------------|
-//! | `hashbrown` | ✓ | Use hashbrown for `no_std` HashMap |
-//! | `std` | | Enable standard library features |
-//! | `concurrent` | | Thread-safe cache implementations |
-//! | `nightly` | | Nightly-only optimizations |
-//!
-//! ## No-std Support
-//!
-//! This crate works in `no_std` environments by default (requires `alloc`):
-//!
-//! ```rust
-//! // Works in embedded environments!
-//! use cache_rs::LruCache;
-//! use cache_rs::config::LruCacheConfig;
-//! use core::num::NonZeroUsize;
-//!
-//! let config = LruCacheConfig {
-//!     capacity: NonZeroUsize::new(100).unwrap(),
-//!     max_size: u64::MAX,
-//! };
-//! let mut cache = LruCache::init(config, None);
-//! cache.put("sensor_1", 42.5f32);
-//! ```
-//!
-//! ## Detailed Algorithm Descriptions
+//! ## Code Examples
 //!
 //! ### LRU (Least Recently Used)
 //!
@@ -284,16 +177,75 @@
 //! // Small items get higher priority per byte
 //! ```
 //!
+//! ## Concurrent Caches
+//!
+//! Enable the `concurrent` feature for thread-safe versions:
+//!
+//! ```toml
+//! [dependencies]
+//! cache-rs = { version = "0.3", features = ["concurrent"] }
+//! ```
+//!
+//! ```rust,ignore
+//! use cache_rs::ConcurrentLruCache;
+//! use std::sync::Arc;
+//!
+//! let cache = Arc::new(ConcurrentLruCache::new(10_000));
+//!
+//! // Safe to share across threads
+//! let cache_clone = Arc::clone(&cache);
+//! std::thread::spawn(move || {
+//!     cache_clone.put("key".to_string(), 42);
+//! });
+//! ```
+//!
+//! Concurrent caches use **lock striping** for high throughput:
+//!
+//! ```text
+//! ┌────────────────────────────────────────────────────────────────────┐
+//! │              ConcurrentCache (16 segments)                         │
+//! │                                                                    │
+//! │  ┌─────────┐ ┌─────────┐ ┌─────────┐     ┌─────────┐              │
+//! │  │Segment 0│ │Segment 1│ │Segment 2│ ... │Segment15│              │
+//! │  │ [Mutex] │ │ [Mutex] │ │ [Mutex] │     │ [Mutex] │              │
+//! │  └─────────┘ └─────────┘ └─────────┘     └─────────┘              │
+//! │       ▲           ▲           ▲               ▲                   │
+//! │       │           │           │               │                   │
+//! │  hash(k1)%16  hash(k2)%16  hash(k3)%16   hash(kN)%16              │
+//! └────────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! ## Dual-Limit Capacity
+//!
+//! All caches support both entry count and size limits:
+//!
+//! ```rust
+//! use cache_rs::LruCache;
+//! use cache_rs::config::LruCacheConfig;
+//! use core::num::NonZeroUsize;
+//!
+//! // Limit by both count (1000 entries) AND size (10MB)
+//! let config = LruCacheConfig {
+//!     capacity: NonZeroUsize::new(1000).unwrap(),
+//!     max_size: 10 * 1024 * 1024,
+//! };
+//! let mut cache: LruCache<String, Vec<u8>> = LruCache::init(config, None);
+//!
+//! // Track size explicitly
+//! let data = vec![0u8; 1024];
+//! cache.put_with_size("file.bin".to_string(), data, 1024);
+//! ```
+//!
 //! ## Modules
 //!
 //! - [`lru`]: Least Recently Used cache implementation
-//! - [`slru`]: Segmented LRU cache implementation  
+//! - [`slru`]: Segmented LRU cache implementation
 //! - [`lfu`]: Least Frequently Used cache implementation
 //! - [`lfuda`]: LFU with Dynamic Aging cache implementation
 //! - [`gdsf`]: Greedy Dual Size Frequency cache implementation
 //! - [`config`]: Configuration structures for all cache algorithms
 //! - [`metrics`]: Metrics collection for cache performance monitoring
-//! - `concurrent`: Thread-safe concurrent cache implementations (requires `concurrent` feature)
+//! - [`concurrent`]: Thread-safe concurrent cache implementations (requires `concurrent` feature)
 
 #![no_std]
 

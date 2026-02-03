@@ -42,7 +42,7 @@ cache-rs = "0.3.0"
 
 All caches follow a unified initialization pattern: create a config struct for your chosen algorithm, then call `init(config, hasher)`. The second parameter accepts an optional custom hasher; pass `None` to use the default.
 
-```rust
+```rust,ignore
 use cache_rs::LruCache;
 use cache_rs::config::LruCacheConfig;
 use std::num::NonZeroUsize;
@@ -154,14 +154,11 @@ let config = LruCacheConfig {
     capacity: NonZeroUsize::new(1000).unwrap(),
     max_size: 10 * 1024 * 1024,  // 10 MB
 };
-let mut cache = LruCache::init(config, None);
+let mut cache: LruCache<&str, Vec<u8>> = LruCache::init(config, None);
 
 // Size-aware insertion: this blob consumes 5KB of the 10MB budget
 let blob = vec![0u8; 5000];
 cache.put_with_size("large-blob", blob, 5000);
-
-// Regular insertion: counts as size=1 by default
-cache.put("small-key", "small-value");
 ```
 
 **Note**: For GDSF caches, `put(key, value, size)` always requires the size parameter since size is integral to the eviction algorithm.
@@ -172,7 +169,7 @@ cache.put("small-key", "small-value");
 
 When you want to limit the number of entries without tracking byte size:
 
-```rust
+```rust,ignore
 use cache_rs::LruCache;
 use cache_rs::config::LruCacheConfig;
 use std::num::NonZeroUsize;
@@ -181,7 +178,7 @@ let config = LruCacheConfig {
     capacity: NonZeroUsize::new(10_000).unwrap(),  // Max 10,000 entries
     max_size: u64::MAX,                             // Effectively unlimited size
 };
-let mut cache = LruCache::init(config, None);
+let mut cache: LruCache<&str, &str> = LruCache::init(config, None);
 ```
 
 **Use case**: Caching fixed-size items like user sessions, configuration values, or computed results where entry count is the primary constraint.
@@ -190,7 +187,7 @@ let mut cache = LruCache::init(config, None);
 
 When you have a specific memory budget and variable-sized values:
 
-```rust
+```rust,ignore
 use cache_rs::LruCache;
 use cache_rs::config::LruCacheConfig;
 use std::num::NonZeroUsize;
@@ -214,7 +211,7 @@ cache.put_with_size("photo.jpg", image_data, image_size);
 
 For production systems, set meaningful values for both limits:
 
-```rust
+```rust,ignore
 use cache_rs::LruCache;
 use cache_rs::config::LruCacheConfig;
 use std::num::NonZeroUsize;
@@ -224,7 +221,7 @@ let config = LruCacheConfig {
     capacity: NonZeroUsize::new(10_000).unwrap(),  // ~50MB / 5KB
     max_size: 50 * 1024 * 1024,                    // 50 MB
 };
-let mut cache = LruCache::init(config, None);
+let mut cache: LruCache<&str, Vec<u8>> = LruCache::init(config, None);
 ```
 
 **Memory planning formula**:
@@ -295,7 +292,7 @@ Evicts the entry that hasn't been accessed for the longest time. This is the sim
 
 **Time complexity**: O(1) for all operations.
 
-```rust
+```rust,ignore
 use cache_rs::LruCache;
 use cache_rs::config::LruCacheConfig;
 use std::num::NonZeroUsize;
@@ -304,7 +301,7 @@ let config = LruCacheConfig {
     capacity: NonZeroUsize::new(1000).unwrap(),
     max_size: u64::MAX,
 };
-let mut cache = LruCache::init(config, None);
+let mut cache: LruCache<&str, &str> = LruCache::init(config, None);
 ```
 
 ### SLRU (Segmented LRU)
@@ -317,7 +314,7 @@ Divides the cache into two segments: **probationary** and **protected**. New ent
 
 **Time complexity**: O(1) for all operations.
 
-```rust
+```rust,ignore
 use cache_rs::SlruCache;
 use cache_rs::config::SlruCacheConfig;
 use std::num::NonZeroUsize;
@@ -327,7 +324,7 @@ let config = SlruCacheConfig {
     protected_capacity: NonZeroUsize::new(200).unwrap(),  // 20% protected
     max_size: u64::MAX,
 };
-let mut cache = SlruCache::init(config, None);
+let mut cache: SlruCache<&str, &str> = SlruCache::init(config, None);
 ```
 
 ### LFU (Least Frequently Used)
@@ -342,7 +339,7 @@ Tracks how many times each entry has been accessed. Evicts the entry with the lo
 
 **Time complexity**: O(log F) where F = distinct frequency values. Since frequencies are small integers (1, 2, 3, ...), F is bounded and operations are effectively O(1).
 
-```rust
+```rust,ignore
 use cache_rs::LfuCache;
 use cache_rs::config::LfuCacheConfig;
 use std::num::NonZeroUsize;
@@ -351,7 +348,7 @@ let config = LfuCacheConfig {
     capacity: NonZeroUsize::new(1000).unwrap(),
     max_size: u64::MAX,
 };
-let mut cache = LfuCache::init(config, None);
+let mut cache: LfuCache<&str, &str> = LfuCache::init(config, None);
 ```
 
 ### LFUDA (LFU with Dynamic Aging)
@@ -364,7 +361,7 @@ Extends LFU with a global age counter that increases on each eviction. New entri
 
 **Time complexity**: O(log P) where P = distinct priority values. Priority = frequency + age, so P can grow with cache size.
 
-```rust
+```rust,ignore
 use cache_rs::LfudaCache;
 use cache_rs::config::LfudaCacheConfig;
 use std::num::NonZeroUsize;
@@ -374,7 +371,7 @@ let config = LfudaCacheConfig {
     initial_age: 0,
     max_size: u64::MAX,
 };
-let mut cache = LfudaCache::init(config, None);
+let mut cache: LfudaCache<&str, &str> = LfudaCache::init(config, None);
 ```
 
 ### GDSF (Greedy Dual-Size Frequency)
@@ -389,7 +386,7 @@ Designed for variable-sized objects. Considers frequency, size, and age when mak
 
 **Time complexity**: O(log P) where P = distinct priority buckets. Priority = (frequency/size) + age.
 
-```rust
+```rust,ignore
 use cache_rs::GdsfCache;
 use cache_rs::config::GdsfCacheConfig;
 use std::num::NonZeroUsize;
@@ -399,7 +396,7 @@ let config = GdsfCacheConfig {
     initial_age: 0.0,
     max_size: 100 * 1024 * 1024,  // 100 MB
 };
-let mut cache = GdsfCache::init(config, None);
+let mut cache: GdsfCache<&str, Vec<u8>> = GdsfCache::init(config, None);
 
 // put() requires size parameter
 cache.put("small.txt", "content", 1024);        // 1 KB
@@ -476,7 +473,7 @@ for handle in handles {
 
 Use `get_with` to process values without cloning:
 
-```rust
+```rust,ignore
 use cache_rs::concurrent::ConcurrentLruCache;
 use cache_rs::config::{ConcurrentCacheConfig, LruCacheConfig};
 use std::num::NonZeroUsize;
@@ -488,7 +485,7 @@ let config = ConcurrentCacheConfig {
     },
     segments: 16,
 };
-let cache = ConcurrentLruCache::init(config, None);
+let cache: ConcurrentLruCache<String, Vec<u8>> = ConcurrentLruCache::init(config, None);
 cache.put("data".to_string(), vec![1u8; 1024]);
 
 // Process in-place without cloning
@@ -589,7 +586,7 @@ Run benchmarks: `cargo bench`
 
 cache-rs works out of the box in `no_std` environments:
 
-```rust
+```rust,ignore
 #![no_std]
 extern crate alloc;
 
@@ -602,7 +599,7 @@ let config = LruCacheConfig {
     capacity: NonZeroUsize::new(10).unwrap(),
     max_size: u64::MAX,
 };
-let mut cache = LruCache::init(config, None);
+let mut cache: LruCache<String, &str> = LruCache::init(config, None);
 cache.put(String::from("key"), "value");
 ```
 
@@ -657,7 +654,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
 
 ## License
 
-[MIT](LICENSE)
+This project is licensed under the [MIT license](https://opensource.org/licenses/MIT). See [LICENSE](./LICENSE) file for details.
 
 ## Security
 

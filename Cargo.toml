@@ -3,7 +3,7 @@ members = [".", "cache-simulator"]
 
 [package]
 name = "cache-rs"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["sigsegved"]
 categories = ["caching", "no-std", "concurrency"]
 description = "A high-performance, memory-efficient cache implementation supporting multiple eviction policies including LRU, LFU, LFUDA, SLRU and GDSF"
@@ -45,6 +45,11 @@ required-features = ["concurrent"]
 name = "concurrent_usage"
 required-features = ["concurrent"]
 
+# docs.rs configuration - build with all features for complete documentation
+[package.metadata.docs.rs]
+all-features = false
+features = ["std", "concurrent"]
+rustdoc-args = ["--cfg", "docsrs"]
 
 [workspace.lints.rust]
 # https://doc.rust-lang.org/rustc/lints/listing
