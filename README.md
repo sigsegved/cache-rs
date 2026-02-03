@@ -437,7 +437,7 @@ Since every `get()` mutates internal state, `RwLock` would provide no benefit; a
 
 ### Example
 
-```rust
+```rust,ignore
 use cache_rs::concurrent::ConcurrentLruCache;
 use cache_rs::config::{ConcurrentCacheConfig, LruCacheConfig};
 use std::num::NonZeroUsize;
