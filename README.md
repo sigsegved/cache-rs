@@ -115,7 +115,160 @@ assert_eq!(cache.get(&"user:1001"), None);
 | Long-running service, trends change | **LFUDA** | Aging prevents stale popular items from persisting |
 | Variable-sized objects (images, files) | **GDSF** | Size-aware eviction maximizes hit rate |
 
-### Test with Your Own Traffic
+---
+
+## Cache Size Configuration
+
+All cache algorithms in cache-rs share a common configuration pattern with two key sizing parameters: `capacity` and `max_size`. Understanding these parameters is essential for tuning your cache to fit your workload and memory constraints.
+
+### Understanding `capacity` and `max_size`
+
+Every cache configuration includes these two fields:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `capacity` | `NonZeroUsize` | Maximum number of entries the cache can hold |
+| `max_size` | `u64` | Maximum total size in bytes for cached values |
+
+**Important**: Eviction occurs when **either** limit would be exceeded by inserting a new entry.
+
+```text
+Eviction triggers when:
+  (entry_count >= capacity) OR (current_size + new_entry_size > max_size)
+```
+
+This dual-limit approach gives you precise control:
+- Use `capacity` to bound metadata overhead (each entry uses ~64-128 bytes for keys, pointers, and internal structures)
+- Use `max_size` to bound actual data storage (the cached values themselves)
+
+### Specifying Entry Size
+
+By default, `put(key, value)` treats each entry as having size `1`. For size-aware caching, use `put_with_size(key, value, size)`:
+
+```rust
+use cache_rs::LruCache;
+use cache_rs::config::LruCacheConfig;
+use std::num::NonZeroUsize;
+
+let config = LruCacheConfig {
+    capacity: NonZeroUsize::new(1000).unwrap(),
+    max_size: 10 * 1024 * 1024,  // 10 MB
+};
+let mut cache = LruCache::init(config, None);
+
+// Size-aware insertion: this blob consumes 5KB of the 10MB budget
+let blob = vec![0u8; 5000];
+cache.put_with_size("large-blob", blob, 5000);
+
+// Regular insertion: counts as size=1 by default
+cache.put("small-key", "small-value");
+```
+
+**Note**: For GDSF caches, `put(key, value, size)` always requires the size parameter since size is integral to the eviction algorithm.
+
+### Sizing Strategies
+
+#### Count-Limited Cache (Entry Limit Only)
+
+When you want to limit the number of entries without tracking byte size:
+
+```rust
+use cache_rs::LruCache;
+use cache_rs::config::LruCacheConfig;
+use std::num::NonZeroUsize;
+
+let config = LruCacheConfig {
+    capacity: NonZeroUsize::new(10_000).unwrap(),  // Max 10,000 entries
+    max_size: u64::MAX,                             // Effectively unlimited size
+};
+let mut cache = LruCache::init(config, None);
+```
+
+**Use case**: Caching fixed-size items like user sessions, configuration values, or computed results where entry count is the primary constraint.
+
+#### Size-Limited Cache (Byte Budget)
+
+When you have a specific memory budget and variable-sized values:
+
+```rust
+use cache_rs::LruCache;
+use cache_rs::config::LruCacheConfig;
+use std::num::NonZeroUsize;
+
+// 100 MB cache for images, documents, etc.
+let config = LruCacheConfig {
+    capacity: NonZeroUsize::new(100_000).unwrap(), // Reasonable upper bound
+    max_size: 100 * 1024 * 1024,                   // 100 MB budget
+};
+let mut cache = LruCache::init(config, None);
+
+// Track actual sizes when inserting
+let image_data = load_image("photo.jpg");
+let image_size = image_data.len() as u64;
+cache.put_with_size("photo.jpg", image_data, image_size);
+```
+
+**Use case**: CDN caches, file caches, response caches where objects vary significantly in size.
+
+#### Balanced Cache (Both Limits)
+
+For production systems, set meaningful values for both limits:
+
+```rust
+use cache_rs::LruCache;
+use cache_rs::config::LruCacheConfig;
+use std::num::NonZeroUsize;
+
+// 50 MB cache expecting ~5KB average values
+let config = LruCacheConfig {
+    capacity: NonZeroUsize::new(10_000).unwrap(),  // ~50MB / 5KB
+    max_size: 50 * 1024 * 1024,                    // 50 MB
+};
+let mut cache = LruCache::init(config, None);
+```
+
+**Memory planning formula**:
+```text
+Total Memory ≈ max_size + (capacity × overhead_per_entry)
+overhead_per_entry ≈ 64-128 bytes (keys, pointers, metadata)
+```
+
+### Eviction Behavior Examples
+
+Let's trace through how the dual-limit eviction works:
+
+```rust
+use cache_rs::LruCache;
+use cache_rs::config::LruCacheConfig;
+use std::num::NonZeroUsize;
+
+// Tiny cache for demonstration: 3 entries OR 100 bytes max
+let config = LruCacheConfig {
+    capacity: NonZeroUsize::new(3).unwrap(),
+    max_size: 100,
+};
+let mut cache: LruCache<&str, &str> = LruCache::init(config, None);
+
+// Insert 3 entries, each with size 30 bytes
+cache.put_with_size("a", "value_a", 30);  // entries=1, size=30
+cache.put_with_size("b", "value_b", 30);  // entries=2, size=60
+cache.put_with_size("c", "value_c", 30);  // entries=3, size=90
+
+// Case 1: Capacity-triggered eviction
+// Adding "d" would exceed capacity (3 entries), so "a" is evicted
+cache.put_with_size("d", "value_d", 30);  // evicts "a", entries=3, size=90
+
+// Case 2: Size-triggered eviction
+// Adding a 50-byte entry would exceed max_size (90 + 50 > 100)
+// Multiple entries may be evicted to make room
+cache.put_with_size("big", "large_value", 50);  // evicts until size fits
+```
+
+For concurrent caches, `capacity` and `max_size` apply to the **entire cache** (distributed across all segments), not per-segment
+
+---
+
+## Test with Your Own Traffic
 
 Not sure which algorithm fits your workload? The repository includes a **cache-simulator** tool that replays your traffic logs against all five algorithms and reports hit rates, byte hit rates, and latency statistics. Feed it your production access patterns and let the data guide your decision.
 
@@ -413,67 +566,6 @@ impl TieredCache {
     fn hash(&self, s: &str) -> u64 {
         s.bytes().fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64))
     }
-}
-```
-
----
-
-## Configuration Reference
-
-### LruCacheConfig
-
-```rust
-LruCacheConfig {
-    capacity: NonZeroUsize,  // Maximum number of entries
-    max_size: u64,           // Maximum total size in bytes (use u64::MAX for unlimited)
-}
-```
-
-### SlruCacheConfig
-
-```rust
-SlruCacheConfig {
-    capacity: NonZeroUsize,           // Total capacity (probationary + protected)
-    protected_capacity: NonZeroUsize, // Size of protected segment
-    max_size: u64,
-}
-```
-
-### LfuCacheConfig
-
-```rust
-LfuCacheConfig {
-    capacity: NonZeroUsize,
-    max_size: u64,
-}
-```
-
-### LfudaCacheConfig
-
-```rust
-LfudaCacheConfig {
-    capacity: NonZeroUsize,
-    initial_age: u64,  // Starting value for global age counter
-    max_size: u64,
-}
-```
-
-### GdsfCacheConfig
-
-```rust
-GdsfCacheConfig {
-    capacity: NonZeroUsize,
-    initial_age: f64,  // Starting value for global age
-    max_size: u64,     // Important for GDSF: limits total cached size
-}
-```
-
-### ConcurrentCacheConfig
-
-```rust
-ConcurrentCacheConfig {
-    base: /* any of the above configs */,
-    segments: usize,  // Number of segments (power of 2 recommended)
 }
 ```
 
