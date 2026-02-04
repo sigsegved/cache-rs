@@ -293,146 +293,149 @@ impl<K, V, M> CacheEntry<K, V, M> {
 
 ### 4.3 Expiry Index
 
-Each cache maintains an expiry index alongside its primary data structures. The index is generic over the pointer type `P`, allowing it to work with all cache algorithms regardless of their internal entry representation.
+Each cache segment maintains a min-heap of entry pointers ordered by expiration time. This is the simplest and most efficient structure for TTL-based eviction since we only need to find the earliest-expiring entry.
 
-**Design Decision: Pointers vs. Keys**
+**Design Decision: Min-Heap vs. BTreeMap**
 
-An earlier design considered storing keys in the expiry index (`BTreeMap<(u64, K), ()>`). The pointer-based approach offers significant advantages:
+| Aspect | BTreeMap | Min-Heap |
+|--------|----------|----------|
+| Peek min | O(1) | O(1) |
+| Insert | O(log n) | O(log n) |
+| Pop min | O(log n) | O(log n) |
+| Remove arbitrary | O(log n) | O(n) or lazy |
+| Memory overhead | ~40 bytes/entry | ~16 bytes/entry |
+| Complexity | Higher | Lower |
 
-| Aspect | Key-based `(u64, K)` | Pointer-based `ExpiryIndex<P>` |
-|--------|---------------------|-------------------------------|
-| Insert | O(log n) + key clone | O(log n) + O(1) amortized |
-| Remove | O(log n) + key clone | O(log n) + O(k) vec scan |
-| Pop expired | O(log n) + HashMap lookup | O(log n) direct access |
-| Memory/entry | ~48 bytes + key size | ~8 bytes (pointer only) |
+The min-heap wins because:
+1. We only need min-access (earliest expiry), not range queries
+2. Arbitrary removal is rare (only on explicit `remove()` calls)
+3. Lazy deletion handles removal efficiently for the common case
+4. Lower memory overhead and implementation complexity
 
-The pointer approach eliminates key cloning entirely and provides direct access to entries during expiration, avoiding a HashMap lookup.
+**Lazy Deletion Strategy:**
+
+When an entry is explicitly removed from the cache, we don't search the heap to remove it. Instead, when popping from the heap during eviction, we validate that the pointer is still valid (entry exists in the cache). Invalid entries are simply skipped.
 
 ```rust
-use alloc::collections::BTreeMap;
-use alloc::vec::Vec;
+use alloc::collections::BinaryHeap;
+use core::cmp::Ordering;
 
-/// Index for tracking cache entries by expiration time.
+/// Entry in the expiry heap: (expiry_time, pointer to cache entry).
+/// Ordered by expiry time (min-heap via Reverse ordering).
+#[derive(Clone, Copy)]
+pub struct ExpiryEntry<P> {
+    /// Expiration timestamp in nanoseconds
+    pub expiry: u64,
+    /// Pointer to the cache entry
+    pub ptr: P,
+}
+
+impl<P> PartialEq for ExpiryEntry<P> {
+    fn eq(&self, other: &Self) -> bool {
+        self.expiry == other.expiry
+    }
+}
+
+impl<P> Eq for ExpiryEntry<P> {}
+
+impl<P> PartialOrd for ExpiryEntry<P> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<P> Ord for ExpiryEntry<P> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Reverse ordering for min-heap (BinaryHeap is a max-heap by default)
+        other.expiry.cmp(&self.expiry)
+    }
+}
+
+/// Min-heap of cache entry pointers ordered by expiration time.
 /// 
 /// Generic over pointer type `P` to work with all cache algorithms:
 /// - LRU: `P = *mut ListEntry<CacheEntry<K, V>>`
-/// - LFU/LFUDA/GDSF: `P = *mut ListEntry<(K, V)>` (or equivalent)
-/// - SLRU: `P = *mut ListEntry<CacheEntry<K, V>>`
-///
-/// Multiple entries can share the same expiration timestamp, so entries
-/// are grouped into vectors per timestamp.
-pub struct ExpiryIndex<P> {
-    /// Entries grouped by expiration timestamp (nanoseconds).
-    /// BTreeMap provides O(log n) insert and O(1) access to earliest expiry.
-    entries: BTreeMap<u64, Vec<P>>,
-    /// Total count of indexed entries for O(1) len().
-    len: usize,
+/// - LFU: `P = *mut ListEntry<CacheEntry<K, V, LfuMeta>>`
+/// - etc.
+pub struct ExpiryHeap<P> {
+    heap: BinaryHeap<ExpiryEntry<P>>,
 }
 
-impl<P: Copy + PartialEq> ExpiryIndex<P> {
-    /// Creates an empty expiry index.
+impl<P: Copy> ExpiryHeap<P> {
+    /// Creates an empty expiry heap.
     pub fn new() -> Self {
         Self {
-            entries: BTreeMap::new(),
-            len: 0,
+            heap: BinaryHeap::new(),
         }
     }
 
-    /// Insert an entry pointer with the given expiration time.
-    /// O(log n) for BTreeMap access, O(1) amortized for vector push.
+    /// Creates an expiry heap with the specified capacity.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            heap: BinaryHeap::with_capacity(capacity),
+        }
+    }
+
+    /// Insert an entry with the given expiration time. O(log n).
     #[inline]
-    pub fn insert(&mut self, expiry: u64, ptr: P) {
-        self.entries.entry(expiry).or_default().push(ptr);
-        self.len += 1;
+    pub fn push(&mut self, expiry: u64, ptr: P) {
+        self.heap.push(ExpiryEntry { expiry, ptr });
     }
 
-    /// Remove a specific entry pointer (e.g., when explicitly removed from cache).
-    /// O(log n) for BTreeMap access, O(k) for vector scan where k is entries at same expiry.
-    /// Returns true if the entry was found and removed.
-    pub fn remove(&mut self, expiry: u64, ptr: P) -> bool {
-        if let Some(vec) = self.entries.get_mut(&expiry) {
-            if let Some(pos) = vec.iter().position(|&p| p == ptr) {
-                vec.swap_remove(pos);  // O(1) removal, order doesn't matter
-                self.len -= 1;
-                if vec.is_empty() {
-                    self.entries.remove(&expiry);
-                }
-                return true;
-            }
-        }
-        false
+    /// Peek at the earliest expiry time without removing. O(1).
+    #[inline]
+    pub fn peek_expiry(&self) -> Option<u64> {
+        self.heap.peek().map(|e| e.expiry)
     }
 
-    /// Pop and return one expired entry pointer, if any exist.
-    /// Returns the raw pointer to the cache entry, which can be used
-    /// directly to access the entry without a HashMap lookup.
-    /// O(log n) for first access, O(1) for subsequent pops at same expiry.
-    pub fn pop_expired(&mut self, now: u64) -> Option<P> {
-        // Peek at the earliest expiry time
-        let &first_expiry = self.entries.first_key_value()?.0;
-
-        if first_expiry <= now {
-            let vec = self.entries.get_mut(&first_expiry)?;
-            let ptr = vec.pop()?;
-            self.len -= 1;
-            
-            // Clean up empty vector
-            if vec.is_empty() {
-                self.entries.remove(&first_expiry);
-            }
-            Some(ptr)
-        } else {
-            None
-        }
+    /// Pop the entry with the earliest expiry time. O(log n).
+    /// Returns None if the heap is empty.
+    #[inline]
+    pub fn pop(&mut self) -> Option<(u64, P)> {
+        self.heap.pop().map(|e| (e.expiry, e.ptr))
     }
 
-    /// Returns true if there are any expired entries.
+    /// Returns true if the earliest entry has expired.
     #[inline]
     pub fn has_expired(&self, now: u64) -> bool {
-        self.entries
-            .first_key_value()
-            .map(|(&exp, _)| exp <= now)
-            .unwrap_or(false)
+        self.peek_expiry().map(|exp| exp <= now).unwrap_or(false)
     }
 
-    /// Returns the number of entries in the index.
+    /// Returns the number of entries in the heap.
+    /// Note: may include stale entries if lazy deletion is used.
     #[inline]
     pub fn len(&self) -> usize {
-        self.len
+        self.heap.len()
     }
 
-    /// Returns true if the index is empty.
+    /// Returns true if the heap is empty.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.heap.is_empty()
     }
 
-    /// Clears all entries from the index.
+    /// Clears all entries from the heap.
     pub fn clear(&mut self) {
-        self.entries.clear();
-        self.len = 0;
+        self.heap.clear();
     }
 }
 
-impl<P> Default for ExpiryIndex<P> {
+impl<P> Default for ExpiryHeap<P> {
     fn default() -> Self {
         Self {
-            entries: BTreeMap::new(),
-            len: 0,
+            heap: BinaryHeap::new(),
         }
     }
 }
 
-// SAFETY: ExpiryIndex is Send/Sync when P is Send/Sync.
-// The raw pointers stored are owned by the cache's list structure,
-// and ExpiryIndex only provides access within the cache's &mut self methods.
-unsafe impl<P: Send> Send for ExpiryIndex<P> {}
-unsafe impl<P: Sync> Sync for ExpiryIndex<P> {}
+// SAFETY: ExpiryHeap is Send/Sync when P is Send.
+unsafe impl<P: Send> Send for ExpiryHeap<P> {}
+unsafe impl<P: Send> Sync for ExpiryHeap<P> {}
 ```
 
 **Integration with Cache Segments:**
 
-Each cache segment instantiates `ExpiryIndex` with its specific pointer type:
+Each cache segment instantiates `ExpiryHeap` with its specific pointer type:
 
 ```rust
 // In LRU cache
@@ -442,26 +445,53 @@ pub(crate) struct LruSegment<K, V, S = DefaultHashBuilder> {
     map: HashMap<K, *mut ListEntry<CacheEntry<K, V>>, S>,
     metrics: LruCacheMetrics,
     current_size: u64,
-    /// Expiry index for TTL support (only populated when TTL is used)
-    expiry_index: ExpiryIndex<*mut ListEntry<CacheEntry<K, V>>>,
+    /// Expiry heap for TTL support (only populated when TTL is used)
+    expiry_heap: ExpiryHeap<*mut ListEntry<CacheEntry<K, V>>>,
 }
 
-// In LFU cache (similar pattern)
+// In LFU cache
 pub(crate) struct LfuSegment<K, V, S = DefaultHashBuilder> {
     // ... existing fields ...
-    expiry_index: ExpiryIndex<*mut ListEntry<(K, V)>>,
+    expiry_heap: ExpiryHeap<*mut ListEntry<CacheEntry<K, V, LfuMeta>>>,
 }
 ```
 
-**Safety Considerations:**
+**Lazy Deletion in Practice:**
 
-The pointer-based design requires careful safety management:
+When popping expired entries, we validate the pointer before using it:
 
-1. **Pointer Validity:** Entry pointers in `ExpiryIndex` must be removed when entries are evicted or explicitly removed from the cache. Forgetting to do so creates dangling pointers.
+```rust
+/// Pop expired entries with lazy deletion validation.
+fn pop_expired_with_validation(&mut self, now: u64) -> Option<*mut ListEntry<CacheEntry<K, V>>> {
+    while let Some((expiry, ptr)) = self.expiry_heap.pop() {
+        if expiry > now {
+            // Not expired yet - push back and stop
+            self.expiry_heap.push(expiry, ptr);
+            return None;
+        }
+        
+        // Validate pointer is still in the cache
+        unsafe {
+            let entry = (*ptr).get_value();
+            if self.map.contains_key(&entry.key) {
+                // Valid expired entry
+                return Some(ptr);
+            }
+            // Stale pointer (entry was already removed) - skip and continue
+        }
+    }
+    None
+}
+```
 
-2. **Synchronization:** For concurrent caches, the `ExpiryIndex` is protected by the same segment lock as the main data structures. No separate synchronization is needed.
+**Memory Overhead:**
 
-3. **Entry Lifetime:** The expiry index does not own entries; it merely tracks them. All entry lifecycle operations (creation, eviction) must update both the main data structures and the expiry index atomically (within the same `&mut self` scope).
+| Component | Size (bytes) | Notes |
+|-----------|--------------|-------|
+| `expiry` field in CacheEntry | 16 | `Option<u64>` with alignment |
+| Heap entry | 16 | `u64` expiry + 8-byte pointer |
+
+Total additional memory for TTL-enabled entries: ~32 bytes (down from ~48 with BTreeMap).
 
 ### 4.4 Modified Cache Operations
 
@@ -506,17 +536,9 @@ where
 }
 ```
 
-**put() Operation with Preferential Expired Eviction:**
+**put() Operation with Preferential Expired Eviction (using min-heap):**
 
 ```rust
-pub fn put_with_ttl(&mut self, key: K, value: V, ttl: Option<Duration>) -> Option<V>
-where
-    K: Clone + Hash + Eq + Ord,
-{
-    let size = self.estimate_object_size(&key, &value);
-    self.put_with_size_and_ttl(key, value, size, ttl)
-}
-
 pub fn put_with_size_and_ttl(
     &mut self, 
     key: K, 
@@ -535,39 +557,34 @@ where
         unsafe {
             let entry = (*node).get_value_mut();
             
-            // Remove old expiry from index if present
-            if let Some(old_expiry) = entry.expiry {
-                self.expiry_index.remove(old_expiry, node);
-            }
-            
-            // ... existing value update logic ...
-            
-            // Add new expiry if TTL specified
+            // Note: We don't remove old expiry from heap (lazy deletion handles it)
+            // Just update the entry's expiry field
             let new_expiry = ttl.map(|d| now + d.as_nanos() as u64)
                 .or_else(|| self.config.default_ttl.map(|d| now + d.as_nanos() as u64));
             entry.expiry = new_expiry;
             
+            // Push new expiry to heap (old entry will be skipped via lazy deletion)
             if let Some(exp) = new_expiry {
-                self.expiry_index.insert(exp, node);
+                self.expiry_heap.push(exp, node);
             }
+            
+            // ... existing value update logic, return old value ...
         }
-        // ... return old value ...
     }
     
-    // Eviction loop: prefer expired entries first (using pointer-based index)
+    // Eviction loop: prefer expired entries first
     while self.needs_eviction(size) {
-        // First, try to evict an expired entry - returns pointer directly!
-        if let Some(expired_node) = self.expiry_index.pop_expired(now) {
-            // SAFETY: pointer comes from our expiry_index which only contains valid nodes
+        // First, try to evict an expired entry using lazy deletion validation
+        if let Some(ptr) = self.pop_expired_validated(now) {
             unsafe {
-                let entry = (*expired_node).get_value();
+                let entry = (*ptr).get_value();
                 let evicted_key = entry.key.clone();
                 let evicted_value = entry.value.clone();
                 let evicted_size = entry.size;
                 
-                // Remove from map and list (expiry index already updated by pop)
+                // Remove from map and list
                 self.map.remove(&evicted_key);
-                self.list.remove(expired_node);
+                self.list.remove(ptr);
                 self.current_size = self.current_size.saturating_sub(evicted_size);
                 
                 evicted_entries.push((evicted_key, evicted_value, EvictionReason::Expired));
@@ -576,18 +593,42 @@ where
         }
         
         // No expired entries; use normal eviction algorithm
-        if let Some((evicted_key, evicted_value, node)) = self.evict_by_algorithm() {
-            // Remove from expiry index if entry had TTL
-            unsafe {
-                if let Some(expiry) = (*node).get_value().expiry {
-                    self.expiry_index.remove(expiry, node);
-                }
-            }
+        // Note: We don't remove evicted entries from heap (lazy deletion)
+        if let Some((evicted_key, evicted_value, _node)) = self.evict_by_algorithm() {
             evicted_entries.push((evicted_key, evicted_value, EvictionReason::Capacity));
         } else {
             break; // Cache is empty
         }
     }
+    
+    // Insert new entry
+    let expiry = ttl.map(|d| now + d.as_nanos() as u64)
+        .or_else(|| self.config.default_ttl.map(|d| now + d.as_nanos() as u64));
+    
+    let cache_entry = CacheEntry::new_with_expiry(key.clone(), value, size, expiry);
+    
+    // Add to list and map
+    if let Some(node) = self.list.add(cache_entry) {
+        self.map.insert(key, node);
+        self.current_size += size;
+        
+        // Add to expiry heap if TTL is set
+        if let Some(exp) = expiry {
+            self.expiry_heap.push(exp, node);
+        }
+        
+        self.metrics.core.record_insertion(size);
+    }
+    
+    // Invoke eviction handler
+    if !evicted_entries.is_empty() {
+        if let Some(ref handler) = self.eviction_handler {
+            handler(&evicted_entries);
+        }
+    }
+    
+    // ... return value ...
+}
     
     // Insert new entry
     let expiry = ttl.map(|d| now + d.as_nanos() as u64)
@@ -710,27 +751,29 @@ cache.put("b", v2); // Evicts y → handler([y])
 
 ### 4.8 Memory Layout Impact
 
-The pointer-based `ExpiryIndex<P>` design provides significant memory savings compared to key-based approaches:
+The min-heap approach provides excellent memory efficiency:
 
 | Component | Size (bytes) | Notes |
 |-----------|--------------|-------|
 | `expiry` field in CacheEntry | 16 | `Option<u64>` with alignment |
-| Expiry index entry (pointer-based) | ~8-16 | Pointer in Vec + amortized Vec overhead |
+| Heap entry (`ExpiryEntry<P>`) | 16 | `u64` expiry + 8-byte pointer |
 
-**Comparison with key-based approach:**
+**Comparison of approaches:**
 
-| Approach | Memory per TTL entry | HashMap lookup on expiry |
-|----------|---------------------|-------------------------|
-| Key-based `BTreeMap<(u64, K), ()>` | ~48 bytes + key size | Required |
-| Pointer-based `ExpiryIndex<P>` | ~8-16 bytes | Not needed |
+| Approach | Memory per TTL entry | Arbitrary removal |
+|----------|---------------------|-------------------|
+| Key-based `BTreeMap<(u64, K), ()>` | ~48 bytes + key size | O(log n) |
+| Pointer BTreeMap + Vec | ~24-32 bytes | O(log n) + O(k) |
+| **Min-Heap (chosen)** | ~32 bytes | Lazy deletion |
 
-For entries without TTL, the overhead is only the `Option<u64>` discriminant in `CacheEntry` (optimized to 8 bytes when expiry is `None`). The `ExpiryIndex` has zero overhead for non-TTL entries since they're not added to it.
+For entries without TTL, the overhead is only the `Option<u64>` discriminant in `CacheEntry` (optimized to 8 bytes when expiry is `None`). The heap has zero entries for non-TTL keys.
 
-**Total additional memory for TTL-enabled entries:** ~24-32 bytes (vs. ~56-64 bytes with key-based approach).
+**Lazy deletion trade-off:** The heap may temporarily contain stale entries (pointers to evicted or updated entries), but:
+- Stale entries are cleaned up incrementally during eviction
+- Memory overhead is bounded (at most O(updates) extra entries)
+- Trade-off is worthwhile vs. O(n) heap search for eager deletion
 
-**Vec amortization:** Entries with the same expiration timestamp share a Vec. For typical workloads where TTLs vary, most timestamps have 1-2 entries, so Vec overhead is minimal. Worst case (all entries same TTL) still uses less memory than key-based approach.
-
-### 4.8 API Surface
+### 4.9 API Surface
 
 New public API additions:
 
@@ -926,20 +969,20 @@ These metrics are tracked separately from core metrics and only populated when T
 
 ## 9. Appendix: Benchmark Projections
 
-Based on the current implementation's performance characteristics and the pointer-based expiry index design:
+Based on the current implementation's performance characteristics and the min-heap expiry design:
 
 | Operation | Current (ns) | Projected with TTL (ns) | Overhead |
 |-----------|--------------|-------------------------|----------|
 | LRU get() | ~50 | ~52 | +4% |
-| LRU put() | ~150 | ~170 | +13% |
+| LRU put() | ~150 | ~165 | +10% |
 | LFU get() | ~80 | ~83 | +4% |
-| LFU put() | ~250 | ~290 | +16% |
+| LFU put() | ~250 | ~280 | +12% |
 
-**Analysis:** The pointer-based `ExpiryIndex<P>` improves put() overhead compared to the key-based approach (~13-16% vs. ~20-24%) by eliminating key cloning and HashMap lookups during expiration. The get() overhead is minimal since expiry checking is a simple integer comparison.
+**Analysis:** The min-heap approach improves put() overhead compared to BTreeMap (~10-12% vs. ~13-16%) due to simpler heap operations and lazy deletion eliminating remove operations. The get() overhead is minimal since expiry checking is a simple integer comparison.
 
-**Expired entry eviction:** When evicting an expired entry, the pointer-based approach saves one HashMap lookup (direct pointer access vs. key lookup), improving eviction performance by ~20-30ns per expired entry.
+**Lazy deletion amortization:** Stale heap entries are cleaned up incrementally during normal eviction operations. The overhead is amortized across multiple operations rather than concentrated in explicit removes.
 
-For workloads where TTL is not configured, the overhead should be negligible as the expiry index remains empty and checks short-circuit.
+For workloads where TTL is not configured, the overhead should be negligible as the expiry heap remains empty and checks short-circuit.
 
 ---
 
@@ -961,9 +1004,9 @@ For workloads where TTL is not configured, the overhead should be negligible as 
 
 ### Review Finding 3: Entry Size Estimation with TTL
 
-**Issue:** The `estimate_object_size()` method does not account for expiry index overhead, potentially underestimating memory usage.
+**Issue:** The `estimate_object_size()` method does not account for expiry heap overhead, potentially underestimating memory usage.
 
-**Resolution:** Update size estimation to include expiry index overhead when TTL is configured. With the pointer-based approach, overhead is reduced: `TTL_OVERHEAD_BYTES = 24` (16 bytes for `Option<u64>` in entry + ~8 bytes amortized for expiry index pointer).
+**Resolution:** Update size estimation to include expiry heap overhead when TTL is configured. With the min-heap approach: `TTL_OVERHEAD_BYTES = 32` (16 bytes for `Option<u64>` in entry + 16 bytes for heap entry).
 
 ### Review Finding 4: Stale-While-Revalidate Thread Safety
 
@@ -971,46 +1014,47 @@ For workloads where TTL is not configured, the overhead should be negligible as 
 
 **Resolution:** Use separate callback types for single-threaded (`Fn`) and concurrent (`Fn + Send + Sync`) caches. This adds API surface but preserves flexibility.
 
-### Review Finding 5: Key Clone Overhead (RESOLVED)
+### Review Finding 5: Lazy Deletion Heap Growth
 
-**Issue:** The original key-based expiry index design required cloning keys for insertion and removal operations, which could be expensive for large keys.
+**Issue:** With lazy deletion, the heap can grow unbounded if entries are frequently updated (each update adds a new heap entry without removing the old one).
 
-**Resolution:** Adopted pointer-based `ExpiryIndex<P>` design that stores raw pointers to cache entries instead of keys. This eliminates all key cloning in the expiry index and provides direct access to entries during expiration. See Section 4.3 for implementation details.
+**Resolution:** This is bounded in practice because:
+1. Stale entries are cleaned up whenever we pop from the heap during eviction
+2. Each cache entry can have at most a small number of stale heap entries (proportional to update frequency)
+3. For pathological cases (very frequent updates to same keys), add an optional `compact()` method that rebuilds the heap
 
-### Review Finding 6: Pointer Validity in ExpiryIndex
-
-**Issue:** The pointer-based `ExpiryIndex<P>` stores raw pointers that must remain valid. If a pointer is not removed from the expiry index when its entry is evicted, it becomes dangling.
-
-**Resolution:** Enforce a strict invariant: every code path that removes an entry from the cache (eviction, explicit removal, update) must also remove the corresponding pointer from the expiry index. This is achieved by:
-1. Making `remove()` operations always check and update the expiry index
-2. Adding `debug_assert!` in debug builds to verify invariants
-3. Documenting the invariant prominently in the `ExpiryIndex` struct
-
+**Mitigation for pathological cases:**
 ```rust
-// Every removal path must follow this pattern:
-fn remove_entry(&mut self, node: *mut ListEntry<CacheEntry<K, V>>) {
-    unsafe {
-        let entry = (*node).get_value();
-        // CRITICAL: Remove from expiry index BEFORE freeing the node
-        if let Some(expiry) = entry.expiry {
-            self.expiry_index.remove(expiry, node);
-        }
-        // Now safe to remove from map and free
-        self.map.remove(&entry.key);
-        self.list.remove(node);
+impl<P: Copy> ExpiryHeap<P> {
+    /// Rebuild heap keeping only valid entries. O(n log n).
+    /// Call periodically if heap.len() >> cache.len().
+    pub fn compact<F>(&mut self, is_valid: F)
+    where
+        F: Fn(P) -> bool,
+    {
+        let valid: Vec<_> = self.heap.drain()
+            .filter(|e| is_valid(e.ptr))
+            .collect();
+        self.heap = BinaryHeap::from(valid);
     }
 }
 ```
 
-### Review Finding 7: Vec Scan Overhead in ExpiryIndex::remove()
+### Review Finding 6: Pointer Validation Cost in Lazy Deletion
 
-**Issue:** When explicitly removing an entry, `ExpiryIndex::remove()` performs O(k) scan where k is the number of entries with the same expiration timestamp. This could be expensive if many entries share the same TTL.
+**Issue:** Each pop from the heap requires validating the pointer, which involves a HashMap lookup to verify the entry still exists.
 
-**Resolution:** For typical workloads, k is small (most timestamps are unique or have few entries). If profiling shows this is a bottleneck, two mitigations are available:
-1. Use `SmallVec<[P; 4]>` instead of `Vec<P>` to reduce allocations
-2. For large-scale deployments with many same-TTL entries, add a secondary index `HashMap<P, u64>` mapping pointer to expiry time for O(1) lookup (trades memory for time)
+**Resolution:** This is acceptable because:
+1. The validation is O(1) HashMap lookup
+2. It only happens during eviction (not on every get/put)
+3. Alternative (eager deletion) would require O(n) heap search or O(log n) auxiliary index
+4. In practice, most popped entries are valid; stale entries are the exception
 
-For the initial implementation, `Vec<P>` is sufficient. The optimization can be added later if needed.
+### Review Finding 7: Heap Entry Equality
+
+**Issue:** Multiple heap entries can exist for the same cache entry (after updates). Need to ensure we don't double-evict.
+
+**Resolution:** The validation check inherently handles this: after evicting an entry via its pointer, subsequent pops of stale entries for the same key will fail validation (key no longer in map) and be skipped.
 
 ---
 
