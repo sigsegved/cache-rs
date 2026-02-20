@@ -22,5 +22,8 @@ jobs:
       - name: Setup Miri
         run: cargo miri setup
       
-      - name: Run Miri tests (ignoring test-only memory leaks)
+      - name: Run Miri tests – single-threaded (ignoring test-only memory leaks)
         run: MIRIFLAGS="-Zmiri-ignore-leaks" cargo miri test --lib
+
+      - name: Run Miri tests – concurrent feature (ignoring test-only memory leaks)
+        run: MIRIFLAGS="-Zmiri-ignore-leaks" cargo miri test --lib --features "std,concurrent"
