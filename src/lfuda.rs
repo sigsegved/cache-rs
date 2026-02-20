@@ -363,11 +363,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
         K: Clone + Hash + Eq,
     {
         // SAFETY: node is guaranteed to be valid by the caller's contract
-        let entry = (*node).get_value();
-        let key_cloned = entry.key.clone();
-
-        // Get current node from map
-        let node = *self.map.get(&key_cloned).unwrap();
+        let key_cloned = (*node).get_value().key.clone();
 
         // Calculate new priority after incrementing frequency
         let meta = (*node).get_value().metadata.as_ref().unwrap();

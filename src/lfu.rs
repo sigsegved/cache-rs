@@ -312,11 +312,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
             .record_frequency_increment(old_frequency, new_frequency);
 
         // SAFETY: node is guaranteed to be valid by the caller's contract
-        let entry = (*node).get_value();
-        let key_cloned = entry.key.clone();
-
-        // Get the current node from the map
-        let node = *self.map.get(&key_cloned).unwrap();
+        let key_cloned = (*node).get_value().key.clone();
 
         // Remove from old frequency list
         let boxed_entry = self
