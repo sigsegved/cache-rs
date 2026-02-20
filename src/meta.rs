@@ -257,6 +257,20 @@ impl SlruMeta {
 ///
 /// Items with lower priority are evicted first.
 ///
+/// # Float Comparison and `Eq`
+///
+/// `GdsfMeta` contains a `priority: f64` field and therefore only implements
+/// [`PartialEq`], not [`Eq`]. This is because `f64` violates the reflexivity
+/// requirement of `Eq` when `NaN` values are involved (`NaN != NaN`).
+///
+/// In practice, the GDSF implementation guarantees that `priority` is never
+/// `NaN` (it is either a finite value or `f64::INFINITY` when `size == 0`),
+/// but the type system cannot express this invariant without a newtype wrapper.
+///
+/// A future improvement could introduce an `OrderedFloat` or `NotNan` newtype
+/// that soundly implements `Eq` and `Ord`, enabling `GdsfMeta` to also derive
+/// `Eq` and making it usable in `HashSet`, `HashMap` keys, etc.
+///
 /// # Examples
 ///
 /// ```
@@ -273,6 +287,9 @@ pub struct GdsfMeta {
 
     /// Calculated priority: (frequency / size) + clock.
     /// Lower priority = more likely to be evicted.
+    ///
+    /// This field is `f64`, which prevents `GdsfMeta` from implementing `Eq`.
+    /// See the type-level documentation for details.
     pub priority: f64,
 }
 
