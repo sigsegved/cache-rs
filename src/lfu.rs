@@ -301,20 +301,15 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
         &mut self,
         node: *mut ListEntry<CacheEntry<K, V, LfuMeta>>,
         old_frequency: usize,
-    ) -> *mut ListEntry<CacheEntry<K, V, LfuMeta>>
-    where
-        K: Clone + Hash + Eq,
-    {
+    ) -> *mut ListEntry<CacheEntry<K, V, LfuMeta>> {
         let new_frequency = old_frequency + 1;
 
         // Record frequency increment
         self.metrics
             .record_frequency_increment(old_frequency, new_frequency);
 
-        // SAFETY: node is guaranteed to be valid by the caller's contract
-        let key_cloned = (*node).get_value().key.clone();
-
         // Remove from old frequency list
+        // SAFETY: node is guaranteed to be valid by the caller's contract
         let boxed_entry = self
             .frequency_lists
             .get_mut(&old_frequency)
@@ -348,8 +343,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
             .unwrap()
             .attach_from_other_list(entry_ptr);
 
-        // Update the map with the new node pointer
-        *self.map.get_mut(&key_cloned).unwrap() = entry_ptr;
+        // No map update needed: Box::into_raw(Box::from_raw(node)) == node, so
+        // entry_ptr == node and the map already holds the correct pointer.
 
         // Update metrics with new frequency levels
         self.metrics.update_frequency_levels(&self.frequency_lists);
@@ -360,7 +355,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
     /// Returns a reference to the value corresponding to the key.
     pub(crate) fn get<Q>(&mut self, key: &Q) -> Option<&V>
     where
-        K: Borrow<Q> + Clone,
+        K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
         if let Some(&node) = self.map.get(key) {
@@ -387,7 +382,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
     /// Returns a mutable reference to the value corresponding to the key.
     pub(crate) fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
-        K: Borrow<Q> + Clone,
+        K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
         if let Some(&node) = self.map.get(key) {
@@ -678,7 +673,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
     #[inline]
     pub fn get<Q>(&mut self, key: &Q) -> Option<&V>
     where
-        K: Borrow<Q> + Clone,
+        K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
         self.segment.get(key)
@@ -694,7 +689,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
     #[inline]
     pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
-        K: Borrow<Q> + Clone,
+        K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
         self.segment.get_mut(key)

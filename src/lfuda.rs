@@ -358,12 +358,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
         &mut self,
         node: *mut ListEntry<CacheEntry<K, V, LfudaMeta>>,
         old_priority: u64,
-    ) -> *mut ListEntry<CacheEntry<K, V, LfudaMeta>>
-    where
-        K: Clone + Hash + Eq,
-    {
+    ) -> *mut ListEntry<CacheEntry<K, V, LfudaMeta>> {
         // SAFETY: node is guaranteed to be valid by the caller's contract
-        let key_cloned = (*node).get_value().key.clone();
 
         // Calculate new priority after incrementing frequency
         let meta = (*node).get_value().metadata.as_ref().unwrap();
@@ -412,8 +408,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
             .unwrap()
             .attach_from_other_list(entry_ptr);
 
-        // Update the map with the new node pointer
-        *self.map.get_mut(&key_cloned).unwrap() = entry_ptr;
+        // No map update needed: Box::into_raw(Box::from_raw(node)) == node, so
+        // entry_ptr == node and the map already holds the correct pointer.
 
         entry_ptr
     }
@@ -421,7 +417,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
     /// Returns a reference to the value corresponding to the key.
     pub(crate) fn get<Q>(&mut self, key: &Q) -> Option<&V>
     where
-        K: Borrow<Q> + Clone,
+        K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
         if let Some(&node) = self.map.get(key) {
@@ -444,7 +440,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
     /// Returns a mutable reference to the value corresponding to the key.
     pub(crate) fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
-        K: Borrow<Q> + Clone,
+        K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
         if let Some(&node) = self.map.get(key) {
@@ -773,7 +769,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
     #[inline]
     pub fn get<Q>(&mut self, key: &Q) -> Option<&V>
     where
-        K: Borrow<Q> + Clone,
+        K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
         self.segment.get(key)
@@ -789,7 +785,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
     #[inline]
     pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
-        K: Borrow<Q> + Clone,
+        K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
         self.segment.get_mut(key)

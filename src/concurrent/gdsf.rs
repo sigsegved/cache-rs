@@ -302,7 +302,7 @@ where
     /// use `get_with()` instead.
     pub fn get<Q>(&self, key: &Q) -> Option<V>
     where
-        K: Borrow<Q> + Clone,
+        K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
         let idx = self.segment_index(key);
@@ -316,7 +316,7 @@ where
     /// as it avoids cloning.
     pub fn get_with<Q, F, R>(&self, key: &Q, f: F) -> Option<R>
     where
-        K: Borrow<Q> + Clone,
+        K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
         F: FnOnce(&V) -> R,
     {
@@ -352,7 +352,7 @@ where
     /// Returns `true` if the cache contains the specified key.
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
-        K: Borrow<Q> + Clone,
+        K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
         let idx = self.segment_index(key);

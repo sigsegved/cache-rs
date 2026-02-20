@@ -319,13 +319,9 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
     unsafe fn update_priority_by_node(
         &mut self,
         node: *mut ListEntry<CacheEntry<K, V, GdsfMeta>>,
-    ) -> *mut ListEntry<CacheEntry<K, V, GdsfMeta>>
-    where
-        K: Clone + Hash + Eq,
-    {
+    ) -> *mut ListEntry<CacheEntry<K, V, GdsfMeta>> {
         // SAFETY: node is guaranteed valid by caller's contract
         let entry = (*node).get_value_mut();
-        let key_cloned = entry.key.clone();
         let size = entry.size;
         let meta = entry.metadata_mut().unwrap();
         let old_priority = meta.priority;
@@ -374,14 +370,14 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
             .unwrap()
             .attach_from_other_list(entry_ptr);
 
-        // Update map with new node pointer
-        self.map.insert(key_cloned, entry_ptr);
+        // No map update needed: Box::into_raw(Box::from_raw(node)) == node, so
+        // entry_ptr == node and the map already holds the correct pointer.
         entry_ptr
     }
 
     pub(crate) fn get<Q>(&mut self, key: &Q) -> Option<V>
     where
-        K: Borrow<Q> + Clone,
+        K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
         if let Some(&node) = self.map.get(key) {
@@ -405,7 +401,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
 
     pub(crate) fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
-        K: Borrow<Q> + Clone,
+        K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
         if let Some(&node) = self.map.get(key) {
@@ -675,7 +671,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfCache<K, V, S> {
     #[inline]
     pub fn get<Q>(&mut self, key: &Q) -> Option<V>
     where
-        K: Borrow<Q> + Clone,
+        K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
         self.segment.get(key)
@@ -684,7 +680,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfCache<K, V, S> {
     #[inline]
     pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
-        K: Borrow<Q> + Clone,
+        K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
         self.segment.get_mut(key)
