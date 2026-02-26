@@ -126,7 +126,7 @@
 extern crate alloc;
 
 use crate::metrics::CacheMetrics;
-use crate::slru::SlruSegment;
+use crate::slru::SlruInner;
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -144,7 +144,7 @@ use std::collections::hash_map::RandomState as DefaultHashBuilder;
 
 /// A thread-safe SLRU cache with segmented storage for high concurrency.
 pub struct ConcurrentSlruCache<K, V, S = DefaultHashBuilder> {
-    segments: Box<[Mutex<SlruSegment<K, V, S>>]>,
+    segments: Box<[Mutex<SlruInner<K, V, S>>]>,
     hash_builder: S,
 }
 
@@ -184,7 +184,7 @@ where
                     protected_capacity: segment_protected_cap,
                     max_size: segment_max_size,
                 };
-                Mutex::new(SlruSegment::init(segment_config, hash_builder.clone()))
+                Mutex::new(SlruInner::init(segment_config, hash_builder.clone()))
             })
             .collect();
 
@@ -313,6 +313,91 @@ where
     /// Returns the maximum content size the cache can hold across all segments.
     pub fn max_size(&self) -> u64 {
         self.segments.iter().map(|s| s.lock().max_size()).sum()
+    }
+
+    /// Checks if the cache contains a key without promoting it.
+    ///
+    /// Unlike [`contains_key()`](Self::contains_key), this method does **not** update
+    /// the entry's recency or promote it between segments. Use this for pure existence
+    /// checks without affecting cache behavior.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// if cache.contains(&"key".to_string()) {
+    ///     println!("Key exists!");
+    /// }
+    /// ```
+    pub fn contains<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Hash + Eq,
+    {
+        let idx = self.segment_index(key);
+        let segment = self.segments[idx].lock();
+        segment.contains(key)
+    }
+
+    /// Returns a clone of the value without promoting or updating access metadata.
+    ///
+    /// Unlike [`get()`](Self::get), this does NOT promote the entry from
+    /// probationary to protected. Returns a cloned value because the internal
+    /// lock cannot be held across the return boundary.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let value = cache.peek(&"key".to_string());
+    /// ```
+    pub fn peek<Q>(&self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Hash + Eq,
+        V: Clone,
+    {
+        let idx = self.segment_index(key);
+        let segment = self.segments[idx].lock();
+        segment.peek(key).cloned()
+    }
+
+    /// Removes and returns the eviction candidate from the cache.
+    ///
+    /// Pops the eviction candidate (LRU from probationary segment) from
+    /// the first non-empty segment. Since SLRU entries do not carry
+    /// timestamps, cross-segment ordering is approximate.
+    ///
+    /// # Returns
+    ///
+    /// - `Some((key, value))` if the cache was not empty
+    /// - `None` if the cache is empty
+    pub fn pop(&self) -> Option<(K, V)> {
+        for segment in self.segments.iter() {
+            let mut guard = segment.lock();
+            if let Some(result) = guard.pop() {
+                return Some(result);
+            }
+        }
+        None
+    }
+
+    /// Removes and returns the most recently used entry from the cache.
+    ///
+    /// Pops the MRU entry (from protected segment first) from the first
+    /// non-empty segment. Since SLRU entries do not carry timestamps,
+    /// cross-segment ordering is approximate.
+    ///
+    /// # Returns
+    ///
+    /// - `Some((key, value))` if the cache was not empty
+    /// - `None` if the cache is empty
+    pub fn pop_r(&self) -> Option<(K, V)> {
+        for segment in self.segments.iter() {
+            let mut guard = segment.lock();
+            if let Some(result) = guard.pop_r() {
+                return Some(result);
+            }
+        }
+        None
     }
 }
 
@@ -588,5 +673,95 @@ mod tests {
         assert_eq!(cache.get(key_str), Some(42));
         assert!(cache.contains_key(key_str));
         assert_eq!(cache.remove(key_str), Some(42));
+    }
+
+    #[test]
+    fn test_contains_non_promoting() {
+        let cache: ConcurrentSlruCache<String, i32> =
+            ConcurrentSlruCache::init(make_config(100, 50, 16), None);
+
+        cache.put("a".to_string(), 1);
+        cache.put("b".to_string(), 2);
+
+        // contains() should check without promoting
+        assert!(cache.contains(&"a".to_string()));
+        assert!(cache.contains(&"b".to_string()));
+        assert!(!cache.contains(&"c".to_string()));
+    }
+
+    #[test]
+    fn test_pop_returns_entry() {
+        let cache: ConcurrentSlruCache<String, i32> =
+            ConcurrentSlruCache::init(make_config(100, 50, 16), None);
+
+        cache.put("a".to_string(), 1);
+        cache.put("b".to_string(), 2);
+
+        let initial_len = cache.len();
+
+        // Pop should return Some entry
+        let result = cache.pop();
+        assert!(result.is_some());
+
+        let (key, _value) = result.unwrap();
+        assert!(key == "a" || key == "b"); // Could be either due to segmentation
+
+        // Length should decrease
+        assert_eq!(cache.len(), initial_len - 1);
+    }
+
+    #[test]
+    fn test_pop_empty_cache() {
+        let cache: ConcurrentSlruCache<String, i32> =
+            ConcurrentSlruCache::init(make_config(100, 50, 16), None);
+
+        assert!(cache.pop().is_none());
+    }
+
+    #[test]
+    fn test_pop_r_returns_entry() {
+        let cache: ConcurrentSlruCache<String, i32> =
+            ConcurrentSlruCache::init(make_config(100, 50, 16), None);
+
+        cache.put("a".to_string(), 1);
+        cache.put("b".to_string(), 2);
+
+        let initial_len = cache.len();
+
+        // Pop_r should return Some entry
+        let result = cache.pop_r();
+        assert!(result.is_some());
+
+        let (key, _value) = result.unwrap();
+        assert!(key == "a" || key == "b"); // Could be either due to segmentation
+
+        // Length should decrease
+        assert_eq!(cache.len(), initial_len - 1);
+    }
+
+    #[test]
+    fn test_pop_r_empty_cache() {
+        let cache: ConcurrentSlruCache<String, i32> =
+            ConcurrentSlruCache::init(make_config(100, 50, 16), None);
+
+        assert!(cache.pop_r().is_none());
+    }
+
+    #[test]
+    fn test_pop_all_entries() {
+        let cache: ConcurrentSlruCache<String, i32> =
+            ConcurrentSlruCache::init(make_config(100, 50, 16), None);
+
+        cache.put("a".to_string(), 1);
+        cache.put("b".to_string(), 2);
+        cache.put("c".to_string(), 3);
+
+        let mut count = 0;
+        while cache.pop().is_some() {
+            count += 1;
+        }
+
+        assert_eq!(count, 3);
+        assert!(cache.is_empty());
     }
 }

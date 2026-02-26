@@ -65,6 +65,21 @@ impl<T> ListEntry<T> {
     pub unsafe fn get_value_mut(&mut self) -> &mut T {
         self.val.assume_init_mut()
     }
+
+    /// Takes ownership of the stored value by reading it out of the `MaybeUninit`.
+    ///
+    /// After calling this, the entry's value is logically uninitialized.
+    /// The caller owns the returned value and is responsible for dropping it.
+    /// The `ListEntry` can then be deallocated (e.g., via `Box::from_raw`)
+    /// without double-freeing, since `MaybeUninit` does not run `Drop` on its contents.
+    ///
+    /// # Safety
+    ///
+    /// - The value must be initialized (this must not be a sigil/sentinel node).
+    /// - The value must not be read or taken again after this call.
+    pub unsafe fn take_value(&mut self) -> T {
+        self.val.assume_init_read()
+    }
 }
 
 /// A doubly linked list implementation with fixed capacity.
@@ -449,6 +464,44 @@ impl<T> List<T> {
         match capturing {
             true => (Some(old_val), true),
             false => (None, true),
+        }
+    }
+
+    /// Returns a reference to the last (tail) value without removing it.
+    ///
+    /// Returns `None` if the list is empty.
+    pub fn peek_last(&self) -> Option<&T> {
+        if self.is_empty() {
+            return None;
+        }
+        // SAFETY: tail is valid, and we know the list is non-empty so tail.prev
+        // points to a real entry (not the head sentinel).
+        unsafe {
+            let prev = (*self.tail).prev;
+            if prev == self.head {
+                None
+            } else {
+                Some((*prev).get_value())
+            }
+        }
+    }
+
+    /// Returns a reference to the first (head) value without removing it.
+    ///
+    /// Returns `None` if the list is empty.
+    pub fn peek_first(&self) -> Option<&T> {
+        if self.is_empty() {
+            return None;
+        }
+        // SAFETY: head is valid, and we know the list is non-empty so head.next
+        // points to a real entry (not the tail sentinel).
+        unsafe {
+            let next = (*self.head).next;
+            if next == self.tail {
+                None
+            } else {
+                Some((*next).get_value())
+            }
         }
     }
 

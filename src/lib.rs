@@ -245,7 +245,7 @@
 //! - [`gdsf`]: Greedy Dual Size Frequency cache implementation
 //! - [`config`]: Configuration structures for all cache algorithms
 //! - [`metrics`]: Metrics collection for cache performance monitoring
-//! - [`concurrent`]: Thread-safe concurrent cache implementations (requires `concurrent` feature)
+//! - `concurrent`: Thread-safe concurrent cache implementations (requires `concurrent` feature)
 
 #![no_std]
 
@@ -264,7 +264,6 @@ pub mod entry;
 /// Provides metadata structures for each cache algorithm:
 /// - `LfuMeta`: Frequency counter for LFU
 /// - `LfudaMeta`: Frequency for LFUDA (age is cache-global)
-/// - `SlruMeta`: Segment location for SLRU
 /// - `GdsfMeta`: Frequency and priority for GDSF
 pub mod meta;
 
@@ -337,11 +336,11 @@ pub use lfuda::LfudaCache;
 pub use lru::LruCache;
 pub use slru::SlruCache;
 
-// Re-export entry type
-pub use entry::CacheEntry;
+// Re-export entry types
+pub use entry::{CacheEntry, CacheMetadata};
 
-// Re-export metadata types
-pub use meta::{GdsfMeta, LfuMeta, LfudaMeta, SlruMeta, SlruSegment};
+// Re-export metadata types (also available directly from algorithm modules)
+pub use meta::{GdsfMeta, LfuMeta, LfudaMeta};
 
 #[cfg(feature = "concurrent")]
 pub use concurrent::{
