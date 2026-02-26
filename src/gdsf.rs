@@ -885,6 +885,18 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfCache<K, V, S> {
         self.segment.contains_key(key)
     }
 
+    /// Inserts a key-value pair with explicit size into the cache.
+    ///
+    /// GDSF is inherently size-aware: the `size` parameter affects priority
+    /// calculation (`priority = global_age + frequency / size`), favoring
+    /// small, frequently-accessed items.
+    ///
+    /// # Multi-eviction behavior
+    ///
+    /// When the new entry's size would exceed `max_size`, multiple existing
+    /// entries may be evicted to free enough space. Only the value of the
+    /// previously-associated entry is returned (not evicted entries).
+    /// All evicted entries are counted in the `evictions` metric.
     #[inline]
     pub fn put(&mut self, key: K, val: V, size: u64) -> Option<V>
     where

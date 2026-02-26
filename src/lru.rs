@@ -665,6 +665,14 @@ impl<K: Hash + Eq + Clone, V: Clone, S: BuildHasher> LruCache<K, V, S> {
     /// - `Some((old_key, old_value))` if the key existed or an entry was evicted
     /// - `None` if this was a new insertion with available capacity
     ///
+    /// # Multi-eviction behavior
+    ///
+    /// When using size-based caching (`max_size` is not `u64::MAX`), inserting
+    /// a large entry may cause **multiple** smaller entries to be evicted to
+    /// free enough space. In this case, only the **last** evicted entry is
+    /// returned. For count-based caches (default `max_size = u64::MAX`), at
+    /// most one entry is evicted per insertion.
+    ///
     /// # Example
     ///
     /// ```
@@ -692,6 +700,13 @@ impl<K: Hash + Eq + Clone, V: Clone, S: BuildHasher> LruCache<K, V, S> {
     ///
     /// Use this for size-aware caching where you want to track the actual
     /// memory or storage footprint of cached items.
+    ///
+    /// # Multi-eviction behavior
+    ///
+    /// When the new entry's size would exceed `max_size`, multiple existing
+    /// entries may be evicted to free enough space. Only the **last** evicted
+    /// entry is returned. All evicted entries are counted in the `evictions`
+    /// metric.
     ///
     /// # Arguments
     ///

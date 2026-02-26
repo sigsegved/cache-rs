@@ -843,6 +843,13 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
     /// the same frequency is evicted.
     ///
     /// New items are inserted with a frequency of 1.
+    ///
+    /// # Multi-eviction behavior
+    ///
+    /// When using size-based caching (`max_size` is not `u64::MAX`), inserting
+    /// a large entry may cause **multiple** smaller entries to be evicted to
+    /// free enough space. In this case, only the **last** evicted entry is
+    /// returned. For count-based caches, at most one entry is evicted.
     #[inline]
     pub fn put(&mut self, key: K, value: V) -> Option<(K, V)>
     where
@@ -855,6 +862,13 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
     ///
     /// The `size` parameter specifies how much of `max_size` this entry consumes.
     /// Use `size=1` for count-based caches.
+    ///
+    /// # Multi-eviction behavior
+    ///
+    /// When the new entry's size would exceed `max_size`, multiple existing
+    /// entries may be evicted to free enough space. Only the **last** evicted
+    /// entry is returned. All evicted entries are counted in the `evictions`
+    /// metric.
     #[inline]
     pub fn put_with_size(&mut self, key: K, value: V, size: u64) -> Option<(K, V)>
     where
