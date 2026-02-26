@@ -619,7 +619,12 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
 
     fn evict_one(&mut self) {
         // Reuse pop_eviction_candidate and drop the returned entry
-        let _ = self.pop_eviction_candidate();
+        if self.pop_eviction_candidate().is_some() {
+            // Record eviction only when called from the internal eviction path
+            // (put_with_size making room). pop_eviction_candidate itself only
+            // records removal to avoid double-counting when users call pop().
+            self.metrics.core.evictions += 1;
+        }
     }
 
     pub(crate) fn pop<Q>(&mut self, key: &Q) -> Option<V>
@@ -645,6 +650,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
                 let entry_ptr = Box::into_raw(boxed_entry);
                 let cache_entry = (*entry_ptr).take_value();
                 self.current_size = self.current_size.saturating_sub(removed_size);
+                self.metrics.core.record_removal(removed_size);
                 let _ = Box::from_raw(entry_ptr);
 
                 Some(cache_entry.value)
@@ -695,6 +701,10 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
     ///
     /// Also updates the global age to the evicted item's priority (GDSF aging).
     ///
+    /// This method does **not** increment the eviction counter in metrics.
+    /// Eviction metrics are only recorded when the cache internally evicts
+    /// entries to make room during `put()`/`put_with_size()` operations.
+    ///
     /// Returns `None` if the cache is empty.
     pub(crate) fn pop_eviction_candidate(&mut self) -> Option<(K, V)> {
         if self.is_empty() {
@@ -715,7 +725,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
 
             // Update global age to the evicted item's priority (GDSF aging)
             self.global_age = priority_to_update;
-            self.metrics.core.record_eviction(evicted_size);
+            self.metrics.core.record_removal(evicted_size);
             self.metrics.record_size_based_eviction();
             self.metrics.record_aging_event(priority_to_update);
 
@@ -737,6 +747,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
     /// This is the opposite of `pop_eviction_candidate()` - instead of returning
     /// the lowest priority item, it returns the highest priority item.
     ///
+    /// This method does **not** increment the eviction counter in metrics.
+    ///
     /// Returns `None` if the cache is empty.
     pub(crate) fn pop_highest_priority(&mut self) -> Option<(K, V)> {
         if self.is_empty() {
@@ -756,7 +768,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
             let cache_entry = (*entry_ptr).take_value();
             self.map.remove(&cache_entry.key);
             self.current_size = self.current_size.saturating_sub(evicted_size);
-            self.metrics.core.record_eviction(evicted_size);
+            self.metrics.core.record_removal(evicted_size);
 
             // Remove empty priority list
             if list.is_empty() {

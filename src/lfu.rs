@@ -500,6 +500,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
             || (self.current_size + size > self.config.max_size && !self.map.is_empty())
         {
             if let Some(entry) = self.pop() {
+                self.metrics.core.evictions += 1;
                 evicted = Some(entry);
             } else {
                 break;
@@ -561,6 +562,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
             let _ = Box::from_raw(entry_ptr);
 
             self.current_size = self.current_size.saturating_sub(removed_size);
+            self.metrics.core.record_removal(removed_size);
 
             // Remove empty frequency list and update min_frequency if necessary
             if self.frequency_lists.get(&frequency).unwrap().is_empty() {
@@ -623,6 +625,10 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
     /// Returns the entry with the lowest frequency. In case of a tie,
     /// returns the least recently used entry among those with the same frequency.
     ///
+    /// This method does **not** increment the eviction counter in metrics.
+    /// Eviction metrics are only recorded when the cache internally evicts
+    /// entries to make room during `put()`/`put_with_size()` operations.
+    ///
     /// Returns `None` if the cache is empty.
     pub(crate) fn pop(&mut self) -> Option<(K, V)> {
         if self.is_empty() {
@@ -641,7 +647,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
             let cache_entry = (*entry_ptr).take_value();
             self.map.remove(&cache_entry.key);
             self.current_size = self.current_size.saturating_sub(evicted_size);
-            self.metrics.core.record_eviction(evicted_size);
+            self.metrics.core.record_removal(evicted_size);
 
             // Update min_frequency if the list is now empty
             if is_list_empty {
@@ -658,6 +664,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
     ///
     /// This is the opposite of `pop()` - instead of returning the lowest frequency
     /// item, it returns the highest frequency item.
+    ///
+    /// This method does **not** increment the eviction counter in metrics.
     ///
     /// Returns `None` if the cache is empty.
     pub(crate) fn pop_r(&mut self) -> Option<(K, V)> {
@@ -679,7 +687,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
             let cache_entry = (*entry_ptr).take_value();
             self.map.remove(&cache_entry.key);
             self.current_size = self.current_size.saturating_sub(evicted_size);
-            self.metrics.core.record_eviction(evicted_size);
+            self.metrics.core.record_removal(evicted_size);
 
             // Remove empty frequency list
             if is_list_empty {

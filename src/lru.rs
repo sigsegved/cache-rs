@@ -337,6 +337,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
             || (self.current_size + size > self.config.max_size && !self.map.is_empty())
         {
             if let Some(entry) = self.pop() {
+                self.metrics.core.evictions += 1;
                 evicted = Some(entry);
             } else {
                 break;
@@ -369,7 +370,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
                 let cache_entry = (*entry_ptr).take_value();
                 let _ = Box::from_raw(entry_ptr);
                 self.current_size = self.current_size.saturating_sub(object_size);
-                self.metrics.core.record_eviction(object_size);
+                self.metrics.core.record_removal(object_size);
                 Some(cache_entry.value)
             } else {
                 None
@@ -416,6 +417,10 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
 
     /// Removes and returns the eviction candidate (least recently used entry).
     ///
+    /// This method does **not** increment the eviction counter in metrics.
+    /// Eviction metrics are only recorded when the cache internally evicts
+    /// entries to make room during `put()`/`put_with_size()` operations.
+    ///
     /// Returns `None` if the cache is empty.
     pub(crate) fn pop(&mut self) -> Option<(K, V)> {
         let old_entry = self.list.remove_last()?;
@@ -428,7 +433,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
             let cache_entry = (*entry_ptr).take_value();
             self.map.remove(&cache_entry.key);
             self.current_size = self.current_size.saturating_sub(evicted_size);
-            self.metrics.core.record_eviction(evicted_size);
+            self.metrics.core.record_removal(evicted_size);
             let _ = Box::from_raw(entry_ptr);
             Some((cache_entry.key, cache_entry.value))
         }
@@ -438,6 +443,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
     ///
     /// This is the opposite of `pop()` - instead of returning the eviction candidate,
     /// it returns the most recently accessed or inserted item.
+    ///
+    /// This method does **not** increment the eviction counter in metrics.
     ///
     /// Returns `None` if the cache is empty.
     pub(crate) fn pop_r(&mut self) -> Option<(K, V)> {
@@ -451,7 +458,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
             let cache_entry = (*entry_ptr).take_value();
             self.map.remove(&cache_entry.key);
             self.current_size = self.current_size.saturating_sub(evicted_size);
-            self.metrics.core.record_eviction(evicted_size);
+            self.metrics.core.record_removal(evicted_size);
             let _ = Box::from_raw(entry_ptr);
             Some((cache_entry.key, cache_entry.value))
         }
@@ -1467,5 +1474,38 @@ mod tests {
         assert_eq!(cache.pop_r(), Some(("d", 4)));
         assert_eq!(cache.len(), 1);
         assert!(cache.contains(&"c"));
+    }
+
+    #[test]
+    fn test_pop_does_not_inflate_eviction_count() {
+        let mut cache = make_cache(3);
+        cache.put("a", 1);
+        cache.put("b", 2);
+        cache.put("c", 3);
+
+        // Manual pop should NOT count as eviction
+        assert_eq!(cache.pop(), Some(("a", 1)));
+        assert_eq!(cache.pop_r(), Some(("c", 3)));
+        assert_eq!(cache.segment.metrics().core.evictions, 0);
+
+        // Manual remove should NOT count as eviction
+        cache.remove(&"b");
+        assert_eq!(cache.segment.metrics().core.evictions, 0);
+    }
+
+    #[test]
+    fn test_put_eviction_increments_eviction_count() {
+        let mut cache = make_cache(2);
+        cache.put("a", 1);
+        cache.put("b", 2);
+        assert_eq!(cache.segment.metrics().core.evictions, 0);
+
+        // Inserting a 3rd item should evict one (capacity=2)
+        cache.put("c", 3);
+        assert_eq!(cache.segment.metrics().core.evictions, 1);
+
+        // Another insert should evict again
+        cache.put("d", 4);
+        assert_eq!(cache.segment.metrics().core.evictions, 2);
     }
 }

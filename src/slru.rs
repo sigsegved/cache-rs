@@ -554,6 +554,7 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruInner<K, V, S> {
             || (self.current_size + size > self.config.max_size && !self.map.is_empty())
         {
             if let Some(entry) = self.pop() {
+                self.metrics.core.evictions += 1;
                 evicted = Some(entry);
             } else {
                 break;
@@ -589,6 +590,7 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruInner<K, V, S> {
                 let entry_ptr = Box::into_raw(boxed_entry);
                 let (_, value) = (*entry_ptr).take_value();
                 self.current_size = self.current_size.saturating_sub(removed_size);
+                self.metrics.record_probationary_removal(removed_size);
                 let _ = Box::from_raw(entry_ptr);
                 Some(value)
             },
@@ -599,6 +601,7 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruInner<K, V, S> {
                 let entry_ptr = Box::into_raw(boxed_entry);
                 let (_, value) = (*entry_ptr).take_value();
                 self.current_size = self.current_size.saturating_sub(removed_size);
+                self.metrics.record_protected_removal(removed_size);
                 let _ = Box::from_raw(entry_ptr);
                 Some(value)
             },
@@ -648,6 +651,10 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruInner<K, V, S> {
     /// For SLRU, the eviction candidate is the LRU entry from the probationary
     /// segment. If probationary is empty, falls back to the LRU entry from the
     /// protected segment.
+    ///
+    /// This method does **not** increment the eviction counter in metrics.
+    /// Eviction metrics are only recorded when the cache internally evicts
+    /// entries to make room during `put()`/`put_with_size()` operations.
     pub(crate) fn pop(&mut self) -> Option<(K, V)> {
         // Try probationary first (normal eviction target)
         if let Some(old_entry) = self.probationary.remove_last() {
@@ -659,7 +666,7 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruInner<K, V, S> {
                 let evicted_size = self.map.get(&key).map(|(_, _, sz)| *sz).unwrap_or(0);
                 self.map.remove(&key);
                 self.current_size = self.current_size.saturating_sub(evicted_size);
-                self.metrics.record_probationary_eviction(evicted_size);
+                self.metrics.record_probationary_removal(evicted_size);
                 let _ = Box::from_raw(entry_ptr);
                 return Some((key, value));
             }
@@ -675,7 +682,7 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruInner<K, V, S> {
                 let evicted_size = self.map.get(&key).map(|(_, _, sz)| *sz).unwrap_or(0);
                 self.map.remove(&key);
                 self.current_size = self.current_size.saturating_sub(evicted_size);
-                self.metrics.record_protected_eviction(evicted_size);
+                self.metrics.record_protected_removal(evicted_size);
                 let _ = Box::from_raw(entry_ptr);
                 return Some((key, value));
             }
@@ -688,6 +695,8 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruInner<K, V, S> {
     ///
     /// For SLRU, returns the MRU entry from the protected segment first.
     /// If protected is empty, falls back to the probationary segment.
+    ///
+    /// This method does **not** increment the eviction counter in metrics.
     pub(crate) fn pop_r(&mut self) -> Option<(K, V)> {
         // Try protected first (highest priority entries)
         if let Some(entry) = self.protected.remove_first() {
@@ -699,7 +708,7 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruInner<K, V, S> {
                 let evicted_size = self.map.get(&key).map(|(_, _, sz)| *sz).unwrap_or(0);
                 self.map.remove(&key);
                 self.current_size = self.current_size.saturating_sub(evicted_size);
-                self.metrics.record_protected_eviction(evicted_size);
+                self.metrics.record_protected_removal(evicted_size);
                 let _ = Box::from_raw(entry_ptr);
                 return Some((key, value));
             }
@@ -715,7 +724,7 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruInner<K, V, S> {
                 let evicted_size = self.map.get(&key).map(|(_, _, sz)| *sz).unwrap_or(0);
                 self.map.remove(&key);
                 self.current_size = self.current_size.saturating_sub(evicted_size);
-                self.metrics.record_probationary_eviction(evicted_size);
+                self.metrics.record_probationary_removal(evicted_size);
                 let _ = Box::from_raw(entry_ptr);
                 return Some((key, value));
             }
