@@ -643,14 +643,13 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
         unsafe {
             // SAFETY: node comes from our map; take_value moves the value out
             // and Box::from_raw frees memory (MaybeUninit won't double-drop).
-            let entry = (*node).get_value();
-            let meta = &entry.metadata.algorithm;
-            let priority = meta.priority();
-            let removed_size = entry.metadata.size;
+            // Read priority before removal — needed to find the correct priority list
+            let priority = (*node).get_value().metadata.algorithm.priority();
 
             let boxed_entry = self.priority_lists.get_mut(&priority)?.remove(node)?;
             let entry_ptr = Box::into_raw(boxed_entry);
             let cache_entry = (*entry_ptr).take_value();
+            let removed_size = cache_entry.metadata.size;
             let _ = Box::from_raw(entry_ptr);
 
             self.current_size = self.current_size.saturating_sub(removed_size);
@@ -765,9 +764,9 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
             // SAFETY: take_value moves the CacheEntry out by value.
             // Box::from_raw frees memory (MaybeUninit won't double-drop).
             let entry_ptr = Box::into_raw(old_entry);
-            let evicted_size = (*entry_ptr).get_value().metadata.size;
-            let evicted_priority = (*entry_ptr).get_value().metadata.algorithm.priority();
             let cache_entry = (*entry_ptr).take_value();
+            let evicted_size = cache_entry.metadata.size;
+            let evicted_priority = cache_entry.metadata.algorithm.priority();
 
             // Update global age to the evicted item's priority (LFUDA aging)
             self.global_age = evicted_priority;
@@ -816,8 +815,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
             // SAFETY: take_value moves the CacheEntry out by value.
             // Box::from_raw frees memory (MaybeUninit won't double-drop).
             let entry_ptr = Box::into_raw(entry);
-            let evicted_size = (*entry_ptr).get_value().metadata.size;
             let cache_entry = (*entry_ptr).take_value();
+            let evicted_size = cache_entry.metadata.size;
             self.map.remove(&cache_entry.key);
             self.current_size = self.current_size.saturating_sub(evicted_size);
             self.metrics.core.record_removal(evicted_size);

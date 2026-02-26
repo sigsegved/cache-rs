@@ -635,9 +635,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
         if let Some(node) = self.map.remove(key) {
             unsafe {
                 // SAFETY: node comes from our map
-                let entry = (*node).get_value();
-                let removed_size = entry.metadata.size;
-                let priority = entry.metadata.algorithm.priority;
+                // Read priority before removal — needed to find the correct priority list
+                let priority = (*node).get_value().metadata.algorithm.priority;
                 let priority_key = (priority * 1000.0) as u64;
 
                 let list = self.priority_lists.get_mut(&priority_key).unwrap();
@@ -649,6 +648,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
 
                 let entry_ptr = Box::into_raw(boxed_entry);
                 let cache_entry = (*entry_ptr).take_value();
+                let removed_size = cache_entry.metadata.size;
                 self.current_size = self.current_size.saturating_sub(removed_size);
                 self.metrics.core.record_removal(removed_size);
                 let _ = Box::from_raw(entry_ptr);
@@ -719,9 +719,9 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
             // SAFETY: take_value moves the CacheEntry out by value.
             // Box::from_raw frees memory (MaybeUninit won't double-drop).
             let entry_ptr = Box::into_raw(entry);
-            let evicted_size = (*entry_ptr).get_value().metadata.size;
-            let priority_to_update = (*entry_ptr).get_value().metadata.algorithm.priority;
             let cache_entry = (*entry_ptr).take_value();
+            let evicted_size = cache_entry.metadata.size;
+            let priority_to_update = cache_entry.metadata.algorithm.priority;
 
             // Update global age to the evicted item's priority (GDSF aging)
             self.global_age = priority_to_update;
@@ -764,8 +764,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
             // SAFETY: take_value moves the CacheEntry out by value.
             // Box::from_raw frees memory (MaybeUninit won't double-drop).
             let entry_ptr = Box::into_raw(entry);
-            let evicted_size = (*entry_ptr).get_value().metadata.size;
             let cache_entry = (*entry_ptr).take_value();
+            let evicted_size = cache_entry.metadata.size;
             self.map.remove(&cache_entry.key);
             self.current_size = self.current_size.saturating_sub(evicted_size);
             self.metrics.core.record_removal(evicted_size);

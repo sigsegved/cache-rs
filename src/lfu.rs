@@ -552,13 +552,13 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
         unsafe {
             // SAFETY: node comes from our map; take_value moves the value out
             // and Box::from_raw frees memory (MaybeUninit won't double-drop).
-            let entry = (*node).get_value();
-            let frequency = entry.metadata.algorithm.frequency as usize;
-            let removed_size = entry.metadata.size;
+            // Read frequency before removal — needed to find the correct frequency list
+            let frequency = (*node).get_value().metadata.algorithm.frequency as usize;
 
             let boxed_entry = self.frequency_lists.get_mut(&frequency)?.remove(node)?;
             let entry_ptr = Box::into_raw(boxed_entry);
             let cache_entry = (*entry_ptr).take_value();
+            let removed_size = cache_entry.metadata.size;
             let _ = Box::from_raw(entry_ptr);
 
             self.current_size = self.current_size.saturating_sub(removed_size);
@@ -643,8 +643,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
             // SAFETY: take_value moves the CacheEntry out by value.
             // Box::from_raw frees memory (MaybeUninit won't double-drop).
             let entry_ptr = Box::into_raw(old_entry);
-            let evicted_size = (*entry_ptr).get_value().metadata.size;
             let cache_entry = (*entry_ptr).take_value();
+            let evicted_size = cache_entry.metadata.size;
             self.map.remove(&cache_entry.key);
             self.current_size = self.current_size.saturating_sub(evicted_size);
             self.metrics.core.record_removal(evicted_size);
@@ -683,8 +683,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
             // SAFETY: take_value moves the CacheEntry out by value.
             // Box::from_raw frees memory (MaybeUninit won't double-drop).
             let entry_ptr = Box::into_raw(entry);
-            let evicted_size = (*entry_ptr).get_value().metadata.size;
             let cache_entry = (*entry_ptr).take_value();
+            let evicted_size = cache_entry.metadata.size;
             self.map.remove(&cache_entry.key);
             self.current_size = self.current_size.saturating_sub(evicted_size);
             self.metrics.core.record_removal(evicted_size);
