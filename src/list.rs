@@ -537,9 +537,30 @@ impl<T> List<T> {
         }
     }
 
-    /// Clears the list, removing all entries.
+    /// Clears the list, removing all entries and properly dropping their values.
+    ///
+    /// This traverses the physical linked list from head to tail rather than relying
+    /// on `self.len`, ensuring all nodes are freed even if `len` is out of sync
+    /// (e.g., after internal `attach_last` calls that don't increment `len`).
     pub fn clear(&mut self) {
-        while self.remove_first().is_some() {}
+        // SAFETY: head is a valid sentinel pointer initialized in `construct`.
+        // We walk the physical list to avoid depending on `self.len` being accurate.
+        unsafe {
+            let mut current = (*self.head).next;
+            while !current.is_null() && current != self.tail {
+                let next = (*current).next;
+                // SAFETY: All non-sigil entries have initialized values. We must
+                // explicitly take the value to drop it, because MaybeUninit does
+                // not run Drop on its contents when the MaybeUninit itself is dropped.
+                let mut entry = Box::from_raw(current);
+                entry.take_value();
+                current = next;
+            }
+            // Re-link head directly to tail (empty list)
+            (*self.head).next = self.tail;
+            (*self.tail).prev = self.head;
+        }
+        self.len = 0;
     }
 }
 
