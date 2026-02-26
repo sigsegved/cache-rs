@@ -492,6 +492,21 @@ where
     /// `last_accessed` timestamp) and pops from that segment, ensuring
     /// the returned entry is the true LRU candidate across all segments.
     ///
+    /// # Concurrency Note
+    ///
+    /// This method uses a two-phase approach: first scanning all segments to find
+    /// the best candidate, then re-locking the winning segment to pop. Between
+    /// these phases, another thread may modify the cache (TOCTOU race). This is
+    /// inherent to the segmented design and means the returned entry may not be
+    /// the globally optimal candidate at the instant of removal. The method
+    /// remains safe — it will either return a valid entry or `None`.
+    ///
+    /// # Performance
+    ///
+    /// This method locks each segment sequentially during the scan phase
+    /// (O(segments) lock acquisitions), making it more expensive than
+    /// single-segment operations like `get()` or `put()`.
+    ///
     /// # Returns
     ///
     /// - `Some((key, value))` if the cache was not empty
@@ -524,6 +539,12 @@ where
     /// Finds the segment with the globally newest MRU candidate (highest
     /// `last_accessed` timestamp) and pops from that segment, ensuring
     /// the returned entry is the true MRU candidate across all segments.
+    ///
+    /// # Concurrency Note
+    ///
+    /// Uses the same two-phase scan approach as [`pop()`](Self::pop). See its
+    /// documentation for details on the inherent TOCTOU race and performance
+    /// characteristics.
     ///
     /// # Returns
     ///

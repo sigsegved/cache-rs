@@ -366,6 +366,14 @@ where
     /// the first non-empty segment. Since SLRU entries do not carry
     /// timestamps, cross-segment ordering is approximate.
     ///
+    /// # Concurrency Note
+    ///
+    /// Unlike other concurrent caches, SLRU uses a simpler sequential scan
+    /// (returning the first non-empty segment's candidate) rather than a
+    /// two-phase best-candidate search. This avoids the TOCTOU race but
+    /// means the returned entry is only the local eviction candidate from
+    /// whichever segment happens to be checked first.
+    ///
     /// # Returns
     ///
     /// - `Some((key, value))` if the cache was not empty
@@ -385,6 +393,11 @@ where
     /// Pops the MRU entry (from protected segment first) from the first
     /// non-empty segment. Since SLRU entries do not carry timestamps,
     /// cross-segment ordering is approximate.
+    ///
+    /// # Concurrency Note
+    ///
+    /// Uses the same sequential scan approach as [`pop()`](Self::pop). See its
+    /// documentation for details on cross-segment ordering limitations.
     ///
     /// # Returns
     ///
