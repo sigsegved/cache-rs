@@ -999,8 +999,17 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruCache<K, V, S> {
 
     /// Removes and returns the eviction candidate.
     ///
-    /// For SLRU, the eviction candidate is the LRU entry from the probationary
-    /// segment. If probationary is empty, falls back to the protected segment.
+    /// For SLRU, the eviction candidate is the LRU entry from the **probationary**
+    /// segment. If probationary is empty, falls back to the **protected** segment.
+    ///
+    /// # Eviction order rationale
+    ///
+    /// SLRU always evicts from probationary first because items in the protected
+    /// segment have proven their value by being accessed at least twice. This is
+    /// the same order used by internal eviction during `put()`, so `pop()`
+    /// returns the entry that would have been evicted next by the cache itself.
+    /// If you need the globally "least valuable" entry regardless of segment,
+    /// consider a different algorithm (e.g., LFU or LFUDA).
     ///
     /// # Example
     ///
@@ -1034,8 +1043,11 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruCache<K, V, S> {
 
     /// Removes and returns the most recently used entry (reverse of pop).
     ///
-    /// For SLRU, returns the MRU entry from the protected segment first.
-    /// If protected is empty, falls back to the probationary segment.
+    /// For SLRU, returns the MRU entry from the **protected** segment first.
+    /// If protected is empty, falls back to the **probationary** segment.
+    ///
+    /// This is the opposite of `pop()`: it removes the \"most valuable\" entry
+    /// first (protected MRU), then falls back to probationary.
     ///
     /// # Example
     ///
