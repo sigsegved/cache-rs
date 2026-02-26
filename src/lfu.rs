@@ -160,8 +160,50 @@ extern crate alloc;
 use crate::config::LfuCacheConfig;
 use crate::entry::CacheEntry;
 use crate::list::{List, ListEntry};
-use crate::meta::LfuMeta;
 use crate::metrics::{CacheMetrics, LfuCacheMetrics};
+
+/// Metadata for LFU (Least Frequently Used) cache entries.
+///
+/// LFU tracks access frequency to evict the least frequently accessed items.
+/// The frequency counter is incremented on each access.
+///
+/// # Examples
+///
+/// ```
+/// use cache_rs::lfu::LfuMeta;
+///
+/// let mut meta = LfuMeta::default();
+/// assert_eq!(meta.frequency, 0);
+///
+/// // Simulate access
+/// meta.frequency += 1;
+/// assert_eq!(meta.frequency, 1);
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LfuMeta {
+    /// Access frequency count.
+    /// Incremented each time the entry is accessed.
+    pub frequency: u64,
+}
+
+impl LfuMeta {
+    /// Creates a new LFU metadata with the specified initial frequency.
+    ///
+    /// # Arguments
+    ///
+    /// * `frequency` - Initial frequency value (usually 0 or 1)
+    #[inline]
+    pub fn new(frequency: u64) -> Self {
+        Self { frequency }
+    }
+
+    /// Increments the frequency counter and returns the new value.
+    #[inline]
+    pub fn increment(&mut self) -> u64 {
+        self.frequency += 1;
+        self.frequency
+    }
+}
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -336,9 +378,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
 
         // Update frequency in the entry's metadata
         let entry_ptr = Box::into_raw(boxed_entry);
-        if let Some(ref mut meta) = (*entry_ptr).get_value_mut().metadata {
-            meta.frequency = new_frequency as u64;
-        }
+        (*entry_ptr).get_value_mut().metadata.algorithm.frequency = new_frequency as u64;
 
         // Ensure the new frequency list exists
         let capacity = self.config.capacity;
@@ -371,12 +411,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
             unsafe {
                 // SAFETY: node comes from our map, so it's a valid pointer to an entry in our frequency list
                 let entry = (*node).get_value();
-                let frequency = entry
-                    .metadata
-                    .as_ref()
-                    .map(|m| m.frequency as usize)
-                    .unwrap_or(1);
-                let object_size = entry.size;
+                let frequency = entry.metadata.algorithm.frequency as usize;
+                let object_size = entry.metadata.size;
                 self.metrics.record_frequency_hit(object_size, frequency);
 
                 let new_node = self.update_frequency_by_node(node, frequency);
@@ -398,12 +434,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
             unsafe {
                 // SAFETY: node comes from our map, so it's a valid pointer to an entry in our frequency list
                 let entry = (*node).get_value();
-                let frequency = entry
-                    .metadata
-                    .as_ref()
-                    .map(|m| m.frequency as usize)
-                    .unwrap_or(1);
-                let object_size = entry.size;
+                let frequency = entry.metadata.algorithm.frequency as usize;
+                let object_size = entry.metadata.size;
                 self.metrics.record_frequency_hit(object_size, frequency);
 
                 let new_node = self.update_frequency_by_node(node, frequency);
@@ -434,15 +466,11 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
             unsafe {
                 // SAFETY: node comes from our map, so it's a valid pointer to an entry in our frequency list
                 let entry = (*node).get_value();
-                let frequency = entry
-                    .metadata
-                    .as_ref()
-                    .map(|m| m.frequency as usize)
-                    .unwrap_or(1);
-                let old_size = entry.size;
+                let frequency = entry.metadata.algorithm.frequency as usize;
+                let old_size = entry.metadata.size;
 
                 // Create new CacheEntry with same frequency
-                let new_entry = CacheEntry::with_metadata(
+                let new_entry = CacheEntry::with_algorithm_metadata(
                     key.clone(),
                     value,
                     size,
@@ -471,41 +499,10 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
         while self.len() >= self.config.capacity.get()
             || (self.current_size + size > self.config.max_size && !self.map.is_empty())
         {
-            if let Some(min_freq_list) = self.frequency_lists.get_mut(&self.min_frequency) {
-                if let Some(old_entry) = min_freq_list.remove_last() {
-                    unsafe {
-                        let entry_ptr = Box::into_raw(old_entry);
-                        let cache_entry = (*entry_ptr).get_value();
-                        let old_key = cache_entry.key.clone();
-                        let old_value = cache_entry.value.clone();
-                        let evicted_size = cache_entry.size;
-                        self.current_size = self.current_size.saturating_sub(evicted_size);
-                        self.metrics.core.record_eviction(evicted_size);
-                        self.map.remove(&old_key);
-                        evicted = Some((old_key, old_value));
-                        let _ = Box::from_raw(entry_ptr);
-                    }
-
-                    // Update min_frequency if the list is now empty
-                    if min_freq_list.is_empty() {
-                        let old_min = self.min_frequency;
-                        // Remove empty list to prevent accumulation (performance fix)
-                        self.frequency_lists.remove(&old_min);
-
-                        // Find the next non-empty frequency list
-                        // Since we remove empty lists, this is now O(1) amortized
-                        self.min_frequency = self
-                            .frequency_lists
-                            .keys()
-                            .copied()
-                            .find(|&f| f > old_min)
-                            .unwrap_or(1);
-                    }
-                } else {
-                    break; // No more items in this frequency list
-                }
+            if let Some(entry) = self.pop() {
+                evicted = Some(entry);
             } else {
-                break; // No frequency list at min_frequency
+                break;
             }
         }
 
@@ -520,8 +517,12 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
             .or_insert_with(|| List::new(capacity));
 
         // Create CacheEntry with LfuMeta
-        let cache_entry =
-            CacheEntry::with_metadata(key.clone(), value, size, LfuMeta::new(frequency as u64));
+        let cache_entry = CacheEntry::with_algorithm_metadata(
+            key.clone(),
+            value,
+            size,
+            LfuMeta::new(frequency as u64),
+        );
 
         if let Some(node) = self
             .frequency_lists
@@ -544,23 +545,20 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
     where
         K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
-        V: Clone,
     {
         let node = self.map.remove(key)?;
 
         unsafe {
-            // SAFETY: node comes from our map and was just removed
+            // SAFETY: node comes from our map; take_value moves the value out
+            // and Box::from_raw frees memory (MaybeUninit won't double-drop).
             let entry = (*node).get_value();
-            let frequency = entry
-                .metadata
-                .as_ref()
-                .map(|m| m.frequency as usize)
-                .unwrap_or(1);
-            let removed_size = entry.size;
-            let value = entry.value.clone();
+            let frequency = entry.metadata.algorithm.frequency as usize;
+            let removed_size = entry.metadata.size;
 
             let boxed_entry = self.frequency_lists.get_mut(&frequency)?.remove(node)?;
-            let _ = Box::from_raw(Box::into_raw(boxed_entry));
+            let entry_ptr = Box::into_raw(boxed_entry);
+            let cache_entry = (*entry_ptr).take_value();
+            let _ = Box::from_raw(entry_ptr);
 
             self.current_size = self.current_size.saturating_sub(removed_size);
 
@@ -572,7 +570,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
                 }
             }
 
-            Some(value)
+            Some(cache_entry.value)
         }
     }
 
@@ -588,6 +586,131 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
     #[inline]
     pub(crate) fn record_miss(&mut self, object_size: u64) {
         self.metrics.record_miss(object_size);
+    }
+
+    /// Check if key exists without updating its frequency.
+    ///
+    /// Unlike `get()`, this method does NOT update the entry's frequency
+    /// or access metadata.
+    #[inline]
+    pub(crate) fn contains<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Hash + Eq,
+    {
+        self.map.contains_key(key)
+    }
+
+    /// Returns a reference to the value without updating frequency or access metadata.
+    ///
+    /// Unlike `get()`, this method does NOT increment the entry's frequency
+    /// or change its position in any frequency list.
+    pub(crate) fn peek<Q>(&self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Hash + Eq,
+    {
+        let &node = self.map.get(key)?;
+        unsafe {
+            // SAFETY: node comes from our map, so it's a valid pointer
+            let entry = (*node).get_value();
+            Some(&entry.value)
+        }
+    }
+
+    /// Removes and returns the eviction candidate (lowest frequency entry).
+    ///
+    /// Returns the entry with the lowest frequency. In case of a tie,
+    /// returns the least recently used entry among those with the same frequency.
+    ///
+    /// Returns `None` if the cache is empty.
+    pub(crate) fn pop(&mut self) -> Option<(K, V)> {
+        if self.is_empty() {
+            return None;
+        }
+
+        let min_freq_list = self.frequency_lists.get_mut(&self.min_frequency)?;
+        let old_entry = min_freq_list.remove_last()?;
+        let is_list_empty = min_freq_list.is_empty();
+
+        unsafe {
+            // SAFETY: take_value moves the CacheEntry out by value.
+            // Box::from_raw frees memory (MaybeUninit won't double-drop).
+            let entry_ptr = Box::into_raw(old_entry);
+            let evicted_size = (*entry_ptr).get_value().metadata.size;
+            let cache_entry = (*entry_ptr).take_value();
+            self.map.remove(&cache_entry.key);
+            self.current_size = self.current_size.saturating_sub(evicted_size);
+            self.metrics.core.record_eviction(evicted_size);
+
+            // Update min_frequency if the list is now empty
+            if is_list_empty {
+                self.frequency_lists.remove(&self.min_frequency);
+                self.min_frequency = self.frequency_lists.keys().copied().next().unwrap_or(1);
+            }
+
+            let _ = Box::from_raw(entry_ptr);
+            Some((cache_entry.key, cache_entry.value))
+        }
+    }
+
+    /// Removes and returns the highest frequency entry (reverse of pop).
+    ///
+    /// This is the opposite of `pop()` - instead of returning the lowest frequency
+    /// item, it returns the highest frequency item.
+    ///
+    /// Returns `None` if the cache is empty.
+    pub(crate) fn pop_r(&mut self) -> Option<(K, V)> {
+        if self.is_empty() {
+            return None;
+        }
+
+        // Get the highest frequency (last key in BTreeMap)
+        let max_frequency = *self.frequency_lists.keys().next_back()?;
+        let max_freq_list = self.frequency_lists.get_mut(&max_frequency)?;
+        let entry = max_freq_list.remove_first()?;
+        let is_list_empty = max_freq_list.is_empty();
+
+        unsafe {
+            // SAFETY: take_value moves the CacheEntry out by value.
+            // Box::from_raw frees memory (MaybeUninit won't double-drop).
+            let entry_ptr = Box::into_raw(entry);
+            let evicted_size = (*entry_ptr).get_value().metadata.size;
+            let cache_entry = (*entry_ptr).take_value();
+            self.map.remove(&cache_entry.key);
+            self.current_size = self.current_size.saturating_sub(evicted_size);
+            self.metrics.core.record_eviction(evicted_size);
+
+            // Remove empty frequency list
+            if is_list_empty {
+                self.frequency_lists.remove(&max_frequency);
+            }
+
+            let _ = Box::from_raw(entry_ptr);
+            Some((cache_entry.key, cache_entry.value))
+        }
+    }
+
+    /// Returns the minimum frequency in this segment, or `None` if empty.
+    ///
+    /// Used by the concurrent cache to compare eviction priorities across segments.
+    pub(crate) fn peek_min_frequency(&self) -> Option<usize> {
+        if self.is_empty() {
+            None
+        } else {
+            Some(self.min_frequency)
+        }
+    }
+
+    /// Returns the maximum frequency in this segment, or `None` if empty.
+    ///
+    /// Used by the concurrent cache to compare priorities across segments for `pop_r()`.
+    pub(crate) fn peek_max_frequency(&self) -> Option<usize> {
+        if self.is_empty() {
+            None
+        } else {
+            self.frequency_lists.keys().next_back().copied()
+        }
     }
 }
 
@@ -757,6 +880,140 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
     #[inline]
     pub fn record_miss(&mut self, object_size: u64) {
         self.segment.record_miss(object_size);
+    }
+
+    /// Check if key exists without updating its frequency.
+    ///
+    /// Unlike `get()`, this method does NOT update the entry's frequency
+    /// or access metadata. Useful for existence checks without affecting
+    /// cache eviction order.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::LfuCache;
+    /// use cache_rs::config::LfuCacheConfig;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let config = LfuCacheConfig {
+    ///     capacity: NonZeroUsize::new(2).unwrap(),
+    ///     max_size: u64::MAX,
+    /// };
+    /// let mut cache = LfuCache::init(config, None);
+    /// cache.put("a", 1);
+    /// cache.put("b", 2);
+    ///
+    /// // contains() does NOT update frequency
+    /// assert!(cache.contains(&"a"));
+    /// ```
+    #[inline]
+    pub fn contains<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Hash + Eq,
+    {
+        self.segment.contains(key)
+    }
+
+    /// Returns a reference to the value without updating frequency or access metadata.
+    ///
+    /// Unlike [`get()`](Self::get), this does NOT increment the entry's frequency
+    /// or change its position in any frequency list.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::LfuCache;
+    /// use cache_rs::config::LfuCacheConfig;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let config = LfuCacheConfig {
+    ///     capacity: NonZeroUsize::new(3).unwrap(),
+    ///     max_size: u64::MAX,
+    /// };
+    /// let mut cache = LfuCache::init(config, None);
+    /// cache.put("a", 1);
+    ///
+    /// // peek does not change frequency
+    /// assert_eq!(cache.peek(&"a"), Some(&1));
+    /// assert_eq!(cache.peek(&"missing"), None);
+    /// ```
+    #[inline]
+    pub fn peek<Q>(&self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Hash + Eq,
+    {
+        self.segment.peek(key)
+    }
+
+    /// Removes and returns the eviction candidate (lowest frequency entry).
+    ///
+    /// For LFU, this is the entry with the lowest frequency. In case of a tie,
+    /// returns the least recently used entry among those with the same frequency.
+    ///
+    /// Returns `None` if the cache is empty.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::LfuCache;
+    /// use cache_rs::config::LfuCacheConfig;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let config = LfuCacheConfig {
+    ///     capacity: NonZeroUsize::new(3).unwrap(),
+    ///     max_size: u64::MAX,
+    /// };
+    /// let mut cache = LfuCache::init(config, None);
+    /// cache.put("a", 1);
+    /// cache.put("b", 2);
+    /// cache.get(&"b");  // Increase frequency of "b"
+    ///
+    /// // Pop the eviction candidate (lowest frequency item)
+    /// assert_eq!(cache.pop(), Some(("a", 1)));
+    /// ```
+    #[inline]
+    pub fn pop(&mut self) -> Option<(K, V)>
+    where
+        K: Clone,
+    {
+        self.segment.pop()
+    }
+
+    /// Removes and returns the highest frequency entry (reverse of pop).
+    ///
+    /// This is the opposite of `pop()` - instead of returning the lowest frequency
+    /// item, it returns the highest frequency item.
+    ///
+    /// Returns `None` if the cache is empty.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::LfuCache;
+    /// use cache_rs::config::LfuCacheConfig;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let config = LfuCacheConfig {
+    ///     capacity: NonZeroUsize::new(3).unwrap(),
+    ///     max_size: u64::MAX,
+    /// };
+    /// let mut cache = LfuCache::init(config, None);
+    /// cache.put("a", 1);
+    /// cache.put("b", 2);
+    /// cache.get(&"b");  // Increase frequency of "b"
+    /// cache.get(&"b");  // Increase frequency again
+    ///
+    /// // Pop the highest frequency item
+    /// assert_eq!(cache.pop_r(), Some(("b", 2)));
+    /// ```
+    #[inline]
+    pub fn pop_r(&mut self) -> Option<(K, V)>
+    where
+        K: Clone,
+    {
+        self.segment.pop_r()
     }
 }
 
@@ -1203,5 +1460,140 @@ mod tests {
             empty_lists,
             num_freq_lists
         );
+    }
+
+    #[test]
+    fn test_lfu_contains_non_promoting() {
+        let mut cache = make_cache(2);
+        cache.put("a", 1);
+        cache.put("b", 2);
+
+        // contains() should return true for existing keys
+        assert!(cache.contains(&"a"));
+        assert!(cache.contains(&"b"));
+        assert!(!cache.contains(&"c"));
+
+        // Access "b" to increase its frequency
+        cache.get(&"b");
+
+        // contains() should NOT increase frequency of "a"
+        // So "a" should still be the eviction candidate
+        assert!(cache.contains(&"a"));
+
+        // Adding "c" should evict "a" (lowest frequency), not "b"
+        cache.put("c", 3);
+        assert!(!cache.contains(&"a")); // "a" was evicted
+        assert!(cache.contains(&"b")); // "b" still exists
+        assert!(cache.contains(&"c")); // "c" was just added
+    }
+
+    #[test]
+    fn test_lfu_pop_returns_lowest_frequency() {
+        let mut cache = make_cache(3);
+        cache.put("a", 1);
+        cache.put("b", 2);
+        cache.put("c", 3);
+
+        // Access "b" and "c" to increase their frequencies
+        cache.get(&"b");
+        cache.get(&"c");
+        cache.get(&"c"); // "c" now has frequency 3
+
+        // pop() should return the lowest frequency item ("a" with frequency 1)
+        assert_eq!(cache.pop(), Some(("a", 1)));
+        assert_eq!(cache.len(), 2);
+
+        // Next lowest is "b" (frequency 2)
+        assert_eq!(cache.pop(), Some(("b", 2)));
+        assert_eq!(cache.len(), 1);
+
+        // Only "c" remains
+        assert_eq!(cache.pop(), Some(("c", 3)));
+        assert!(cache.is_empty());
+
+        // Empty cache returns None
+        assert_eq!(cache.pop(), None);
+    }
+
+    #[test]
+    fn test_lfu_pop_r_returns_highest_frequency() {
+        let mut cache = make_cache(3);
+        cache.put("a", 1);
+        cache.put("b", 2);
+        cache.put("c", 3);
+
+        // Access items to build different frequencies
+        cache.get(&"b"); // "b" frequency = 2
+        cache.get(&"c"); // "c" frequency = 2
+        cache.get(&"c"); // "c" frequency = 3
+
+        // pop_r() should return the highest frequency item ("c" with frequency 3)
+        assert_eq!(cache.pop_r(), Some(("c", 3)));
+        assert_eq!(cache.len(), 2);
+
+        // "a" (freq 1) and "b" (freq 2) remain. Highest is "b"
+        assert_eq!(cache.pop_r(), Some(("b", 2)));
+        assert_eq!(cache.len(), 1);
+
+        // Last item
+        assert_eq!(cache.pop_r(), Some(("a", 1)));
+        assert!(cache.is_empty());
+
+        // Empty cache returns None
+        assert_eq!(cache.pop_r(), None);
+    }
+
+    #[test]
+    fn test_lfu_pop_empty_cache() {
+        let mut cache: LfuCache<&str, i32> = make_cache(2);
+        assert_eq!(cache.pop(), None);
+        assert_eq!(cache.pop_r(), None);
+    }
+
+    #[test]
+    fn test_lfu_pop_single_element() {
+        let mut cache = make_cache(2);
+        cache.put("a", 1);
+
+        let popped = cache.pop();
+        assert_eq!(popped, Some(("a", 1)));
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn test_lfu_pop_r_single_element() {
+        let mut cache = make_cache(2);
+        cache.put("a", 1);
+
+        let popped = cache.pop_r();
+        assert_eq!(popped, Some(("a", 1)));
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn test_lfu_pop_interleaved_with_put() {
+        let mut cache = make_cache(3);
+        cache.put("a", 1);
+        cache.put("b", 2);
+
+        // Pop lowest frequency
+        assert_eq!(cache.pop(), Some(("a", 1)));
+
+        // Add new items
+        cache.put("c", 3);
+        cache.put("d", 4);
+
+        // "b", "c", "d" all have frequency 1 now. Pop order depends on recency
+        assert_eq!(cache.len(), 3);
+
+        // Access "d" to increase its frequency
+        cache.get(&"d");
+
+        // pop() should return one of the frequency-1 items ("b" or "c")
+        let first_pop = cache.pop().unwrap();
+        assert!(first_pop == ("b", 2) || first_pop == ("c", 3));
+
+        // pop_r() should return "d" (highest frequency)
+        assert_eq!(cache.pop_r(), Some(("d", 4)));
     }
 }

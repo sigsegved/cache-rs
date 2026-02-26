@@ -203,8 +203,66 @@ extern crate alloc;
 use crate::config::LfudaCacheConfig;
 use crate::entry::CacheEntry;
 use crate::list::{List, ListEntry};
-use crate::meta::LfudaMeta;
 use crate::metrics::{CacheMetrics, LfudaCacheMetrics};
+
+/// Metadata for LFUDA (LFU with Dynamic Aging) cache entries.
+///
+/// LFUDA is similar to LFU but addresses the "aging problem" where old
+/// frequently-used items can prevent new items from being cached.
+/// The age factor is maintained at the cache level, not per-entry.
+///
+/// # Algorithm
+///
+/// Entry priority = frequency + age_at_insertion
+/// - When an item is evicted, global_age = evicted_item.priority
+/// - New items start with current global_age as their insertion age
+///
+/// # Examples
+///
+/// ```
+/// use cache_rs::lfuda::LfudaMeta;
+///
+/// let meta = LfudaMeta::new(1, 10); // frequency=1, age_at_insertion=10
+/// assert_eq!(meta.frequency, 1);
+/// assert_eq!(meta.age_at_insertion, 10);
+/// assert_eq!(meta.priority(), 11);
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LfudaMeta {
+    /// Access frequency count.
+    pub frequency: u64,
+    /// Age value when this item was inserted (snapshot of global_age).
+    pub age_at_insertion: u64,
+}
+
+impl LfudaMeta {
+    /// Creates a new LFUDA metadata with the specified initial frequency and age.
+    ///
+    /// # Arguments
+    ///
+    /// * `frequency` - Initial frequency value (usually 1 for new items)
+    /// * `age_at_insertion` - The global_age at the time of insertion
+    #[inline]
+    pub fn new(frequency: u64, age_at_insertion: u64) -> Self {
+        Self {
+            frequency,
+            age_at_insertion,
+        }
+    }
+
+    /// Increments the frequency counter and returns the new value.
+    #[inline]
+    pub fn increment(&mut self) -> u64 {
+        self.frequency += 1;
+        self.frequency
+    }
+
+    /// Calculates the effective priority (frequency + age_at_insertion).
+    #[inline]
+    pub fn priority(&self) -> u64 {
+        self.frequency + self.age_at_insertion
+    }
+}
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -370,7 +428,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
         let node = *self.map.get(&key_cloned).unwrap();
 
         // Calculate new priority after incrementing frequency
-        let meta = (*node).get_value().metadata.as_ref().unwrap();
+        let meta = &(*node).get_value().metadata.algorithm;
         let new_priority = (meta.frequency + 1) + meta.age_at_insertion;
 
         // If priority hasn't changed, just move to front of the same list
@@ -400,9 +458,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
 
         // Update frequency in the entry's metadata
         let entry_ptr = Box::into_raw(boxed_entry);
-        if let Some(ref mut meta) = (*entry_ptr).get_value_mut().metadata {
-            meta.frequency += 1;
-        }
+        (*entry_ptr).get_value_mut().metadata.algorithm.frequency += 1;
 
         // Ensure the new priority list exists
         let capacity = self.config.capacity;
@@ -432,9 +488,9 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
             unsafe {
                 // SAFETY: node comes from our map
                 let entry = (*node).get_value();
-                let meta = entry.metadata.as_ref().unwrap();
+                let meta = &entry.metadata.algorithm;
                 let old_priority = meta.priority();
-                self.metrics.core.record_hit(entry.size);
+                self.metrics.core.record_hit(entry.metadata.size);
 
                 let new_node = self.update_priority_by_node(node, old_priority);
                 let new_entry = (*new_node).get_value();
@@ -455,9 +511,9 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
             unsafe {
                 // SAFETY: node comes from our map
                 let entry = (*node).get_value();
-                let meta = entry.metadata.as_ref().unwrap();
+                let meta = &entry.metadata.algorithm;
                 let old_priority = meta.priority();
-                self.metrics.core.record_hit(entry.size);
+                self.metrics.core.record_hit(entry.metadata.size);
 
                 let new_priority = (meta.frequency + 1) + meta.age_at_insertion;
                 self.metrics.record_frequency_increment(new_priority);
@@ -490,12 +546,12 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
             unsafe {
                 // SAFETY: node comes from our map
                 let entry = (*node).get_value();
-                let meta = entry.metadata.as_ref().unwrap();
+                let meta = &entry.metadata.algorithm;
                 let priority = meta.priority();
-                let old_size = entry.size;
+                let old_size = entry.metadata.size;
 
                 // Create new CacheEntry with same frequency and age
-                let new_entry = CacheEntry::with_metadata(
+                let new_entry = CacheEntry::with_algorithm_metadata(
                     key.clone(),
                     value,
                     size,
@@ -529,49 +585,10 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
         while self.len() >= self.config.capacity.get()
             || (self.current_size + size > self.config.max_size && !self.map.is_empty())
         {
-            if let Some(min_priority_list) = self.priority_lists.get_mut(&self.min_priority) {
-                if let Some(old_entry) = min_priority_list.remove_last() {
-                    unsafe {
-                        let entry_ptr = Box::into_raw(old_entry);
-                        let cache_entry = (*entry_ptr).get_value();
-                        let old_key = cache_entry.key.clone();
-                        let old_value = cache_entry.value.clone();
-                        let evicted_size = cache_entry.size;
-
-                        // Update global age to the evicted item's effective priority
-                        if let Some(ref meta) = cache_entry.metadata {
-                            self.global_age = meta.priority();
-                            self.metrics.record_aging_event(self.global_age);
-                        }
-
-                        self.current_size = self.current_size.saturating_sub(evicted_size);
-                        self.metrics.core.record_eviction(evicted_size);
-                        self.map.remove(&old_key);
-                        evicted = Some((old_key, old_value));
-                        let _ = Box::from_raw(entry_ptr);
-
-                        // Update min_priority if the list becomes empty
-                        if min_priority_list.is_empty() {
-                            self.min_priority = self
-                                .priority_lists
-                                .keys()
-                                .find(|&&p| {
-                                    p > self.min_priority
-                                        && !self
-                                            .priority_lists
-                                            .get(&p)
-                                            .map(|l| l.is_empty())
-                                            .unwrap_or(true)
-                                })
-                                .copied()
-                                .unwrap_or(priority);
-                        }
-                    }
-                } else {
-                    break; // No more items to evict
-                }
+            if let Some(entry) = self.pop() {
+                evicted = Some(entry);
             } else {
-                break; // No priority list at min_priority
+                break;
             }
         }
 
@@ -588,7 +605,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
             .or_insert_with(|| List::new(capacity));
 
         // Create CacheEntry with LfudaMeta
-        let cache_entry = CacheEntry::with_metadata(
+        let cache_entry = CacheEntry::with_algorithm_metadata(
             key.clone(),
             value,
             size,
@@ -619,20 +636,21 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
     where
         K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
-        V: Clone,
     {
         let node = self.map.remove(key)?;
 
         unsafe {
-            // SAFETY: node comes from our map and was just removed
+            // SAFETY: node comes from our map; take_value moves the value out
+            // and Box::from_raw frees memory (MaybeUninit won't double-drop).
             let entry = (*node).get_value();
-            let meta = entry.metadata.as_ref().unwrap();
+            let meta = &entry.metadata.algorithm;
             let priority = meta.priority();
-            let removed_size = entry.size;
-            let value = entry.value.clone();
+            let removed_size = entry.metadata.size;
 
             let boxed_entry = self.priority_lists.get_mut(&priority)?.remove(node)?;
-            let _ = Box::from_raw(Box::into_raw(boxed_entry));
+            let entry_ptr = Box::into_raw(boxed_entry);
+            let cache_entry = (*entry_ptr).take_value();
+            let _ = Box::from_raw(entry_ptr);
 
             self.current_size = self.current_size.saturating_sub(removed_size);
 
@@ -655,7 +673,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
                     .unwrap_or(self.global_age);
             }
 
-            Some(value)
+            Some(cache_entry.value)
         }
     }
 
@@ -666,6 +684,172 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
         self.global_age = 0;
         self.min_priority = 0;
         self.current_size = 0;
+    }
+
+    /// Check if key exists without updating its priority or access metadata.
+    ///
+    /// Unlike `get()`, this method does NOT update the entry's frequency
+    /// or access metadata.
+    #[inline]
+    pub(crate) fn contains<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Hash + Eq,
+    {
+        self.map.contains_key(key)
+    }
+
+    /// Returns a reference to the value without updating priority or access metadata.
+    ///
+    /// Unlike `get()`, this method does NOT increment the entry's frequency,
+    /// change its priority, or move it between priority lists.
+    pub(crate) fn peek<Q>(&self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Hash + Eq,
+    {
+        let &node = self.map.get(key)?;
+        unsafe {
+            // SAFETY: node comes from our map, so it's a valid pointer
+            let entry = (*node).get_value();
+            Some(&entry.value)
+        }
+    }
+
+    /// Removes and returns the eviction candidate (lowest priority entry).
+    ///
+    /// Also updates the global age to the evicted item's priority (LFUDA aging).
+    ///
+    /// Returns `None` if the cache is empty.
+    pub(crate) fn pop(&mut self) -> Option<(K, V)> {
+        if self.is_empty() {
+            return None;
+        }
+
+        // Find the actual minimum non-empty priority list.
+        // self.min_priority may be stale if remove() left empty lists behind.
+        let min_key = loop {
+            if let Some(min_priority_list) = self.priority_lists.get(&self.min_priority) {
+                if !min_priority_list.is_empty() {
+                    break self.min_priority;
+                }
+                // Clean up empty list and advance
+                let stale = self.min_priority;
+                self.priority_lists.remove(&stale);
+                self.min_priority = self
+                    .priority_lists
+                    .keys()
+                    .copied()
+                    .next()
+                    .unwrap_or(self.global_age);
+            } else {
+                // min_priority doesn't exist in the map, recalculate
+                self.min_priority = self
+                    .priority_lists
+                    .keys()
+                    .copied()
+                    .next()
+                    .unwrap_or(self.global_age);
+                // If there are still no lists, the cache is effectively empty
+                if self.priority_lists.is_empty() {
+                    return None;
+                }
+            }
+        };
+
+        let min_priority_list = self.priority_lists.get_mut(&min_key)?;
+        let old_entry = min_priority_list.remove_last()?;
+        let is_list_empty = min_priority_list.is_empty();
+
+        unsafe {
+            // SAFETY: take_value moves the CacheEntry out by value.
+            // Box::from_raw frees memory (MaybeUninit won't double-drop).
+            let entry_ptr = Box::into_raw(old_entry);
+            let evicted_size = (*entry_ptr).get_value().metadata.size;
+            let evicted_priority = (*entry_ptr).get_value().metadata.algorithm.priority();
+            let cache_entry = (*entry_ptr).take_value();
+
+            // Update global age to the evicted item's priority (LFUDA aging)
+            self.global_age = evicted_priority;
+            self.metrics.record_aging_event(self.global_age);
+
+            self.map.remove(&cache_entry.key);
+            self.current_size = self.current_size.saturating_sub(evicted_size);
+            self.metrics.core.record_eviction(evicted_size);
+
+            // Update min_priority if the list is now empty
+            if is_list_empty {
+                self.priority_lists.remove(&self.min_priority);
+                self.min_priority = self
+                    .priority_lists
+                    .keys()
+                    .copied()
+                    .next()
+                    .unwrap_or(self.global_age);
+            }
+
+            let _ = Box::from_raw(entry_ptr);
+            Some((cache_entry.key, cache_entry.value))
+        }
+    }
+
+    /// Removes and returns the highest priority entry (reverse of pop).
+    ///
+    /// This is the opposite of `pop()` - instead of returning the lowest priority
+    /// item, it returns the highest priority item.
+    ///
+    /// Returns `None` if the cache is empty.
+    pub(crate) fn pop_r(&mut self) -> Option<(K, V)> {
+        if self.is_empty() {
+            return None;
+        }
+
+        // Get the highest priority (last key in BTreeMap)
+        let max_priority = *self.priority_lists.keys().next_back()?;
+        let max_priority_list = self.priority_lists.get_mut(&max_priority)?;
+        let entry = max_priority_list.remove_first()?;
+        let is_list_empty = max_priority_list.is_empty();
+
+        unsafe {
+            // SAFETY: take_value moves the CacheEntry out by value.
+            // Box::from_raw frees memory (MaybeUninit won't double-drop).
+            let entry_ptr = Box::into_raw(entry);
+            let evicted_size = (*entry_ptr).get_value().metadata.size;
+            let cache_entry = (*entry_ptr).take_value();
+            self.map.remove(&cache_entry.key);
+            self.current_size = self.current_size.saturating_sub(evicted_size);
+            self.metrics.core.record_eviction(evicted_size);
+
+            // Remove empty priority list
+            if is_list_empty {
+                self.priority_lists.remove(&max_priority);
+            }
+
+            let _ = Box::from_raw(entry_ptr);
+            Some((cache_entry.key, cache_entry.value))
+        }
+    }
+
+    /// Returns the minimum priority in this segment, or `None` if empty.
+    ///
+    /// Used by the concurrent cache to compare eviction priorities across segments.
+    pub(crate) fn peek_min_priority(&self) -> Option<u64> {
+        if self.is_empty() {
+            None
+        } else {
+            Some(self.min_priority)
+        }
+    }
+
+    /// Returns the maximum priority in this segment, or `None` if empty.
+    ///
+    /// Used by the concurrent cache to compare priorities across segments for `pop_r()`.
+    pub(crate) fn peek_max_priority(&self) -> Option<u64> {
+        if self.is_empty() {
+            None
+        } else {
+            self.priority_lists.keys().next_back().copied()
+        }
     }
 }
 
@@ -847,6 +1031,144 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
     #[inline]
     pub fn clear(&mut self) {
         self.segment.clear()
+    }
+
+    /// Check if key exists without updating its priority or access metadata.
+    ///
+    /// Unlike `get()`, this method does NOT update the entry's frequency
+    /// or access metadata. Useful for existence checks without affecting
+    /// cache eviction order.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::lfuda::LfudaCache;
+    /// use cache_rs::config::LfudaCacheConfig;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let config = LfudaCacheConfig {
+    ///     capacity: NonZeroUsize::new(2).unwrap(),
+    ///     initial_age: 0,
+    ///     max_size: u64::MAX,
+    /// };
+    /// let mut cache = LfudaCache::init(config, None);
+    /// cache.put("a", 1);
+    /// cache.put("b", 2);
+    ///
+    /// // contains() does NOT update priority
+    /// assert!(cache.contains(&"a"));
+    /// ```
+    #[inline]
+    pub fn contains<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Hash + Eq,
+    {
+        self.segment.contains(key)
+    }
+
+    /// Returns a reference to the value without updating priority or access metadata.
+    ///
+    /// Unlike [`get()`](Self::get), this does NOT increment the entry's frequency,
+    /// change its priority, or move it between priority lists.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::lfuda::LfudaCache;
+    /// use cache_rs::config::LfudaCacheConfig;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let config = LfudaCacheConfig {
+    ///     capacity: NonZeroUsize::new(3).unwrap(),
+    ///     initial_age: 0,
+    ///     max_size: u64::MAX,
+    /// };
+    /// let mut cache = LfudaCache::init(config, None);
+    /// cache.put("a", 1);
+    ///
+    /// // peek does not change priority
+    /// assert_eq!(cache.peek(&"a"), Some(&1));
+    /// assert_eq!(cache.peek(&"missing"), None);
+    /// ```
+    #[inline]
+    pub fn peek<Q>(&self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Hash + Eq,
+    {
+        self.segment.peek(key)
+    }
+
+    /// Removes and returns the eviction candidate (lowest priority entry).
+    ///
+    /// For LFUDA, this is the entry with the lowest priority (frequency + age_at_insertion).
+    /// Also updates the global age to the evicted item's priority (LFUDA aging).
+    ///
+    /// Returns `None` if the cache is empty.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::lfuda::LfudaCache;
+    /// use cache_rs::config::LfudaCacheConfig;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let config = LfudaCacheConfig {
+    ///     capacity: NonZeroUsize::new(3).unwrap(),
+    ///     initial_age: 0,
+    ///     max_size: u64::MAX,
+    /// };
+    /// let mut cache = LfudaCache::init(config, None);
+    /// cache.put("a", 1);
+    /// cache.put("b", 2);
+    /// cache.get(&"b");  // Increase frequency of "b"
+    ///
+    /// // Pop the eviction candidate (lowest priority item)
+    /// assert_eq!(cache.pop(), Some(("a", 1)));
+    /// ```
+    #[inline]
+    pub fn pop(&mut self) -> Option<(K, V)>
+    where
+        K: Clone,
+    {
+        self.segment.pop()
+    }
+
+    /// Removes and returns the highest priority entry (reverse of pop).
+    ///
+    /// This is the opposite of `pop()` - instead of returning the lowest priority
+    /// item, it returns the highest priority item.
+    ///
+    /// Returns `None` if the cache is empty.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cache_rs::lfuda::LfudaCache;
+    /// use cache_rs::config::LfudaCacheConfig;
+    /// use core::num::NonZeroUsize;
+    ///
+    /// let config = LfudaCacheConfig {
+    ///     capacity: NonZeroUsize::new(3).unwrap(),
+    ///     initial_age: 0,
+    ///     max_size: u64::MAX,
+    /// };
+    /// let mut cache = LfudaCache::init(config, None);
+    /// cache.put("a", 1);
+    /// cache.put("b", 2);
+    /// cache.get(&"b");  // Increase frequency of "b"
+    /// cache.get(&"b");  // Increase frequency again
+    ///
+    /// // Pop the highest priority item
+    /// assert_eq!(cache.pop_r(), Some(("b", 2)));
+    /// ```
+    #[inline]
+    pub fn pop_r(&mut self) -> Option<(K, V)>
+    where
+        K: Clone,
+    {
+        self.segment.pop_r()
     }
 }
 
@@ -1285,5 +1607,137 @@ mod tests {
         assert_eq!(cache.current_size(), 0);
         assert_eq!(cache.max_size(), 1024 * 1024);
         assert_eq!(cache.cap().get(), 100);
+    }
+
+    #[test]
+    fn test_lfuda_contains_non_promoting() {
+        let mut cache = make_cache(2);
+        cache.put("a", 1);
+        cache.put("b", 2);
+
+        // contains() should return true for existing keys
+        assert!(cache.contains(&"a"));
+        assert!(cache.contains(&"b"));
+        assert!(!cache.contains(&"c"));
+
+        // Access "b" to increase its priority
+        cache.get(&"b");
+
+        // contains() should NOT increase priority of "a"
+        assert!(cache.contains(&"a"));
+
+        // Adding "c" should evict "a" (lowest priority), not "b"
+        cache.put("c", 3);
+        assert!(!cache.contains(&"a")); // "a" was evicted
+        assert!(cache.contains(&"b")); // "b" still exists
+        assert!(cache.contains(&"c")); // "c" was just added
+    }
+
+    #[test]
+    fn test_lfuda_pop_returns_lowest_priority() {
+        let mut cache = make_cache(3);
+        cache.put("a", 1);
+        cache.put("b", 2);
+        cache.put("c", 3);
+
+        // Access "b" and "c" to increase their priorities
+        cache.get(&"b");
+        cache.get(&"c");
+        cache.get(&"c"); // "c" now has higher priority
+
+        // pop() should return the lowest priority item ("a")
+        assert_eq!(cache.pop(), Some(("a", 1)));
+        assert_eq!(cache.len(), 2);
+
+        // Next lowest is "b"
+        assert_eq!(cache.pop(), Some(("b", 2)));
+        assert_eq!(cache.len(), 1);
+
+        // Only "c" remains
+        assert_eq!(cache.pop(), Some(("c", 3)));
+        assert!(cache.is_empty());
+
+        // Empty cache returns None
+        assert_eq!(cache.pop(), None);
+    }
+
+    #[test]
+    fn test_lfuda_pop_r_returns_highest_priority() {
+        let mut cache = make_cache(3);
+        cache.put("a", 1);
+        cache.put("b", 2);
+        cache.put("c", 3);
+
+        // Access items to build different priorities
+        cache.get(&"b"); // "b" priority increases
+        cache.get(&"c"); // "c" priority increases
+        cache.get(&"c"); // "c" priority increases more
+
+        // pop_r() should return the highest priority item ("c")
+        assert_eq!(cache.pop_r(), Some(("c", 3)));
+        assert_eq!(cache.len(), 2);
+
+        // "a" and "b" remain. Highest priority is "b"
+        assert_eq!(cache.pop_r(), Some(("b", 2)));
+        assert_eq!(cache.len(), 1);
+
+        // Last item
+        assert_eq!(cache.pop_r(), Some(("a", 1)));
+        assert!(cache.is_empty());
+
+        // Empty cache returns None
+        assert_eq!(cache.pop_r(), None);
+    }
+
+    #[test]
+    fn test_lfuda_pop_empty_cache() {
+        let mut cache: LfudaCache<&str, i32> = make_cache(2);
+        assert_eq!(cache.pop(), None);
+        assert_eq!(cache.pop_r(), None);
+    }
+
+    #[test]
+    fn test_lfuda_pop_updates_global_age() {
+        let mut cache = make_cache(2);
+        cache.put("a", 1);
+        cache.put("b", 2);
+
+        let initial_age = cache.global_age();
+
+        // Access "b" to increase its priority
+        cache.get(&"b");
+
+        // Pop should evict "a" and update global age to its priority
+        let popped = cache.pop();
+        assert_eq!(popped, Some(("a", 1)));
+
+        // Global age should have been updated (increased)
+        let new_age = cache.global_age();
+        assert!(
+            new_age >= initial_age,
+            "Global age should increase after pop: {} >= {}",
+            new_age,
+            initial_age
+        );
+    }
+
+    #[test]
+    fn test_lfuda_pop_single_element() {
+        let mut cache = make_cache(2);
+        cache.put("a", 1);
+
+        let popped = cache.pop();
+        assert_eq!(popped, Some(("a", 1)));
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn test_lfuda_pop_r_single_element() {
+        let mut cache = make_cache(2);
+        cache.put("a", 1);
+
+        let popped = cache.pop_r();
+        assert_eq!(popped, Some(("a", 1)));
+        assert!(cache.is_empty());
     }
 }
