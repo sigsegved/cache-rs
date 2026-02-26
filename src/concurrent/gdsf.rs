@@ -350,6 +350,16 @@ where
     }
 
     /// Returns `true` if the cache contains the specified key.
+    ///
+    /// # Deprecation
+    ///
+    /// For API consistency, use [`contains()`](Self::contains) instead. While GDSF's
+    /// `contains_key` happens to be a pure existence check (unlike other cache types),
+    /// `contains()` is the preferred method across all cache implementations.
+    #[deprecated(
+        since = "0.4.0",
+        note = "Use contains() for a consistent API across all cache types."
+    )]
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
         K: Borrow<Q> + Clone,

@@ -288,6 +288,16 @@ where
     }
 
     /// Returns `true` if the cache contains the specified key.
+    ///
+    /// # Deprecation
+    ///
+    /// This method calls `get()` internally, which **promotes the entry between
+    /// SLRU segments** (probationary → protected). Use [`contains()`](Self::contains)
+    /// instead for a pure existence check without side effects.
+    #[deprecated(
+        since = "0.4.0",
+        note = "contains_key() has side effects (promotes between segments). Use contains() for a pure existence check."
+    )]
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
         K: Borrow<Q>,

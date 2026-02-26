@@ -407,7 +407,7 @@ fn stress_mixed_all_caches() {
                         let _ = cache.remove(&key);
                     }
                     _ => {
-                        let _ = cache.contains_key(&key);
+                        let _ = cache.contains(&key);
                     }
                 }
             }

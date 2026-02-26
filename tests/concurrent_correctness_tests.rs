@@ -1204,13 +1204,13 @@ fn test_contains_key_consistency() {
 
     let mut handles = vec![];
 
-    // Verify contains_key is consistent
+    // Verify contains() is consistent (non-promoting check)
     for _ in 0..4 {
         let c = Arc::clone(&cache);
         handles.push(thread::spawn(move || {
             for i in 0..30 {
-                if c.contains_key(&i) {
-                    // If contains_key returns true, get should succeed
+                if c.contains(&i) {
+                    // If contains returns true, get should succeed
                     // (Note: may fail if another thread removed it - that's fine)
                     let _ = c.get(&i);
                 }

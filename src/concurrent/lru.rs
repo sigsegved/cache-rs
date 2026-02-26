@@ -398,8 +398,15 @@ where
 
     /// Checks if the cache contains a key.
     ///
-    /// Note: This **does** update the entry's recency (moves to MRU position).
-    /// If you need a pure existence check without side effects, this isn't it.
+    /// # Deprecation
+    ///
+    /// This method calls `get()` internally, which **promotes the entry to MRU position**.
+    /// Use [`contains()`](Self::contains) instead for a pure existence check without
+    /// side effects.
+    #[deprecated(
+        since = "0.4.0",
+        note = "contains_key() has side effects (promotes entry). Use contains() for a pure existence check."
+    )]
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
         K: Borrow<Q>,
