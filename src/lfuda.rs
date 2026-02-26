@@ -448,12 +448,12 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
             .remove(node)
             .unwrap();
 
-        // If the old priority list is now empty and it was the minimum priority,
-        // update the minimum priority
-        if self.priority_lists.get(&old_priority).unwrap().is_empty()
-            && old_priority == self.min_priority
-        {
-            self.min_priority = new_priority;
+        // Clean up empty old priority list and update min_priority if necessary
+        if self.priority_lists.get(&old_priority).unwrap().is_empty() {
+            self.priority_lists.remove(&old_priority);
+            if old_priority == self.min_priority {
+                self.min_priority = new_priority;
+            }
         }
 
         // Update frequency in the entry's metadata
@@ -1794,5 +1794,42 @@ mod tests {
         // pop/pop_r should work correctly
         let popped = cache.pop();
         assert!(popped.is_some());
+    }
+
+    #[test]
+    fn test_lfuda_update_priority_cleans_up_empty_lists() {
+        // Regression test: update_priority_by_node() should clean up empty
+        // priority lists when moving a node to a new priority.
+        let mut cache = make_cache(5);
+
+        // Insert items at the same initial priority
+        cache.put("a", 1);
+        cache.put("b", 2);
+
+        // Access "a" to move it to a new priority list.
+        // If "a" was the only item at that priority, the old list should be removed.
+        cache.get(&"a");
+
+        // Now access "b" to also move it
+        cache.get(&"b");
+
+        // Both should still be accessible
+        assert_eq!(cache.get(&"a"), Some(&1));
+        assert_eq!(cache.get(&"b"), Some(&2));
+
+        // Insert more items and verify eviction works correctly
+        cache.put("c", 3);
+        cache.put("d", 4);
+        cache.put("e", 5);
+        assert_eq!(cache.len(), 5);
+
+        // Force eviction - should work without issues from stale empty lists
+        cache.put("f", 6);
+        assert_eq!(cache.len(), 5);
+
+        // pop should work correctly
+        let popped = cache.pop();
+        assert!(popped.is_some());
+        assert_eq!(cache.len(), 4);
     }
 }
