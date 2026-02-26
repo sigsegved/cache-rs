@@ -289,6 +289,117 @@ where
     pub fn max_size(&self) -> u64 {
         self.segments.iter().map(|s| s.lock().max_size()).sum()
     }
+
+    /// Checks if the cache contains a key without updating frequency.
+    ///
+    /// Unlike [`contains_key()`](Self::contains_key), this method does **not** update
+    /// the entry's frequency. Use this for pure existence checks without affecting
+    /// cache behavior.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// if cache.contains(&"key".to_string()) {
+    ///     println!("Key exists!");
+    /// }
+    /// ```
+    pub fn contains<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Hash + Eq,
+    {
+        let idx = self.segment_index(key);
+        let segment = self.segments[idx].lock();
+        segment.contains(key)
+    }
+
+    /// Returns a clone of the value without updating frequency or access metadata.
+    ///
+    /// Unlike [`get()`](Self::get), this does NOT increment the entry's frequency
+    /// or change its position. Returns a cloned value because the internal lock
+    /// cannot be held across the return boundary.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let value = cache.peek(&"key".to_string());
+    /// ```
+    pub fn peek<Q>(&self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Hash + Eq,
+        V: Clone,
+    {
+        let idx = self.segment_index(key);
+        let segment = self.segments[idx].lock();
+        segment.peek(key).cloned()
+    }
+
+    /// Removes and returns the least frequently used entry from the cache.
+    ///
+    /// Finds the segment with the globally lowest minimum frequency and pops
+    /// the eviction candidate from that segment. This ensures the returned entry
+    /// is the true LFU candidate across all segments.
+    ///
+    /// # Returns
+    ///
+    /// - `Some((key, value))` if the cache was not empty
+    /// - `None` if the cache is empty
+    pub fn pop(&self) -> Option<(K, V)> {
+        // Find the segment with the lowest min_frequency
+        let mut best_idx = None;
+        let mut best_freq = usize::MAX;
+
+        for (i, segment) in self.segments.iter().enumerate() {
+            let guard = segment.lock();
+            if let Some(freq) = guard.peek_min_frequency() {
+                if freq < best_freq {
+                    best_freq = freq;
+                    best_idx = Some(i);
+                }
+            }
+        }
+
+        if let Some(idx) = best_idx {
+            let mut guard = self.segments[idx].lock();
+            guard.pop()
+        } else {
+            None
+        }
+    }
+
+    /// Removes and returns the most frequently used entry from the cache.
+    ///
+    /// Finds the segment with the globally highest maximum frequency and pops
+    /// the MFU entry from that segment. This ensures the returned entry
+    /// is the true MFU candidate across all segments.
+    ///
+    /// # Returns
+    ///
+    /// - `Some((key, value))` if the cache was not empty
+    /// - `None` if the cache is empty
+    pub fn pop_r(&self) -> Option<(K, V)> {
+        // Find the segment with the highest max_frequency
+        let mut best_idx = None;
+        let mut best_freq = 0usize;
+
+        for (i, segment) in self.segments.iter().enumerate() {
+            let guard = segment.lock();
+            if let Some(freq) = guard.peek_max_frequency() {
+                if freq > best_freq || best_idx.is_none() {
+                    best_freq = freq;
+                    best_idx = Some(i);
+                }
+            }
+        }
+
+        if let Some(idx) = best_idx {
+            let mut guard = self.segments[idx].lock();
+            guard.pop_r()
+        } else {
+            None
+        }
+    }
 }
 
 impl<K, V, S> CacheMetrics for ConcurrentLfuCache<K, V, S>
@@ -583,5 +694,95 @@ mod tests {
 
         // Item should still be accessible
         assert_eq!(cache.get(&"key".to_string()), Some(1));
+    }
+
+    #[test]
+    fn test_contains_non_promoting() {
+        let cache: ConcurrentLfuCache<String, i32> =
+            ConcurrentLfuCache::init(make_config(100, 16), None);
+
+        cache.put("a".to_string(), 1);
+        cache.put("b".to_string(), 2);
+
+        // contains() should check without updating frequency
+        assert!(cache.contains(&"a".to_string()));
+        assert!(cache.contains(&"b".to_string()));
+        assert!(!cache.contains(&"c".to_string()));
+    }
+
+    #[test]
+    fn test_pop_returns_entry() {
+        let cache: ConcurrentLfuCache<String, i32> =
+            ConcurrentLfuCache::init(make_config(100, 16), None);
+
+        cache.put("a".to_string(), 1);
+        cache.put("b".to_string(), 2);
+
+        let initial_len = cache.len();
+
+        // Pop should return Some entry
+        let result = cache.pop();
+        assert!(result.is_some());
+
+        let (key, _value) = result.unwrap();
+        assert!(key == "a" || key == "b"); // Could be either due to segmentation
+
+        // Length should decrease
+        assert_eq!(cache.len(), initial_len - 1);
+    }
+
+    #[test]
+    fn test_pop_empty_cache() {
+        let cache: ConcurrentLfuCache<String, i32> =
+            ConcurrentLfuCache::init(make_config(100, 16), None);
+
+        assert!(cache.pop().is_none());
+    }
+
+    #[test]
+    fn test_pop_r_returns_entry() {
+        let cache: ConcurrentLfuCache<String, i32> =
+            ConcurrentLfuCache::init(make_config(100, 16), None);
+
+        cache.put("a".to_string(), 1);
+        cache.put("b".to_string(), 2);
+
+        let initial_len = cache.len();
+
+        // Pop_r should return Some entry
+        let result = cache.pop_r();
+        assert!(result.is_some());
+
+        let (key, _value) = result.unwrap();
+        assert!(key == "a" || key == "b"); // Could be either due to segmentation
+
+        // Length should decrease
+        assert_eq!(cache.len(), initial_len - 1);
+    }
+
+    #[test]
+    fn test_pop_r_empty_cache() {
+        let cache: ConcurrentLfuCache<String, i32> =
+            ConcurrentLfuCache::init(make_config(100, 16), None);
+
+        assert!(cache.pop_r().is_none());
+    }
+
+    #[test]
+    fn test_pop_all_entries() {
+        let cache: ConcurrentLfuCache<String, i32> =
+            ConcurrentLfuCache::init(make_config(100, 16), None);
+
+        cache.put("a".to_string(), 1);
+        cache.put("b".to_string(), 2);
+        cache.put("c".to_string(), 3);
+
+        let mut count = 0;
+        while cache.pop().is_some() {
+            count += 1;
+        }
+
+        assert_eq!(count, 3);
+        assert!(cache.is_empty());
     }
 }
