@@ -654,23 +654,17 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
 
             self.current_size = self.current_size.saturating_sub(removed_size);
 
-            // Update min_priority if necessary
-            if self.priority_lists.get(&priority).unwrap().is_empty()
-                && priority == self.min_priority
-            {
-                self.min_priority = self
-                    .priority_lists
-                    .keys()
-                    .find(|&&p| {
-                        p > priority
-                            && !self
-                                .priority_lists
-                                .get(&p)
-                                .map(|l| l.is_empty())
-                                .unwrap_or(true)
-                    })
-                    .copied()
-                    .unwrap_or(self.global_age);
+            // Clean up empty priority list and update min_priority if necessary
+            if self.priority_lists.get(&priority).unwrap().is_empty() {
+                self.priority_lists.remove(&priority);
+                if priority == self.min_priority {
+                    self.min_priority = self
+                        .priority_lists
+                        .keys()
+                        .copied()
+                        .next()
+                        .unwrap_or(self.global_age);
+                }
             }
 
             Some(cache_entry.value)
@@ -1739,5 +1733,66 @@ mod tests {
         let popped = cache.pop_r();
         assert_eq!(popped, Some(("a", 1)));
         assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn test_lfuda_remove_cleans_up_empty_priority_lists() {
+        // Regression test: remove() should clean up empty priority lists
+        // from BTreeMap to avoid memory leaks and stale entries.
+        let mut cache = make_cache(5);
+
+        // Insert items that will have different priorities
+        cache.put("a", 1);
+        cache.put("b", 2);
+        cache.put("c", 3);
+
+        // Access "a" to bump its frequency (changes priority)
+        cache.get(&"a");
+        cache.get(&"a");
+
+        // Remove items and verify cache stays consistent
+        cache.remove(&"b");
+        cache.remove(&"c");
+
+        // Cache should still work correctly after removals
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.get(&"a"), Some(&1));
+
+        // Insert new items - should not hit stale empty lists
+        cache.put("d", 4);
+        cache.put("e", 5);
+        assert_eq!(cache.len(), 3);
+
+        // pop() should work correctly without needing to skip empty lists
+        let popped = cache.pop();
+        assert!(popped.is_some());
+        assert_eq!(cache.len(), 2);
+    }
+
+    #[test]
+    fn test_lfuda_remove_non_min_priority_cleans_up() {
+        // Verify that removing items at non-minimum priorities also cleans up empty lists.
+        let mut cache = make_cache(5);
+
+        cache.put("a", 1);
+        cache.put("b", 2);
+        cache.put("c", 3);
+
+        // Access "a" many times - it will have a higher priority
+        for _ in 0..5 {
+            cache.get(&"a");
+        }
+
+        // Remove "a" (high priority) - the high-priority list should be cleaned up
+        cache.remove(&"a");
+        assert_eq!(cache.len(), 2);
+
+        // Remaining items should still be accessible
+        assert_eq!(cache.get(&"b"), Some(&2));
+        assert_eq!(cache.get(&"c"), Some(&3));
+
+        // pop/pop_r should work correctly
+        let popped = cache.pop();
+        assert!(popped.is_some());
     }
 }
