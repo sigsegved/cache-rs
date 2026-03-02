@@ -470,7 +470,7 @@ impl<T> List<T> {
     /// Returns a reference to the last (tail) value without removing it.
     ///
     /// Returns `None` if the list is empty.
-    #[allow(dead_code)]
+    #[cfg_attr(not(feature = "concurrent"), allow(dead_code))]
     pub fn peek_last(&self) -> Option<&T> {
         if self.is_empty() {
             return None;
@@ -490,7 +490,7 @@ impl<T> List<T> {
     /// Returns a reference to the first (head) value without removing it.
     ///
     /// Returns `None` if the list is empty.
-    #[allow(dead_code)]
+    #[cfg_attr(not(feature = "concurrent"), allow(dead_code))]
     pub fn peek_first(&self) -> Option<&T> {
         if self.is_empty() {
             return None;
