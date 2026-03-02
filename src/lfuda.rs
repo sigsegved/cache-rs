@@ -1145,10 +1145,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
     /// assert_eq!(cache.pop(), Some(("a", 1)));
     /// ```
     #[inline]
-    pub fn pop(&mut self) -> Option<(K, V)>
-    where
-        K: Clone,
-    {
+    pub fn pop(&mut self) -> Option<(K, V)> {
         self.segment.pop()
     }
 
@@ -1160,10 +1157,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
     /// Returns `None` if the cache is empty.
     #[inline]
     #[allow(dead_code)]
-    pub(crate) fn pop_r(&mut self) -> Option<(K, V)>
-    where
-        K: Clone,
-    {
+    pub(crate) fn pop_r(&mut self) -> Option<(K, V)> {
         self.segment.pop_r()
     }
 }

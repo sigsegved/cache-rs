@@ -1002,10 +1002,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfCache<K, V, S> {
     /// assert!(popped.is_some());
     /// ```
     #[inline]
-    pub fn pop(&mut self) -> Option<(K, V)>
-    where
-        K: Clone,
-    {
+    pub fn pop(&mut self) -> Option<(K, V)> {
         self.segment.pop_eviction_candidate()
     }
 
@@ -1017,10 +1014,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfCache<K, V, S> {
     /// Returns `None` if the cache is empty.
     #[inline]
     #[allow(dead_code)]
-    pub(crate) fn pop_r(&mut self) -> Option<(K, V)>
-    where
-        K: Clone,
-    {
+    pub(crate) fn pop_r(&mut self) -> Option<(K, V)> {
         self.segment.pop_highest_priority()
     }
 
