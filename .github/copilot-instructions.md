@@ -426,3 +426,94 @@ git push origin vX.Y.Z
 ---
 
 By following these guidelines, we ensure that the cache-rs codebase remains maintainable, performant, and accessible to both contributors and users. All code should be written with the principle that clarity and correctness are more important than clever solutions.
+
+<!-- Added by Poe -->
+
+## Error Handling Philosophy
+
+**Key Principle**: Panic for programming errors, return `Option` for normal cache operations.
+
+The codebase follows a specific error handling philosophy:
+
+### Use `.unwrap()` for Programming Errors:
+```rust
+// Configuration validation (programmer should validate input)
+let config = LruCacheConfig {
+    capacity: NonZeroUsize::new(cap).unwrap(), // cap must be > 0
+    max_size: u64::MAX,
+};
+
+// Internal invariant violations (should never happen if code is correct)
+let node = *self.map.get(&key_cloned).unwrap(); // Key must exist if invariants hold
+```
+
+### Use `Option` for Normal Cache Operations:
+```rust
+// Cache operations that naturally might not find data
+pub fn get(&mut self, key: &K) -> Option<&V>        // Cache miss is expected
+pub fn remove(&mut self, key: &K) -> Option<(K, V)> // Key might not exist
+pub fn put(&mut self, key: K, value: V) -> Option<(K, V)> // Returns evicted entry
+```
+
+### NEVER Use `Result` Types:
+- The library doesn't use `Result<T, E>` for any operations
+- Either operations succeed or they panic on programming errors
+
+## Memory: Critical Gotchas for New Developers
+
+Understanding these patterns is ESSENTIAL for working on cache-rs:
+
+### 1. Unsafe List Operations
+```rust
+// DANGER: Node pointers become invalid after list operations
+let node = self.map.get(&key).unwrap();
+unsafe {
+    self.list.remove_first(); // node pointer is now INVALID!
+    // DO NOT use node after this point
+}
+```
+
+### 2. Configuration Panics
+```rust
+// WILL PANIC at runtime:
+let config = LruCacheConfig {
+    capacity: NonZeroUsize::new(0).unwrap(), // NonZeroUsize::new(0) returns None
+    max_size: u64::MAX,
+};
+```
+
+### 3. Dual-Limit Eviction Logic
+```rust
+// Eviction triggers on OR condition (not AND):
+let needs_eviction = (self.len() >= capacity) || (total_size + new_size > max_size);
+// A size-limited cache can evict before hitting entry count limit
+```
+
+### 4. Concurrent Segment Distribution
+```rust
+// All capacity limits apply to ENTIRE cache, not per-segment
+let segments = 16;
+let total_capacity = 1000;
+// Each segment gets ~62 entries (1000/16), not 1000 each
+```
+
+### 5. Algorithm-Specific Size Requirements
+```rust
+// GDSF REQUIRES size parameter (not optional):
+cache.put("key", value, size); // Must provide size
+
+// LRU/LFU can use default size:
+cache.put("key", value); // Defaults to size=1
+```
+
+### 6. Priority-Based Algorithm Invariants
+```rust
+// LFUDA/GDSF multiply float priorities by 1000 for BTreeMap storage:
+let priority_key = (priority * 1000.0) as i64;
+self.priority_lists.entry(priority_key);
+
+// Always clean up empty priority lists to prevent memory leaks:
+if list.is_empty() {
+    self.priority_lists.remove(&priority_key);
+}
+```
