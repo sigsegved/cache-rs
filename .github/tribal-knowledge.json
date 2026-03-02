@@ -1,0 +1,5 @@
+{
+  "feature_design_flow": "New feature are either introduced as functionality to existing cache algorithms or new feature could be introducing an entirely new cache algorithm (ex: TinyLFU). For new functionality on existing algorithms, since we strive to keep cache algos consistent the same fn MUST be introduced to all alogrithms.",
+  "design_patterns": "Hig performance. We want to avoid O(N) at all costs.",
+  "user_confirmed": true
+}
