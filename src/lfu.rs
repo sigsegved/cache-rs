@@ -702,6 +702,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
     /// Returns the minimum frequency in this segment, or `None` if empty.
     ///
     /// Used by the concurrent cache to compare eviction priorities across segments.
+    #[allow(dead_code)]
     pub(crate) fn peek_min_frequency(&self) -> Option<usize> {
         if self.is_empty() {
             None
@@ -713,6 +714,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
     /// Returns the maximum frequency in this segment, or `None` if empty.
     ///
     /// Used by the concurrent cache to compare priorities across segments for `pop_r()`.
+    #[allow(dead_code)]
     pub(crate) fn peek_max_frequency(&self) -> Option<usize> {
         if self.is_empty() {
             None

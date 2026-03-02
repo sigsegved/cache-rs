@@ -468,6 +468,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
     ///
     /// Returns `None` if the segment is empty. Lower timestamps indicate older entries
     /// (better eviction candidates for LRU).
+    #[allow(dead_code)]
     pub(crate) fn peek_lru_timestamp(&self) -> Option<u64> {
         self.list
             .peek_last()
@@ -478,6 +479,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
     ///
     /// Returns `None` if the segment is empty. Higher timestamps indicate newer entries
     /// (better candidates for `pop_r()`).
+    #[allow(dead_code)]
     pub(crate) fn peek_mru_timestamp(&self) -> Option<u64> {
         self.list
             .peek_first()
