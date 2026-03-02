@@ -1,3 +1,7 @@
+---
+applyTo: "docs/**/*.md"
+---
+
 # Specification Templates for Cache-RS
 
 This file provides templates for creating design specifications in cache-rs. Each template is tailored to specific types of cache algorithm work.
@@ -167,7 +171,7 @@ impl<K, V> [Algorithm]Cache<K, V> {
     // Core cache operations
     pub fn get(&mut self, key: &K) -> Option<&V>;
     pub fn put(&mut self, key: K, value: V) -> Option<(K, V)>; // Returns evicted
-    pub fn remove(&mut self, key: &K) -> Option<(K, V)>;
+    pub fn remove(&mut self, key: &K) -> Option<V>;
     
     // Metadata operations  
     pub fn len(&self) -> usize;
@@ -197,24 +201,27 @@ pub struct [Algorithm]CacheConfig {
 
 ### Concurrency Model
 
-**Strategy**: [Choose: RwLock wrapper, Segmented locking, Lock-free, or Hybrid]
+**Strategy**: [Choose: Segmented Mutex locking (default), Lock-free, or Hybrid]
 
 **Implementation Pattern**:
 ```rust
-// Example for RwLock wrapper pattern (most common)
+// Segmented Mutex pattern (used by all concurrent caches in cache-rs)
+// Mutex is used instead of RwLock because get() is a write operation
+// (it updates recency/frequency metadata). Concurrency comes from segmentation.
 pub struct Concurrent[Algorithm]Cache<K, V, S = DefaultHashBuilder> {
-    inner: RwLock<[Algorithm]Cache<K, V, S>>,
+    segments: Box<[Mutex<[Algorithm]Segment<K, V, S>>]>,
+    segment_mask: usize,
 }
 
 impl<K, V> Concurrent[Algorithm]Cache<K, V> {
     pub fn get(&self, key: &K) -> Option<V> {
-        // Read lock for get operations
-        self.inner.read().get(key).cloned()
+        // Mutex lock on the relevant segment only
+        self.get_segment(key).lock().get(key).cloned()
     }
     
     pub fn put(&self, key: K, value: V) -> Option<(K, V)> {
-        // Write lock for put operations  
-        self.inner.write().put(key, value)
+        // Mutex lock on the relevant segment only
+        self.get_segment(&key).lock().put(key, value)
     }
 }
 ```

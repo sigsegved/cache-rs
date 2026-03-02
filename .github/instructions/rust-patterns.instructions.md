@@ -1,3 +1,7 @@
+---
+applyTo: "**/*.rs"
+---
+
 # Rust Patterns for Cache-RS
 
 This file documents Rust-specific patterns, conventions, and best practices for cache-rs development. It focuses on the unique aspects of implementing high-performance cache algorithms in Rust.
@@ -23,7 +27,7 @@ where
     /// Core cache operations with exact signatures
     pub fn get(&mut self, key: &K) -> Option<&V>;
     pub fn put(&mut self, key: K, value: V) -> Option<(K, V)>;
-    pub fn remove(&mut self, key: &K) -> Option<(K, V)>;
+    pub fn remove(&mut self, key: &K) -> Option<V>;
     
     /// Size-aware operations (required for all algorithms)
     pub fn put_with_size(&mut self, key: K, value: V, size: u64) -> Option<(K, V)>;
@@ -108,8 +112,8 @@ pub fn put(&mut self, key: K, value: V) -> Option<(K, V)> {
     // Returns evicted entry if capacity exceeded
 }
 
-pub fn remove(&mut self, key: &K) -> Option<(K, V)> {
-    // Key might not exist
+pub fn remove(&mut self, key: &K) -> Option<V> {
+    // Key might not exist, returns old value if found
 }
 ```
 
@@ -134,12 +138,9 @@ use hashbrown::{HashMap, DefaultHashBuilder};
 #[cfg(not(feature = "hashbrown"))]
 use std::collections::{HashMap, hash_map::RandomState as DefaultHashBuilder};
 
-// Parking lot vs std synchronization
+// Parking lot synchronization for concurrent caches
 #[cfg(feature = "concurrent")]
-use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-
-#[cfg(all(feature = "concurrent", not(feature = "parking_lot")))]
-use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use parking_lot::Mutex;
 
 // no_std compatibility  
 #![no_std]
@@ -155,10 +156,9 @@ extern crate std;
 ```toml
 [features]
 default = ["hashbrown"]
+nightly = ["hashbrown/nightly"]
 std = []
-concurrent = ["std", "parking_lot"]
-hashbrown = ["dep:hashbrown"]
-nightly = []  # For experimental optimizations
+concurrent = ["parking_lot"]
 
 [dependencies]
 hashbrown = { version = "0.16", optional = true }
@@ -269,14 +269,15 @@ where
     // ... other fields
 }
 
-// For concurrent variants
+// For concurrent variants (segmented Mutex pattern)
 pub struct ConcurrentAlgorithmCache<K, V, S = DefaultHashBuilder>
 where
     K: Hash + Eq + Clone + Send + Sync,  // Additional Send + Sync for thread safety
     V: Clone + Send + Sync,
-    S: BuildHasher + Send + Sync,
+    S: BuildHasher + Clone + Send + Sync,
 {
-    inner: RwLock<AlgorithmCache<K, V, S>>,
+    segments: Box<[Mutex<AlgorithmSegment<K, V, S>>]>,
+    segment_mask: usize,
 }
 ```
 
@@ -399,69 +400,32 @@ impl<T> List<T> {
 
 ## Concurrent Programming Patterns
 
-### RwLock Wrapper Pattern
+### Segmented Mutex Pattern
 
-**Standard pattern for concurrent cache variants**:
+**Standard pattern for concurrent cache variants** (used by all concurrent caches in cache-rs):
+
+Cache algorithms like LRU, LFU, LFUDA, GDSF, and SLRU require **mutable access even for
+read operations**. Every `get()` call updates internal state (LRU moves to front, LFU
+increments frequency, etc.). Therefore `Mutex` is used instead of `RwLock` — since `get()`
+is inherently a write operation, `RwLock` provides no benefit.
+
+Concurrency is achieved through **segmentation**: different keys can be accessed in parallel
+as long as they hash to different segments.
 
 ```rust
-use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use parking_lot::Mutex;
 
 pub struct ConcurrentAlgorithmCache<K, V, S = DefaultHashBuilder> {
-    inner: RwLock<AlgorithmCache<K, V, S>>,
+    segments: Box<[Mutex<AlgorithmSegment<K, V, S>>]>,
+    segment_mask: usize,  // For fast modulo using bitwise AND
 }
 
 impl<K, V, S> ConcurrentAlgorithmCache<K, V, S> 
 where
     K: Hash + Eq + Clone + Send + Sync,
     V: Clone + Send + Sync,
-    S: BuildHasher + Send + Sync,
+    S: BuildHasher + Clone + Send + Sync,
 {
-    pub fn new(config: AlgorithmCacheConfig) -> Self {
-        Self {
-            inner: RwLock::new(AlgorithmCache::init(config, None)),
-        }
-    }
-    
-    pub fn get(&self, key: &K) -> Option<V> {
-        // Read lock for get operations (but cache algorithms need mutation for LRU updates)
-        // Actually, cache algorithms require write lock even for get() due to metadata updates
-        self.inner.write().get(key).cloned()
-    }
-    
-    pub fn put(&self, key: K, value: V) -> Option<(K, V)> {
-        // Write lock for put operations
-        self.inner.write().put(key, value)
-    }
-    
-    pub fn remove(&self, key: &K) -> Option<(K, V)> {
-        // Write lock for remove operations
-        self.inner.write().remove(key)
-    }
-    
-    // Metadata operations can use read locks
-    pub fn len(&self) -> usize {
-        self.inner.read().len()
-    }
-    
-    pub fn is_empty(&self) -> bool {
-        self.inner.read().is_empty()
-    }
-}
-```
-
-**Why RwLock over Mutex**: Even though cache algorithms require mutation for `get()`, RwLock provides the option for truly read-only operations like `len()` and future optimizations.
-
-### Segmented Locking Pattern (Advanced)
-
-**For high-concurrency scenarios**:
-
-```rust
-pub struct SegmentedConcurrentCache<K, V, S = DefaultHashBuilder> {
-    segments: Vec<RwLock<AlgorithmCache<K, V, S>>>,
-    segment_mask: usize,  // For fast modulo using bitwise AND
-}
-
-impl<K, V, S> SegmentedConcurrentCache<K, V, S> {
     pub fn new(config: AlgorithmCacheConfig, num_segments: usize) -> Self {
         // num_segments must be a power of 2 for efficient hashing
         assert!(num_segments.is_power_of_two());
@@ -476,9 +440,10 @@ impl<K, V, S> SegmentedConcurrentCache<K, V, S> {
                     max_size: per_segment_size.max(1),
                     ..config
                 };
-                RwLock::new(AlgorithmCache::init(segment_config, None))
+                Mutex::new(AlgorithmSegment::init(segment_config, None))
             })
-            .collect();
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
             
         Self {
             segments,
@@ -486,7 +451,7 @@ impl<K, V, S> SegmentedConcurrentCache<K, V, S> {
         }
     }
     
-    fn get_segment(&self, key: &K) -> &RwLock<AlgorithmCache<K, V, S>> {
+    fn get_segment(&self, key: &K) -> &Mutex<AlgorithmSegment<K, V, S>> {
         let mut hasher = DefaultHasher::new();
         key.hash(&mut hasher);
         let hash = hasher.finish() as usize;
@@ -494,7 +459,23 @@ impl<K, V, S> SegmentedConcurrentCache<K, V, S> {
     }
     
     pub fn get(&self, key: &K) -> Option<V> {
-        self.get_segment(key).write().get(key).cloned()
+        self.get_segment(key).lock().get(key).cloned()
+    }
+    
+    pub fn put(&self, key: K, value: V) -> Option<(K, V)> {
+        self.get_segment(&key).lock().put(key, value)
+    }
+    
+    pub fn remove(&self, key: &K) -> Option<V> {
+        self.get_segment(key).lock().remove(key)
+    }
+    
+    pub fn len(&self) -> usize {
+        self.segments.iter().map(|s| s.lock().len()).sum()
+    }
+    
+    pub fn is_empty(&self) -> bool {
+        self.segments.iter().all(|s| s.lock().is_empty())
     }
 }
 ```

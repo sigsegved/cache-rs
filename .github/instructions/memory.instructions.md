@@ -1,3 +1,7 @@
+---
+applyTo: "src/**/*.rs"
+---
+
 # Memory Safety and Critical Gotchas for Cache-RS
 
 This file documents critical memory safety patterns, common pitfalls, and gotchas that new developers MUST understand when working on cache-rs. These patterns are essential for maintaining the safety and correctness of high-performance cache algorithms with extensive unsafe code.
@@ -180,7 +184,7 @@ impl<K, V> ConcurrentSegmentedCache<K, V> {
         };
         
         let segments = (0..num_segments)
-            .map(|_| RwLock::new(Cache::init(segment_config.clone(), None)))
+            .map(|_| Mutex::new(Cache::init(segment_config.clone(), None)))
             .collect();
             
         Self { segments, segment_mask: num_segments - 1 }

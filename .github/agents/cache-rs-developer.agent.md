@@ -1,4 +1,3 @@
-````chatagent
 ---
 name: cache-rs-Developer
 description: Implement, test, debug cache algorithms, unsafe code, and concurrent data structures for cache-rs
@@ -67,8 +66,9 @@ User says: "fix", "debug", "test failing", "benchmark issue"
 
 When implementing from a spec file:
 
-1. **Move the spec to design-spec directory**:
+1. **Move the spec to design-spec directory** (create directories if they don't exist):
    ```bash
+   mkdir -p docs/design-spec
    mv docs/agent-artifacts/architect-spec.md docs/design-spec/cache-<algorithm-name>-spec.md
    ```
 
@@ -170,7 +170,7 @@ Always load:
 
 5. **Implement concurrent variant** in `src/concurrent/<algorithm>.rs`:
    - Wrap single-threaded version with segmented locking
-   - Use `parking_lot::RwLock` pattern from existing concurrent caches
+   - Use `parking_lot::Mutex` with segment sharding pattern from existing concurrent caches
 
 6. **Update module exports** in `src/lib.rs`:
    - Re-export new types and traits
@@ -249,7 +249,7 @@ cargo +nightly miri test
 |------------|-----------------|-------------|
 | **Eviction Logic Bug** | Unexpected cache contents after put() | Fix priority calculation or list ordering |
 | **Unsafe Pointer Error** | Segfault, double-free, use-after-free | Add proper SAFETY comments and fix pointer lifecycle |
-| **Concurrent Data Race** | Miri error, stress test failure | Review RwLock usage and ensure proper synchronization |
+| **Concurrent Data Race** | Miri error, stress test failure | Review Mutex/segment usage and ensure proper synchronization |
 | **Performance Regression** | Benchmark shows >10% slowdown | Profile hot paths, optimize data structures |
 | **Configuration Panic** | NonZeroUsize::new(0).unwrap() | Validate all capacity parameters are non-zero |
 | **Memory Leak** | Memory usage grows without bound | Ensure proper cleanup of empty priority lists |
@@ -427,5 +427,3 @@ cargo audit
 - Test each cache operation (get/put/remove) in isolation before complex scenarios
 - Validate data structure invariants after every operation in debug builds
 - Use Miri religiously — undefined behavior in cache code causes unpredictable failures
-
-````

@@ -28,19 +28,21 @@ struct Cache<K, V, S> {
 
 ### Concurrent Cache Architecture
 
-Enabled via `--features concurrent`. Requires `std` (not `no_std` compatible).
+Enabled via `--features concurrent`. Uses `parking_lot` (not `no_std` compatible).
 
 ```rust
-// All concurrent caches wrap the single-threaded version with RwLock
-pub struct Lfu<K, V, S = DefaultHashBuilder> {
-    inner: RwLock<lfu::Lfu<K, V, S>>,  // parking_lot::RwLock
+// All concurrent caches use segmented locking with parking_lot::Mutex
+pub struct ConcurrentLfu<K, V, S = DefaultHashBuilder> {
+    segments: Box<[Mutex<LfuSegment<K, V, S>>]>,  // parking_lot::Mutex
+    segment_mask: usize,
 }
 ```
 
-**Design pattern**: Composition over reimplementation
-- Each concurrent cache wraps its single-threaded counterpart
-- Uses `parking_lot::RwLock` for better performance than `std::sync::RwLock`
-- Read operations (`get`) take read locks; write operations (`put`, `remove`) take write locks
+**Design pattern**: Segmented locking for high concurrency
+- The key space is partitioned across multiple segments using hash-based sharding
+- Each segment is protected by its own `parking_lot::Mutex`
+- `Mutex` is used (not `RwLock`) because `get()` is a write operation in all cache algorithms (it updates recency/frequency metadata)
+- Operations only lock the relevant segment, allowing concurrent access to different segments
 - Located in `src/concurrent/` module
 
 ## Critical Unsafe Code Patterns
@@ -70,7 +72,7 @@ unsafe {
 **Feature flags**:
 - `hashbrown` (default): Use hashbrown for `no_std` support
 - `std`: Enable standard library support
-- `concurrent`: Enable thread-safe cache implementations (requires `std`)
+- `concurrent`: Enable thread-safe cache implementations (enables `parking_lot`)
 
 **Critical**: Always use conditional imports:
 ```rust
@@ -151,7 +153,7 @@ Every cache algorithm module MUST have comprehensive consumer-focused documentat
 //! - When NOT to use (important!)
 //!
 //! ## Thread Safety
-//! "Not thread-safe. Wrap with Mutex/RwLock for concurrent access."
+//! "Not thread-safe. Use concurrent variants or wrap with Mutex for concurrent access."
 ```
 
 ## Priority-Based Cache Patterns (LFU/LFUDA/GDSF)
@@ -451,7 +453,7 @@ let node = *self.map.get(&key_cloned).unwrap(); // Key must exist if invariants 
 ```rust
 // Cache operations that naturally might not find data
 pub fn get(&mut self, key: &K) -> Option<&V>        // Cache miss is expected
-pub fn remove(&mut self, key: &K) -> Option<(K, V)> // Key might not exist
+pub fn remove(&mut self, key: &K) -> Option<V>       // Key might not exist
 pub fn put(&mut self, key: K, value: V) -> Option<(K, V)> // Returns evicted entry
 ```
 
