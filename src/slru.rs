@@ -1043,36 +1043,14 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruCache<K, V, S> {
 
     /// Removes and returns the most recently used entry (reverse of pop).
     ///
+    /// This is an internal method for potential future `SlruSet` implementation.
     /// For SLRU, returns the MRU entry from the **protected** segment first.
     /// If protected is empty, falls back to the **probationary** segment.
     ///
-    /// This is the opposite of `pop()`: it removes the \"most valuable\" entry
-    /// first (protected MRU), then falls back to probationary.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use cache_rs::SlruCache;
-    /// use cache_rs::config::SlruCacheConfig;
-    /// use core::num::NonZeroUsize;
-    ///
-    /// let config = SlruCacheConfig {
-    ///     capacity: NonZeroUsize::new(3).unwrap(),
-    ///     protected_capacity: NonZeroUsize::new(1).unwrap(),
-    ///     max_size: u64::MAX,
-    /// };
-    /// let mut cache = SlruCache::init(config, None);
-    /// cache.put("a", 1);
-    /// cache.put("b", 2);
-    /// cache.put("c", 3);
-    ///
-    /// // Pop the most recently used item
-    /// let popped = cache.pop_r();
-    /// assert!(popped.is_some());
-    /// assert_eq!(cache.len(), 2);
-    /// ```
+    /// Returns `None` if the cache is empty.
     #[inline]
-    pub fn pop_r(&mut self) -> Option<(K, V)>
+    #[allow(dead_code)]
+    pub(crate) fn pop_r(&mut self) -> Option<(K, V)>
     where
         V: Clone,
     {

@@ -287,27 +287,6 @@ where
         segment.remove(key)
     }
 
-    /// Returns `true` if the cache contains the specified key.
-    ///
-    /// # Deprecation
-    ///
-    /// This method calls `get()` internally, which **promotes the entry between
-    /// SLRU segments** (probationary → protected). Use [`contains()`](Self::contains)
-    /// instead for a pure existence check without side effects.
-    #[deprecated(
-        since = "0.4.0",
-        note = "contains_key() has side effects (promotes between segments). Use contains() for a pure existence check."
-    )]
-    pub fn contains_key<Q>(&self, key: &Q) -> bool
-    where
-        K: Borrow<Q>,
-        Q: ?Sized + Hash + Eq,
-    {
-        let idx = self.segment_index(key);
-        let mut segment = self.segments[idx].lock();
-        segment.get(key).is_some()
-    }
-
     /// Clears all entries from the cache.
     pub fn clear(&self) {
         for segment in self.segments.iter() {
@@ -327,9 +306,8 @@ where
 
     /// Checks if the cache contains a key without promoting it.
     ///
-    /// Unlike [`contains_key()`](Self::contains_key), this method does **not** update
-    /// the entry's recency or promote it between segments. Use this for pure existence
-    /// checks without affecting cache behavior.
+    /// This is a pure existence check that does **not** update the entry's recency
+    /// or promote it between segments.
     ///
     /// # Example
     ///
@@ -400,20 +378,16 @@ where
 
     /// Removes and returns the most recently used entry from the cache.
     ///
-    /// Pops the MRU entry (from protected segment first) from the first
-    /// non-empty segment. Since SLRU entries do not carry timestamps,
-    /// cross-segment ordering is approximate.
+    /// Internal method that pops the MRU entry (from protected segment first)
+    /// from the first non-empty segment. Since SLRU entries do not carry
+    /// timestamps, cross-segment ordering is approximate.
     ///
     /// # Concurrency Note
     ///
     /// Uses the same sequential scan approach as [`pop()`](Self::pop). See its
     /// documentation for details on cross-segment ordering limitations.
-    ///
-    /// # Returns
-    ///
-    /// - `Some((key, value))` if the cache was not empty
-    /// - `None` if the cache is empty
-    pub fn pop_r(&self) -> Option<(K, V)> {
+    #[allow(dead_code)]
+    pub(crate) fn pop_r(&self) -> Option<(K, V)> {
         for segment in self.segments.iter() {
             let mut guard = segment.lock();
             if let Some(result) = guard.pop_r() {
@@ -603,8 +577,8 @@ mod tests {
 
         cache.put("exists".to_string(), 1);
 
-        assert!(cache.contains_key(&"exists".to_string()));
-        assert!(!cache.contains_key(&"missing".to_string()));
+        assert!(cache.contains(&"exists".to_string()));
+        assert!(!cache.contains(&"missing".to_string()));
     }
 
     #[test]
@@ -681,7 +655,7 @@ mod tests {
         assert_eq!(cache.len(), 0);
         assert_eq!(cache.get(&"missing".to_string()), None);
         assert_eq!(cache.remove(&"missing".to_string()), None);
-        assert!(!cache.contains_key(&"missing".to_string()));
+        assert!(!cache.contains(&"missing".to_string()));
     }
 
     #[test]
@@ -694,7 +668,7 @@ mod tests {
         // Test with borrowed key
         let key_str = "test_key";
         assert_eq!(cache.get(key_str), Some(42));
-        assert!(cache.contains_key(key_str));
+        assert!(cache.contains(key_str));
         assert_eq!(cache.remove(key_str), Some(42));
     }
 

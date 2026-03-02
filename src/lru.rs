@@ -883,33 +883,14 @@ impl<K: Hash + Eq + Clone, V: Clone, S: BuildHasher> LruCache<K, V, S> {
 
     /// Removes and returns the most recently used entry (reverse of pop).
     ///
-    /// This is the opposite of `pop()` - instead of returning the eviction
-    /// candidate, it returns the most recently accessed or inserted item.
+    /// This is an internal method for potential future `LruSet` implementation.
+    /// It removes the most recently accessed or inserted item instead of the
+    /// eviction candidate.
     ///
     /// Returns `None` if the cache is empty.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use cache_rs::LruCache;
-    /// use cache_rs::config::LruCacheConfig;
-    /// use core::num::NonZeroUsize;
-    ///
-    /// let config = LruCacheConfig {
-    ///     capacity: NonZeroUsize::new(3).unwrap(),
-    ///     max_size: u64::MAX,
-    /// };
-    /// let mut cache = LruCache::init(config, None);
-    /// cache.put("a", 1);
-    /// cache.put("b", 2);
-    /// cache.put("c", 3);
-    ///
-    /// // Pop the most recently used item
-    /// assert_eq!(cache.pop_r(), Some(("c", 3)));
-    /// assert_eq!(cache.len(), 2);
-    /// ```
     #[inline]
-    pub fn pop_r(&mut self) -> Option<(K, V)> {
+    #[allow(dead_code)]
+    pub(crate) fn pop_r(&mut self) -> Option<(K, V)> {
         self.segment.pop_r()
     }
 

@@ -1005,33 +1005,13 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
 
     /// Removes and returns the highest frequency entry (reverse of pop).
     ///
-    /// This is the opposite of `pop()` - instead of returning the lowest frequency
-    /// item, it returns the highest frequency item.
+    /// This is an internal method for potential future `LfuSet` implementation.
+    /// It removes the highest frequency item instead of the eviction candidate.
     ///
     /// Returns `None` if the cache is empty.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use cache_rs::LfuCache;
-    /// use cache_rs::config::LfuCacheConfig;
-    /// use core::num::NonZeroUsize;
-    ///
-    /// let config = LfuCacheConfig {
-    ///     capacity: NonZeroUsize::new(3).unwrap(),
-    ///     max_size: u64::MAX,
-    /// };
-    /// let mut cache = LfuCache::init(config, None);
-    /// cache.put("a", 1);
-    /// cache.put("b", 2);
-    /// cache.get(&"b");  // Increase frequency of "b"
-    /// cache.get(&"b");  // Increase frequency again
-    ///
-    /// // Pop the highest frequency item
-    /// assert_eq!(cache.pop_r(), Some(("b", 2)));
-    /// ```
     #[inline]
-    pub fn pop_r(&mut self) -> Option<(K, V)>
+    #[allow(dead_code)]
+    pub(crate) fn pop_r(&mut self) -> Option<(K, V)>
     where
         K: Clone,
     {

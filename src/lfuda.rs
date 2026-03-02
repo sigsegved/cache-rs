@@ -1152,34 +1152,13 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
 
     /// Removes and returns the highest priority entry (reverse of pop).
     ///
-    /// This is the opposite of `pop()` - instead of returning the lowest priority
-    /// item, it returns the highest priority item.
+    /// This is an internal method for potential future `LfudaSet` implementation.
+    /// It removes the highest priority item instead of the eviction candidate.
     ///
     /// Returns `None` if the cache is empty.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use cache_rs::lfuda::LfudaCache;
-    /// use cache_rs::config::LfudaCacheConfig;
-    /// use core::num::NonZeroUsize;
-    ///
-    /// let config = LfudaCacheConfig {
-    ///     capacity: NonZeroUsize::new(3).unwrap(),
-    ///     initial_age: 0,
-    ///     max_size: u64::MAX,
-    /// };
-    /// let mut cache = LfudaCache::init(config, None);
-    /// cache.put("a", 1);
-    /// cache.put("b", 2);
-    /// cache.get(&"b");  // Increase frequency of "b"
-    /// cache.get(&"b");  // Increase frequency again
-    ///
-    /// // Pop the highest priority item
-    /// assert_eq!(cache.pop_r(), Some(("b", 2)));
-    /// ```
     #[inline]
-    pub fn pop_r(&mut self) -> Option<(K, V)>
+    #[allow(dead_code)]
+    pub(crate) fn pop_r(&mut self) -> Option<(K, V)>
     where
         K: Clone,
     {

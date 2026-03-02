@@ -349,32 +349,10 @@ where
         segment.pop(key)
     }
 
-    /// Returns `true` if the cache contains the specified key.
-    ///
-    /// # Deprecation
-    ///
-    /// For API consistency, use [`contains()`](Self::contains) instead. While GDSF's
-    /// `contains_key` happens to be a pure existence check (unlike other cache types),
-    /// `contains()` is the preferred method across all cache implementations.
-    #[deprecated(
-        since = "0.4.0",
-        note = "Use contains() for a consistent API across all cache types."
-    )]
-    pub fn contains_key<Q>(&self, key: &Q) -> bool
-    where
-        K: Borrow<Q> + Clone,
-        Q: ?Sized + Hash + Eq,
-    {
-        let idx = self.segment_index(key);
-        let segment = self.segments[idx].lock();
-        segment.contains_key(key)
-    }
-
     /// Checks if the cache contains a key without updating priority.
     ///
-    /// Unlike [`contains_key()`](Self::contains_key), this method does **not** update
-    /// the entry's priority or frequency. Use this for pure existence checks without
-    /// affecting cache behavior.
+    /// This is a pure existence check that does **not** update the entry's
+    /// priority or frequency.
     ///
     /// # Example
     ///
@@ -465,20 +443,16 @@ where
 
     /// Removes and returns the highest priority entry from the cache.
     ///
-    /// Finds the segment with the globally highest maximum priority and pops
-    /// the highest priority entry from that segment.
+    /// Internal method that finds the segment with the globally highest maximum
+    /// priority and pops the highest priority entry from that segment.
     ///
     /// # Concurrency Note
     ///
     /// Uses the same two-phase scan approach as [`pop()`](Self::pop). See its
     /// documentation for details on the inherent TOCTOU race and performance
     /// characteristics.
-    ///
-    /// # Returns
-    ///
-    /// - `Some((key, value))` if the cache was not empty
-    /// - `None` if the cache is empty
-    pub fn pop_r(&self) -> Option<(K, V)> {
+    #[allow(dead_code)]
+    pub(crate) fn pop_r(&self) -> Option<(K, V)> {
         // Find the segment with the highest priority key
         let mut best_idx = None;
         let mut best_priority = 0u64;
@@ -695,8 +669,8 @@ mod tests {
 
         cache.put("exists".to_string(), 1, 100);
 
-        assert!(cache.contains_key(&"exists".to_string()));
-        assert!(!cache.contains_key(&"missing".to_string()));
+        assert!(cache.contains(&"exists".to_string()));
+        assert!(!cache.contains(&"missing".to_string()));
     }
 
     #[test]
@@ -780,7 +754,7 @@ mod tests {
         assert_eq!(cache.len(), 0);
         assert_eq!(cache.get(&"missing".to_string()), None);
         assert_eq!(cache.remove(&"missing".to_string()), None);
-        assert!(!cache.contains_key(&"missing".to_string()));
+        assert!(!cache.contains(&"missing".to_string()));
     }
 
     #[test]
@@ -793,7 +767,7 @@ mod tests {
         // Test with borrowed key
         let key_str = "test_key";
         assert_eq!(cache.get(key_str), Some(42));
-        assert!(cache.contains_key(key_str));
+        assert!(cache.contains(key_str));
         assert_eq!(cache.remove(key_str), Some(42));
     }
 

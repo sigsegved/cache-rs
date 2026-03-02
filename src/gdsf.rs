@@ -503,14 +503,6 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
         }
     }
 
-    pub(crate) fn contains_key<Q>(&self, key: &Q) -> bool
-    where
-        K: Borrow<Q>,
-        Q: ?Sized + Hash + Eq,
-    {
-        self.map.contains_key(key)
-    }
-
     pub(crate) fn put(&mut self, key: K, val: V, size: u64) -> Option<V>
     where
         K: Clone,
@@ -669,8 +661,6 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
     }
 
     /// Check if key exists without updating its priority or access metadata.
-    ///
-    /// This is an alias for `contains_key()` for API consistency with other caches.
     #[inline]
     pub(crate) fn contains<Q>(&self, key: &Q) -> bool
     where
@@ -876,15 +866,6 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfCache<K, V, S> {
         self.segment.get_mut(key)
     }
 
-    #[inline]
-    pub fn contains_key<Q>(&self, key: &Q) -> bool
-    where
-        K: Borrow<Q>,
-        Q: ?Sized + Hash + Eq,
-    {
-        self.segment.contains_key(key)
-    }
-
     /// Inserts a key-value pair with explicit size into the cache.
     ///
     /// GDSF is inherently size-aware: the `size` parameter affects priority
@@ -926,7 +907,6 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfCache<K, V, S> {
 
     /// Check if key exists without updating its priority or access metadata.
     ///
-    /// This is an alias for `contains_key()` for API consistency with other caches.
     /// Unlike `get()`, this method does NOT update the entry's frequency
     /// or access metadata.
     ///
@@ -1029,34 +1009,13 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfCache<K, V, S> {
 
     /// Removes and returns the highest priority entry (reverse of pop).
     ///
-    /// This is the opposite of `pop()` - instead of returning the lowest priority
-    /// item, it returns the highest priority item.
+    /// This is an internal method for potential future `GdsfSet` implementation.
+    /// It removes the highest priority item instead of the eviction candidate.
     ///
     /// Returns `None` if the cache is empty.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use cache_rs::GdsfCache;
-    /// use cache_rs::config::GdsfCacheConfig;
-    /// use core::num::NonZeroUsize;
-    ///
-    /// let config = GdsfCacheConfig {
-    ///     capacity: NonZeroUsize::new(3).unwrap(),
-    ///     initial_age: 0.0,
-    ///     max_size: u64::MAX,
-    /// };
-    /// let mut cache = GdsfCache::init(config, None);
-    /// cache.put("a", 1, 10);
-    /// cache.put("b", 2, 20);
-    /// cache.get(&"b"); // Increase priority of "b"
-    /// cache.get(&"b"); // Increase priority again
-    ///
-    /// // Pop the highest priority item
-    /// assert_eq!(cache.pop_r(), Some(("b", 2)));
-    /// ```
     #[inline]
-    pub fn pop_r(&mut self) -> Option<(K, V)>
+    #[allow(dead_code)]
+    pub(crate) fn pop_r(&mut self) -> Option<(K, V)>
     where
         K: Clone,
     {
@@ -1158,8 +1117,8 @@ mod tests {
         assert_eq!(cache.get(&"b"), Some(2));
         assert_eq!(cache.get(&"c"), Some(3));
 
-        assert!(cache.contains_key(&"a"));
-        assert!(!cache.contains_key(&"d"));
+        assert!(cache.contains(&"a"));
+        assert!(!cache.contains(&"d"));
     }
 
     #[test]
@@ -1174,9 +1133,9 @@ mod tests {
 
         cache.put("c", 3, 1);
 
-        assert!(cache.contains_key(&"a"));
-        assert!(!cache.contains_key(&"b"));
-        assert!(cache.contains_key(&"c"));
+        assert!(cache.contains(&"a"));
+        assert!(!cache.contains(&"b"));
+        assert!(cache.contains(&"c"));
     }
 
     #[test]
@@ -1188,9 +1147,9 @@ mod tests {
 
         cache.put("medium", 3, 5);
 
-        assert!(cache.contains_key(&"small"));
-        assert!(!cache.contains_key(&"large"));
-        assert!(cache.contains_key(&"medium"));
+        assert!(cache.contains(&"small"));
+        assert!(!cache.contains(&"large"));
+        assert!(cache.contains(&"medium"));
     }
 
     #[test]
@@ -1211,7 +1170,7 @@ mod tests {
 
         assert_eq!(cache.put("key", 1, 0), None);
         assert_eq!(cache.len(), 0);
-        assert!(!cache.contains_key(&"key"));
+        assert!(!cache.contains(&"key"));
     }
 
     #[test]
@@ -1224,8 +1183,8 @@ mod tests {
         // Use remove() instead of the deprecated pop(key)
         assert_eq!(cache.remove(&"a"), Some(1));
         assert_eq!(cache.len(), 1);
-        assert!(!cache.contains_key(&"a"));
-        assert!(cache.contains_key(&"b"));
+        assert!(!cache.contains(&"a"));
+        assert!(cache.contains(&"b"));
 
         assert_eq!(cache.remove(&"nonexistent"), None);
     }
@@ -1241,8 +1200,8 @@ mod tests {
         cache.clear();
         assert_eq!(cache.len(), 0);
         assert!(cache.is_empty());
-        assert!(!cache.contains_key(&"a"));
-        assert!(!cache.contains_key(&"b"));
+        assert!(!cache.contains(&"a"));
+        assert!(!cache.contains(&"b"));
     }
 
     #[test]
