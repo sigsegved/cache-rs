@@ -1681,7 +1681,7 @@ fn test_lfuda_put_returns_evicted() {
 
     let (key, value) = evicted.unwrap();
     // One of the original keys should have been evicted
-    assert!(key >= 1 && key <= 3);
+    assert!((1..=3).contains(&key));
     assert!(value == 10 || value == 20 || value == 30);
 }
 
