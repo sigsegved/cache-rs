@@ -785,4 +785,62 @@ mod tests {
         assert_eq!(cache.pop(), Some(("c".to_string(), 3)));
         assert!(cache.is_empty());
     }
+
+    #[test]
+    fn test_pop_pop_r_comprehensive_interleaved() {
+        // Use segments: 1 for deterministic ordering, capacity 10, protected 5
+        let cache: ConcurrentSlruCache<String, i32> =
+            ConcurrentSlruCache::init(make_config(10, 5, 1), None);
+
+        // Insert entries: all start in probationary
+        cache.put("a".to_string(), 1);
+        cache.put("b".to_string(), 2);
+        cache.put("c".to_string(), 3);
+        cache.put("d".to_string(), 4);
+        cache.put("e".to_string(), 5);
+
+        // pop() removes LRU from probationary: "a"
+        assert_eq!(cache.pop(), Some(("a".to_string(), 1)));
+        assert_eq!(cache.len(), 4);
+
+        // Access "b" to promote to protected
+        cache.get(&"b".to_string());
+
+        // pop_r() removes MRU: "b" is now most recently accessed
+        assert_eq!(cache.pop_r(), Some(("b".to_string(), 2)));
+        assert_eq!(cache.len(), 3);
+
+        // Put new entry "f"
+        cache.put("f".to_string(), 6);
+        assert_eq!(cache.len(), 4);
+
+        // Access "c" to promote it
+        cache.get(&"c".to_string());
+
+        // pop() removes LRU from probationary
+        let popped = cache.pop();
+        assert!(popped.is_some());
+
+        // Remove by key
+        cache.remove(&"c".to_string());
+
+        // Put and promote another entry
+        cache.put("g".to_string(), 7);
+        cache.get(&"g".to_string());
+
+        // Pop remaining entries alternating pop/pop_r
+        while cache.len() > 0 {
+            let result = if cache.len() % 2 == 0 {
+                cache.pop()
+            } else {
+                cache.pop_r()
+            };
+            assert!(result.is_some());
+        }
+
+        // Cache is empty
+        assert!(cache.is_empty());
+        assert_eq!(cache.pop(), None);
+        assert_eq!(cache.pop_r(), None);
+    }
 }

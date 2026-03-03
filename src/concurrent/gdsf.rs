@@ -900,4 +900,68 @@ mod tests {
         assert_eq!(count, 3);
         assert!(cache.is_empty());
     }
+
+    #[test]
+    fn test_pop_pop_r_comprehensive_interleaved() {
+        // Use segments: 1 for deterministic ordering
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::init(make_config(10000, 1), None);
+
+        // GDSF priority = (frequency / size) + global_age
+        // Insert entries with different sizes
+        cache.put("a".to_string(), 1, 100); // large
+        cache.put("b".to_string(), 2, 10);  // small
+        cache.put("c".to_string(), 3, 50);  // medium
+        cache.put("d".to_string(), 4, 10);  // small
+        cache.put("e".to_string(), 5, 200); // very large
+
+        // Access some entries to differentiate priorities
+        cache.get(&"b".to_string()); // bump b frequency (small size = high priority)
+        cache.get(&"b".to_string());
+        cache.get(&"d".to_string()); // bump d frequency (small size = high priority)
+
+        // pop() removes lowest priority (likely "e" - large size, low frequency)
+        let popped = cache.pop();
+        assert!(popped.is_some());
+        assert_eq!(cache.len(), 4);
+
+        // pop_r() removes highest priority (likely "b" - small size, high freq)
+        let popped_r = cache.pop_r();
+        assert!(popped_r.is_some());
+        assert_eq!(cache.len(), 3);
+
+        // Put new entry
+        cache.put("f".to_string(), 6, 30);
+        assert_eq!(cache.len(), 4);
+
+        // Access "f" to increase its priority
+        cache.get(&"f".to_string());
+
+        // pop() removes lowest priority
+        let popped2 = cache.pop();
+        assert!(popped2.is_some());
+        assert_eq!(cache.len(), 3);
+
+        // Remove by key
+        let removed = cache.remove(&"a".to_string());
+        // "a" may have been popped already
+        if removed.is_some() {
+            assert_eq!(cache.len(), 2);
+        }
+
+        // Pop remaining with alternating pop/pop_r
+        while cache.len() > 0 {
+            let result = if cache.len() % 2 == 0 {
+                cache.pop()
+            } else {
+                cache.pop_r()
+            };
+            assert!(result.is_some());
+        }
+
+        // Cache is empty
+        assert!(cache.is_empty());
+        assert_eq!(cache.pop(), None);
+        assert_eq!(cache.pop_r(), None);
+    }
 }

@@ -1594,4 +1594,57 @@ mod tests {
         // pop_r() should return "d" (highest frequency)
         assert_eq!(cache.pop_r(), Some(("d", 4)));
     }
+
+    #[test]
+    fn test_lfu_pop_pop_r_comprehensive_interleaved() {
+        let mut cache = make_cache(5);
+
+        // Insert entries: all start with frequency 1
+        cache.put("a", 1);
+        cache.put("b", 2);
+        cache.put("c", 3);
+        cache.put("d", 4);
+        cache.put("e", 5);
+
+        // Access some entries to differentiate frequencies
+        // a: freq 3, b: freq 2, c: freq 1, d: freq 4, e: freq 1
+        cache.get(&"a");
+        cache.get(&"a");
+        cache.get(&"b");
+        cache.get(&"d");
+        cache.get(&"d");
+        cache.get(&"d");
+
+        // pop() removes lowest frequency first (c or e with freq 1)
+        // Between c and e, "c" was inserted first (older)
+        assert_eq!(cache.pop(), Some(("c", 3)));
+        assert_eq!(cache.len(), 4);
+
+        // pop_r() removes highest frequency (d with freq 4)
+        assert_eq!(cache.pop_r(), Some(("d", 4)));
+        assert_eq!(cache.len(), 3);
+
+        // Put new entry "f" with freq 1
+        cache.put("f", 6);
+        assert_eq!(cache.len(), 4);
+
+        // pop() removes lowest freq (e with freq 1, older than f)
+        assert_eq!(cache.pop(), Some(("e", 5)));
+
+        // Remove "a" by key
+        assert_eq!(cache.remove(&"a"), Some(1));
+        assert_eq!(cache.len(), 2);
+
+        // Remaining: b (freq 2), f (freq 1)
+        // pop() returns f (lowest freq)
+        assert_eq!(cache.pop(), Some(("f", 6)));
+
+        // pop_r() returns b (highest freq, and only remaining)
+        assert_eq!(cache.pop_r(), Some(("b", 2)));
+
+        // Cache is empty
+        assert!(cache.is_empty());
+        assert_eq!(cache.pop(), None);
+        assert_eq!(cache.pop_r(), None);
+    }
 }

@@ -1828,4 +1828,61 @@ mod tests {
         assert!(popped.is_some());
         assert_eq!(cache.len(), 4);
     }
+
+    #[test]
+    fn test_lfuda_pop_pop_r_comprehensive_interleaved() {
+        let mut cache = make_cache(5);
+
+        // Insert entries: all start with frequency 1
+        cache.put("a", 1);
+        cache.put("b", 2);
+        cache.put("c", 3);
+        cache.put("d", 4);
+        cache.put("e", 5);
+
+        // Access some entries to differentiate priorities
+        // LFUDA priority = frequency + global_age
+        // Higher frequency = higher priority = less likely to be evicted
+        cache.get(&"a");
+        cache.get(&"a"); // a: freq ~3
+        cache.get(&"b"); // b: freq ~2
+        cache.get(&"d");
+        cache.get(&"d");
+        cache.get(&"d"); // d: freq ~4
+
+        // pop() removes lowest priority first (c or e with lowest freq)
+        let popped = cache.pop();
+        assert!(popped == Some(("c", 3)) || popped == Some(("e", 5)));
+        assert_eq!(cache.len(), 4);
+
+        // pop_r() removes highest priority (d with highest freq)
+        assert_eq!(cache.pop_r(), Some(("d", 4)));
+        assert_eq!(cache.len(), 3);
+
+        // Put new entry "f" with initial freq
+        cache.put("f", 6);
+        assert_eq!(cache.len(), 4);
+
+        // pop() removes lowest priority
+        let popped2 = cache.pop();
+        assert!(popped2.is_some());
+        assert_eq!(cache.len(), 3);
+
+        // Remove "a" by key
+        assert_eq!(cache.remove(&"a"), Some(1));
+        assert_eq!(cache.len(), 2);
+
+        // Continue popping until empty
+        assert!(cache.pop().is_some());
+        let last = cache.pop_r();
+        assert!(last.is_some() || cache.pop().is_some());
+
+        // Pop remaining if any
+        while cache.pop().is_some() {}
+
+        // Cache is empty
+        assert!(cache.is_empty());
+        assert_eq!(cache.pop(), None);
+        assert_eq!(cache.pop_r(), None);
+    }
 }

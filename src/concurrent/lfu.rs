@@ -788,4 +788,58 @@ mod tests {
         assert_eq!(count, 3);
         assert!(cache.is_empty());
     }
+
+    #[test]
+    fn test_pop_pop_r_comprehensive_interleaved() {
+        // Use segments: 1 for deterministic ordering
+        let cache: ConcurrentLfuCache<String, i32> =
+            ConcurrentLfuCache::init(make_config(100, 1), None);
+
+        // Insert entries: all start with frequency 1
+        cache.put("a".to_string(), 1);
+        cache.put("b".to_string(), 2);
+        cache.put("c".to_string(), 3);
+        cache.put("d".to_string(), 4);
+        cache.put("e".to_string(), 5);
+
+        // Access some entries to differentiate frequencies
+        // a: freq 3, b: freq 2, c: freq 1, d: freq 4, e: freq 1
+        cache.get(&"a".to_string());
+        cache.get(&"a".to_string());
+        cache.get(&"b".to_string());
+        cache.get(&"d".to_string());
+        cache.get(&"d".to_string());
+        cache.get(&"d".to_string());
+
+        // pop() removes lowest frequency first (c or e with freq 1)
+        assert_eq!(cache.pop(), Some(("c".to_string(), 3)));
+        assert_eq!(cache.len(), 4);
+
+        // pop_r() removes highest frequency (d with freq 4)
+        assert_eq!(cache.pop_r(), Some(("d".to_string(), 4)));
+        assert_eq!(cache.len(), 3);
+
+        // Put new entry "f" with freq 1
+        cache.put("f".to_string(), 6);
+        assert_eq!(cache.len(), 4);
+
+        // pop() removes lowest freq (e with freq 1, older than f)
+        assert_eq!(cache.pop(), Some(("e".to_string(), 5)));
+
+        // Remove "a" by key
+        assert_eq!(cache.remove(&"a".to_string()), Some(1));
+        assert_eq!(cache.len(), 2);
+
+        // Remaining: b (freq 2), f (freq 1)
+        // pop() returns f (lowest freq)
+        assert_eq!(cache.pop(), Some(("f".to_string(), 6)));
+
+        // pop_r() returns b (highest freq, and only remaining)
+        assert_eq!(cache.pop_r(), Some(("b".to_string(), 2)));
+
+        // Cache is empty
+        assert!(cache.is_empty());
+        assert_eq!(cache.pop(), None);
+        assert_eq!(cache.pop_r(), None);
+    }
 }

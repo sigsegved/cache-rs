@@ -1506,4 +1506,52 @@ mod tests {
         cache.put("d", 4);
         assert_eq!(cache.segment.metrics().core.evictions, 2);
     }
+
+    #[test]
+    fn test_lru_pop_pop_r_comprehensive_interleaved() {
+        let mut cache = make_cache(5);
+
+        // Initial state: a(LRU) -> b -> c -> d -> e(MRU)
+        cache.put("a", 1);
+        cache.put("b", 2);
+        cache.put("c", 3);
+        cache.put("d", 4);
+        cache.put("e", 5);
+
+        // pop LRU: removes "a", order: b(LRU) -> c -> d -> e(MRU)
+        assert_eq!(cache.pop(), Some(("a", 1)));
+        assert_eq!(cache.len(), 4);
+
+        // Access "b" makes it MRU: c(LRU) -> d -> e -> b(MRU)
+        assert_eq!(cache.get(&"b"), Some(&2));
+
+        // pop_r MRU: removes "b", order: c(LRU) -> d -> e(MRU)
+        assert_eq!(cache.pop_r(), Some(("b", 2)));
+        assert_eq!(cache.len(), 3);
+
+        // Put new entry "f": c(LRU) -> d -> e -> f(MRU)
+        cache.put("f", 6);
+        assert_eq!(cache.len(), 4);
+
+        // pop LRU: removes "c", order: d(LRU) -> e -> f(MRU)
+        assert_eq!(cache.pop(), Some(("c", 3)));
+
+        // Remove "e" by key: d(LRU) -> f(MRU)
+        assert_eq!(cache.remove(&"e"), Some(5));
+        assert_eq!(cache.len(), 2);
+
+        // Access "d" makes it MRU: f(LRU) -> d(MRU)
+        assert_eq!(cache.get(&"d"), Some(&4));
+
+        // pop_r returns "d" (MRU)
+        assert_eq!(cache.pop_r(), Some(("d", 4)));
+
+        // pop returns "f" (only remaining)
+        assert_eq!(cache.pop(), Some(("f", 6)));
+
+        // Cache is empty
+        assert!(cache.is_empty());
+        assert_eq!(cache.pop(), None);
+        assert_eq!(cache.pop_r(), None);
+    }
 }

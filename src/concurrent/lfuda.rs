@@ -839,4 +839,59 @@ mod tests {
         assert_eq!(count, 3);
         assert!(cache.is_empty());
     }
+
+    #[test]
+    fn test_pop_pop_r_comprehensive_interleaved() {
+        // Use segments: 1 for deterministic ordering
+        let cache: ConcurrentLfudaCache<String, i32> =
+            ConcurrentLfudaCache::init(make_config(100, 1), None);
+
+        // Insert entries: all start with initial priority
+        cache.put("a".to_string(), 1);
+        cache.put("b".to_string(), 2);
+        cache.put("c".to_string(), 3);
+        cache.put("d".to_string(), 4);
+        cache.put("e".to_string(), 5);
+
+        // Access some entries to differentiate priorities
+        cache.get(&"a".to_string());
+        cache.get(&"a".to_string()); // a: higher priority
+        cache.get(&"b".to_string()); // b: medium priority
+        cache.get(&"d".to_string());
+        cache.get(&"d".to_string());
+        cache.get(&"d".to_string()); // d: highest priority
+
+        // pop() removes lowest priority first (c or e)
+        let popped = cache.pop();
+        assert!(popped == Some(("c".to_string(), 3)) || popped == Some(("e".to_string(), 5)));
+        assert_eq!(cache.len(), 4);
+
+        // pop_r() removes highest priority (d)
+        assert_eq!(cache.pop_r(), Some(("d".to_string(), 4)));
+        assert_eq!(cache.len(), 3);
+
+        // Put new entry "f"
+        cache.put("f".to_string(), 6);
+        assert_eq!(cache.len(), 4);
+
+        // pop() removes lowest priority
+        let popped2 = cache.pop();
+        assert!(popped2.is_some());
+        assert_eq!(cache.len(), 3);
+
+        // Remove "a" by key
+        assert_eq!(cache.remove(&"a".to_string()), Some(1));
+        assert_eq!(cache.len(), 2);
+
+        // Pop remaining
+        assert!(cache.pop().is_some());
+        assert!(cache.pop_r().is_some() || cache.pop().is_some());
+
+        while cache.pop().is_some() {}
+
+        // Cache is empty
+        assert!(cache.is_empty());
+        assert_eq!(cache.pop(), None);
+        assert_eq!(cache.pop_r(), None);
+    }
 }

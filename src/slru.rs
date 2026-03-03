@@ -1775,4 +1775,65 @@ mod tests {
         cache.remove(&"a");
         assert_eq!(cache.segment.metrics.core.evictions, 0);
     }
+
+    #[test]
+    fn test_slru_pop_pop_r_comprehensive_interleaved() {
+        // Capacity 6, protected 3 (probationary also 3)
+        let mut cache = make_cache(6, 3);
+
+        // Insert entries: all start in probationary
+        // Order in probationary: a(LRU) -> b -> c -> d -> e(MRU)
+        cache.put("a", 1);
+        cache.put("b", 2);
+        cache.put("c", 3);
+        cache.put("d", 4);
+        cache.put("e", 5);
+
+        // pop() removes LRU from probationary: "a"
+        assert_eq!(cache.pop(), Some(("a", 1)));
+        assert_eq!(cache.len(), 4);
+
+        // Access "b" twice to promote to protected
+        cache.get(&"b");
+        // Now b is in protected segment
+
+        // pop_r() removes MRU: "b" is now most recently accessed
+        assert_eq!(cache.pop_r(), Some(("b", 2)));
+        assert_eq!(cache.len(), 3);
+
+        // Put new entry "f"
+        cache.put("f", 6);
+        assert_eq!(cache.len(), 4);
+
+        // Access "c" to promote it
+        cache.get(&"c");
+
+        // pop() removes LRU from probationary (not "c" since it's promoted)
+        let popped = cache.pop();
+        assert!(popped.is_some());
+        let (key, _) = popped.unwrap();
+        assert!(key == "d" || key == "e" || key == "f");
+
+        // Remove by key
+        cache.remove(&"c");
+
+        // Continue with mixed operations
+        cache.put("g", 7);
+        cache.get(&"g"); // promote g
+
+        // Pop remaining entries
+        while cache.len() > 0 {
+            let result = if cache.len() % 2 == 0 {
+                cache.pop()
+            } else {
+                cache.pop_r()
+            };
+            assert!(result.is_some());
+        }
+
+        // Cache is empty
+        assert!(cache.is_empty());
+        assert_eq!(cache.pop(), None);
+        assert_eq!(cache.pop_r(), None);
+    }
 }

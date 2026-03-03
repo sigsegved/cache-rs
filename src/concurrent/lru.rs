@@ -1014,4 +1014,54 @@ mod tests {
         assert_eq!(count, 3);
         assert!(cache.is_empty());
     }
+
+    #[test]
+    fn test_pop_pop_r_comprehensive_interleaved() {
+        // Use segments: 1 for deterministic LRU ordering
+        let cache: ConcurrentLruCache<String, i32> =
+            ConcurrentLruCache::init(make_config(100, 1), None);
+
+        // Initial state: a(LRU) -> b -> c -> d -> e(MRU)
+        cache.put("a".to_string(), 1);
+        cache.put("b".to_string(), 2);
+        cache.put("c".to_string(), 3);
+        cache.put("d".to_string(), 4);
+        cache.put("e".to_string(), 5);
+
+        // pop LRU: removes "a"
+        assert_eq!(cache.pop(), Some(("a".to_string(), 1)));
+        assert_eq!(cache.len(), 4);
+
+        // Access "b" makes it MRU: c(LRU) -> d -> e -> b(MRU)
+        assert_eq!(cache.get(&"b".to_string()), Some(2));
+
+        // pop_r MRU: removes "b"
+        assert_eq!(cache.pop_r(), Some(("b".to_string(), 2)));
+        assert_eq!(cache.len(), 3);
+
+        // Put new entry "f": c(LRU) -> d -> e -> f(MRU)
+        cache.put("f".to_string(), 6);
+        assert_eq!(cache.len(), 4);
+
+        // pop LRU: removes "c"
+        assert_eq!(cache.pop(), Some(("c".to_string(), 3)));
+
+        // Remove "e" by key: d(LRU) -> f(MRU)
+        assert_eq!(cache.remove(&"e".to_string()), Some(5));
+        assert_eq!(cache.len(), 2);
+
+        // Access "d" makes it MRU: f(LRU) -> d(MRU)
+        assert_eq!(cache.get(&"d".to_string()), Some(4));
+
+        // pop_r returns "d" (MRU)
+        assert_eq!(cache.pop_r(), Some(("d".to_string(), 4)));
+
+        // pop returns "f" (only remaining)
+        assert_eq!(cache.pop(), Some(("f".to_string(), 6)));
+
+        // Cache is empty
+        assert!(cache.is_empty());
+        assert_eq!(cache.pop(), None);
+        assert_eq!(cache.pop_r(), None);
+    }
 }

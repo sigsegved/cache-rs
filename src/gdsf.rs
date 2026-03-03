@@ -1483,4 +1483,66 @@ mod tests {
 
         assert_eq!(cache.remove(&"nonexistent"), None);
     }
+
+    #[test]
+    fn test_gdsf_pop_pop_r_comprehensive_interleaved() {
+        let mut cache = make_cache(5);
+
+        // GDSF priority = (frequency / size) + global_age
+        // Insert entries with different sizes
+        cache.put("a", 1, 100); // large
+        cache.put("b", 2, 10);  // small
+        cache.put("c", 3, 50);  // medium
+        cache.put("d", 4, 10);  // small
+        cache.put("e", 5, 200); // very large
+
+        // Access some entries to differentiate priorities
+        cache.get(&"b"); // bump b frequency (small size = high priority)
+        cache.get(&"b");
+        cache.get(&"d"); // bump d frequency (small size = high priority)
+
+        // pop() removes lowest priority (likely "e" - large size, low frequency)
+        let popped = cache.pop();
+        assert!(popped.is_some());
+        assert_eq!(cache.len(), 4);
+
+        // pop_r() removes highest priority (likely "b" - small size, high freq)
+        let popped_r = cache.pop_r();
+        assert!(popped_r.is_some());
+        assert_eq!(cache.len(), 3);
+
+        // Put new entry
+        cache.put("f", 6, 30);
+        assert_eq!(cache.len(), 4);
+
+        // Access "f" to increase its priority
+        cache.get(&"f");
+
+        // pop() removes lowest priority
+        let popped2 = cache.pop();
+        assert!(popped2.is_some());
+        assert_eq!(cache.len(), 3);
+
+        // Remove by key
+        let removed = cache.remove(&"a");
+        // "a" may have been popped already
+        if removed.is_some() {
+            assert_eq!(cache.len(), 2);
+        }
+
+        // Pop remaining with alternating pop/pop_r
+        while cache.len() > 0 {
+            let result = if cache.len() % 2 == 0 {
+                cache.pop()
+            } else {
+                cache.pop_r()
+            };
+            assert!(result.is_some());
+        }
+
+        // Cache is empty
+        assert!(cache.is_empty());
+        assert_eq!(cache.pop(), None);
+        assert_eq!(cache.pop_r(), None);
+    }
 }
