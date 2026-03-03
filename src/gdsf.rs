@@ -1491,9 +1491,9 @@ mod tests {
         // GDSF priority = (frequency / size) + global_age
         // Insert entries with different sizes
         cache.put("a", 1, 100); // large
-        cache.put("b", 2, 10);  // small
-        cache.put("c", 3, 50);  // medium
-        cache.put("d", 4, 10);  // small
+        cache.put("b", 2, 10); // small
+        cache.put("c", 3, 50); // medium
+        cache.put("d", 4, 10); // small
         cache.put("e", 5, 200); // very large
 
         // Access some entries to differentiate priorities

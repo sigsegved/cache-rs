@@ -13,6 +13,7 @@
 use cache_rs::config::{
     GdsfCacheConfig, LfuCacheConfig, LfudaCacheConfig, LruCacheConfig, SlruCacheConfig,
 };
+use cache_rs::metrics::CacheMetrics;
 use cache_rs::{GdsfCache, LfuCache, LfudaCache, LruCache, SlruCache};
 use std::num::NonZeroUsize;
 
