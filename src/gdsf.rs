@@ -156,10 +156,10 @@
 //!
 //! // Insert with explicit size tracking
 //! let small_data = vec![0u8; 1024];  // 1KB
-//! cache.put("small.txt".to_string(), small_data, Some(1024));
+//! cache.put("small.txt".to_string(), small_data, 1024);
 //!
 //! let large_data = vec![0u8; 1024 * 1024];  // 1MB
-//! cache.put("large.bin".to_string(), large_data, Some(1024 * 1024));
+//! cache.put("large.bin".to_string(), large_data, 1024 * 1024);
 //!
 //! // Small items get higher priority per byte
 //! assert!(cache.get(&"small.txt".to_string()).is_some());
@@ -183,7 +183,7 @@
 //! // Cache various asset types with their sizes
 //! fn cache_asset(cache: &mut GdsfCache<String, Vec<u8>>, url: &str, data: Vec<u8>) {
 //!     let size = data.len() as u64;
-//!     cache.put(url.to_string(), data, Some(size));
+//!     cache.put(url.to_string(), data, size);
 //! }
 //!
 //! // Small, frequently-accessed assets get priority over large, rarely-used ones
@@ -498,11 +498,10 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
         }
     }
 
-    pub(crate) fn put(&mut self, key: K, val: V, size: Option<u64>) -> Option<V>
+    pub(crate) fn put(&mut self, key: K, val: V, size: u64) -> Option<V>
     where
         K: Clone,
     {
-        let size = size.unwrap_or(1);
         if size == 0 {
             return None;
         }
@@ -872,7 +871,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfCache<K, V, S> {
     ///
     /// * `key` - The key to insert
     /// * `val` - The value to insert
-    /// * `size` - Optional size in bytes. If `None`, defaults to 1.
+    /// * `size` - Optional size in bytes. Use `SIZE_UNIT` (1) for count-based caching.
     ///
     /// # Multi-eviction behavior
     ///
@@ -881,7 +880,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfCache<K, V, S> {
     /// previously-associated entry is returned (not evicted entries).
     /// All evicted entries are counted in the `evictions` metric.
     #[inline]
-    pub fn put(&mut self, key: K, val: V, size: Option<u64>) -> Option<V>
+    pub fn put(&mut self, key: K, val: V, size: u64) -> Option<V>
     where
         K: Clone,
     {
@@ -925,8 +924,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfCache<K, V, S> {
     ///     max_size: u64::MAX,
     /// };
     /// let mut cache = GdsfCache::init(config, None);
-    /// cache.put("a", 1, Some(10));
-    /// cache.put("b", 2, Some(10));
+    /// cache.put("a", 1, 10);
+    /// cache.put("b", 2, 10);
     ///
     /// // contains() does NOT update priority
     /// assert!(cache.contains(&"a"));
@@ -958,7 +957,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfCache<K, V, S> {
     ///     max_size: u64::MAX,
     /// };
     /// let mut cache = GdsfCache::init(config, None);
-    /// cache.put("a", 1, Some(1));
+    /// cache.put("a", 1, 1);
     ///
     /// // peek does not change priority
     /// assert_eq!(cache.peek(&"a"), Some(&1));
@@ -993,8 +992,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfCache<K, V, S> {
     ///     max_size: u64::MAX,
     /// };
     /// let mut cache = GdsfCache::init(config, None);
-    /// cache.put("a", 1, Some(10));
-    /// cache.put("b", 2, Some(20));
+    /// cache.put("a", 1, 10);
+    /// cache.put("b", 2, 20);
     /// cache.get(&"b"); // Increase priority of "b"
     ///
     /// // Pop the eviction candidate (lowest priority item)
@@ -1067,7 +1066,7 @@ impl<K: Hash + Eq, V: Clone> GdsfCache<K, V, DefaultHashBuilder> {
     ///     max_size: u64::MAX,
     /// };
     /// let mut cache: GdsfCache<&str, i32> = GdsfCache::init(config, None);
-    /// cache.put("key", 42, Some(1));
+    /// cache.put("key", 42, 1);
     ///
     /// // Cache with size limit (recommended for GDSF)
     /// let config = GdsfCacheConfig {
@@ -1104,9 +1103,9 @@ mod tests {
     fn test_gdsf_basic_operations() {
         let mut cache = make_cache(3);
 
-        assert_eq!(cache.put("a", 1, Some(1)), None);
-        assert_eq!(cache.put("b", 2, Some(2)), None);
-        assert_eq!(cache.put("c", 3, Some(1)), None);
+        assert_eq!(cache.put("a", 1, 1), None);
+        assert_eq!(cache.put("b", 2, 2), None);
+        assert_eq!(cache.put("c", 3, 1), None);
         assert_eq!(cache.len(), 3);
 
         assert_eq!(cache.get(&"a"), Some(1));
@@ -1121,13 +1120,13 @@ mod tests {
     fn test_gdsf_frequency_priority() {
         let mut cache = make_cache(2);
 
-        cache.put("a", 1, Some(1));
-        cache.put("b", 2, Some(1));
+        cache.put("a", 1, 1);
+        cache.put("b", 2, 1);
 
         cache.get(&"a");
         cache.get(&"a");
 
-        cache.put("c", 3, Some(1));
+        cache.put("c", 3, 1);
 
         assert!(cache.contains(&"a"));
         assert!(!cache.contains(&"b"));
@@ -1138,10 +1137,10 @@ mod tests {
     fn test_gdsf_size_consideration() {
         let mut cache = make_cache(2);
 
-        cache.put("small", 1, Some(1));
-        cache.put("large", 2, Some(10));
+        cache.put("small", 1, 1);
+        cache.put("large", 2, 10);
 
-        cache.put("medium", 3, Some(5));
+        cache.put("medium", 3, 5);
 
         assert!(cache.contains(&"small"));
         assert!(!cache.contains(&"large"));
@@ -1152,10 +1151,10 @@ mod tests {
     fn test_gdsf_update_existing() {
         let mut cache = make_cache(2);
 
-        cache.put("key", 1, Some(1));
+        cache.put("key", 1, 1);
         assert_eq!(cache.get(&"key"), Some(1));
 
-        assert_eq!(cache.put("key", 2, Some(2)), Some(1));
+        assert_eq!(cache.put("key", 2, 2), Some(1));
         assert_eq!(cache.get(&"key"), Some(2));
         assert_eq!(cache.len(), 1);
     }
@@ -1164,7 +1163,7 @@ mod tests {
     fn test_gdsf_zero_size_rejection() {
         let mut cache = make_cache(2);
 
-        assert_eq!(cache.put("key", 1, Some(0)), None);
+        assert_eq!(cache.put("key", 1, 0), None);
         assert_eq!(cache.len(), 0);
         assert!(!cache.contains(&"key"));
     }
@@ -1173,8 +1172,8 @@ mod tests {
     fn test_gdsf_remove_by_key_legacy() {
         let mut cache = make_cache(2);
 
-        cache.put("a", 1, Some(1));
-        cache.put("b", 2, Some(1));
+        cache.put("a", 1, 1);
+        cache.put("b", 2, 1);
 
         // Use remove() instead of the deprecated pop(key)
         assert_eq!(cache.remove(&"a"), Some(1));
@@ -1189,8 +1188,8 @@ mod tests {
     fn test_gdsf_clear() {
         let mut cache = make_cache(2);
 
-        cache.put("a", 1, Some(1));
-        cache.put("b", 2, Some(1));
+        cache.put("a", 1, 1);
+        cache.put("b", 2, 1);
         assert_eq!(cache.len(), 2);
 
         cache.clear();
@@ -1204,12 +1203,12 @@ mod tests {
     fn test_gdsf_global_aging() {
         let mut cache = make_cache(2);
 
-        cache.put("a", 1, Some(1));
-        cache.put("b", 2, Some(1));
+        cache.put("a", 1, 1);
+        cache.put("b", 2, 1);
 
         let initial_age = cache.global_age();
 
-        cache.put("c", 3, Some(1));
+        cache.put("c", 3, 1);
 
         assert!(cache.global_age() > initial_age);
     }
@@ -1218,9 +1217,9 @@ mod tests {
     fn test_miri_stacked_borrows_fix() {
         let mut cache = make_cache(10);
 
-        cache.put("a", 1, Some(10));
-        cache.put("b", 2, Some(20));
-        cache.put("c", 3, Some(15));
+        cache.put("a", 1, 10);
+        cache.put("b", 2, 20);
+        cache.put("c", 3, 15);
 
         for _ in 0..3 {
             assert_eq!(cache.get(&"a"), Some(1));
@@ -1248,8 +1247,8 @@ mod tests {
         assert_eq!(segment.len(), 0);
         assert!(segment.is_empty());
         assert_eq!(segment.cap().get(), 2);
-        segment.put("a", 1, Some(1));
-        segment.put("b", 2, Some(2));
+        segment.put("a", 1, 1);
+        segment.put("b", 2, 2);
         assert_eq!(segment.len(), 2);
         assert_eq!(segment.get(&"a"), Some(1));
         assert_eq!(segment.get(&"b"), Some(2));
@@ -1275,7 +1274,7 @@ mod tests {
                     let key = std::format!("key_{}_{}", t, i);
                     let size = ((i % 10) + 1) as u64; // Varying sizes 1-10
                     let mut guard = cache.lock().unwrap();
-                    guard.put(key.clone(), i, Some(size));
+                    guard.put(key.clone(), i, size);
                     let _ = guard.get(&key);
                 }
             }));
@@ -1298,9 +1297,9 @@ mod tests {
         assert_eq!(cache.max_size(), u64::MAX);
 
         // GDSF already requires size in put()
-        cache.put("a", 1, Some(100));
-        cache.put("b", 2, Some(200));
-        cache.put("c", 3, Some(150));
+        cache.put("a", 1, 100);
+        cache.put("b", 2, 200);
+        cache.put("c", 3, 150);
 
         assert_eq!(cache.current_size(), 450);
         assert_eq!(cache.len(), 3);
@@ -1340,8 +1339,8 @@ mod tests {
     #[test]
     fn test_gdsf_contains_non_promoting() {
         let mut cache = make_cache(2);
-        cache.put("a", 1, Some(10));
-        cache.put("b", 2, Some(10));
+        cache.put("a", 1, 10);
+        cache.put("b", 2, 10);
 
         // contains() should return true for existing keys
         assert!(cache.contains(&"a"));
@@ -1355,7 +1354,7 @@ mod tests {
         assert!(cache.contains(&"a"));
 
         // Adding "c" should evict "a" (lowest priority), not "b"
-        cache.put("c", 3, Some(10));
+        cache.put("c", 3, 10);
         assert!(!cache.contains(&"a")); // "a" was evicted
         assert!(cache.contains(&"b")); // "b" still exists
         assert!(cache.contains(&"c")); // "c" was just added
@@ -1364,9 +1363,9 @@ mod tests {
     #[test]
     fn test_gdsf_pop_returns_lowest_priority() {
         let mut cache = make_cache(3);
-        cache.put("a", 1, Some(10));
-        cache.put("b", 2, Some(10));
-        cache.put("c", 3, Some(10));
+        cache.put("a", 1, 10);
+        cache.put("b", 2, 10);
+        cache.put("c", 3, 10);
 
         // Access "b" and "c" to increase their priorities
         cache.get(&"b");
@@ -1392,9 +1391,9 @@ mod tests {
     #[test]
     fn test_gdsf_pop_r_returns_highest_priority() {
         let mut cache = make_cache(3);
-        cache.put("a", 1, Some(10));
-        cache.put("b", 2, Some(10));
-        cache.put("c", 3, Some(10));
+        cache.put("a", 1, 10);
+        cache.put("b", 2, 10);
+        cache.put("c", 3, 10);
 
         // Access items to build different priorities
         cache.get(&"b"); // "b" priority increases
@@ -1427,8 +1426,8 @@ mod tests {
     #[test]
     fn test_gdsf_pop_updates_global_age() {
         let mut cache = make_cache(2);
-        cache.put("a", 1, Some(10));
-        cache.put("b", 2, Some(10));
+        cache.put("a", 1, 10);
+        cache.put("b", 2, 10);
 
         let initial_age = cache.global_age();
 
@@ -1452,7 +1451,7 @@ mod tests {
     #[test]
     fn test_gdsf_pop_single_element() {
         let mut cache = make_cache(2);
-        cache.put("a", 1, Some(10));
+        cache.put("a", 1, 10);
 
         let popped = cache.pop();
         assert_eq!(popped, Some(("a", 1)));
@@ -1462,7 +1461,7 @@ mod tests {
     #[test]
     fn test_gdsf_pop_r_single_element() {
         let mut cache = make_cache(2);
-        cache.put("a", 1, Some(10));
+        cache.put("a", 1, 10);
 
         let popped = cache.pop_r();
         assert_eq!(popped, Some(("a", 1)));
@@ -1472,8 +1471,8 @@ mod tests {
     #[test]
     fn test_gdsf_remove_by_key() {
         let mut cache = make_cache(2);
-        cache.put("a", 1, Some(10));
-        cache.put("b", 2, Some(10));
+        cache.put("a", 1, 10);
+        cache.put("b", 2, 10);
 
         // remove() works like pop(key)
         assert_eq!(cache.remove(&"a"), Some(1));
@@ -1490,11 +1489,11 @@ mod tests {
 
         // GDSF priority = (frequency / size) + global_age
         // Insert entries with different sizes
-        cache.put("a", 1, Some(100)); // large
-        cache.put("b", 2, Some(10)); // small
-        cache.put("c", 3, Some(50)); // medium
-        cache.put("d", 4, Some(10)); // small
-        cache.put("e", 5, Some(200)); // very large
+        cache.put("a", 1, 100); // large
+        cache.put("b", 2, 10); // small
+        cache.put("c", 3, 50); // medium
+        cache.put("d", 4, 10); // small
+        cache.put("e", 5, 200); // very large
 
         // Access some entries to differentiate priorities
         cache.get(&"b"); // bump b frequency (small size = high priority)
@@ -1512,7 +1511,7 @@ mod tests {
         assert_eq!(cache.len(), 3);
 
         // Put new entry
-        cache.put("f", 6, Some(30));
+        cache.put("f", 6, 30);
         assert_eq!(cache.len(), 4);
 
         // Access "f" to increase its priority

@@ -59,9 +59,9 @@ fn test_lru_cache(capacity: NonZeroUsize) -> LruCache<&'static str, i32> {
     let mut cache = LruCache::init(config, None);
 
     // Standard workload
-    cache.put("apple", 1, None);
-    cache.put("banana", 2, None);
-    cache.put("cherry", 3, None);
+    cache.put("apple", 1, 1);
+    cache.put("banana", 2, 1);
+    cache.put("cherry", 3, 1);
 
     // Access patterns (apple becomes most recently used)
     cache.get(&"apple");
@@ -73,8 +73,8 @@ fn test_lru_cache(capacity: NonZeroUsize) -> LruCache<&'static str, i32> {
     cache.record_miss(32);
 
     // More insertions (will trigger evictions)
-    cache.put("date", 4, None);
-    cache.put("elderberry", 5, None);
+    cache.put("date", 4, 1);
+    cache.put("elderberry", 5, 1);
 
     println!("   ✅ LRU test completed");
     cache
@@ -91,9 +91,9 @@ fn test_lfu_cache(capacity: NonZeroUsize) -> LfuCache<&'static str, i32> {
     let mut cache = LfuCache::init(config, None);
 
     // Standard workload
-    cache.put("apple", 1, None);
-    cache.put("banana", 2, None);
-    cache.put("cherry", 3, None);
+    cache.put("apple", 1, 1);
+    cache.put("banana", 2, 1);
+    cache.put("cherry", 3, 1);
 
     // Access patterns (apple becomes most frequently used)
     cache.get(&"apple");
@@ -105,8 +105,8 @@ fn test_lfu_cache(capacity: NonZeroUsize) -> LfuCache<&'static str, i32> {
     cache.record_miss(32);
 
     // More insertions
-    cache.put("date", 4, None);
-    cache.put("elderberry", 5, None);
+    cache.put("date", 4, 1);
+    cache.put("elderberry", 5, 1);
 
     println!("   ✅ LFU test completed");
     cache
@@ -124,9 +124,9 @@ fn test_slru_cache(capacity: NonZeroUsize) -> SlruCache<&'static str, i32> {
     let mut cache = SlruCache::init(config, None);
 
     // Standard workload
-    cache.put("apple", 1, None);
-    cache.put("banana", 2, None);
-    cache.put("cherry", 3, None);
+    cache.put("apple", 1, 1);
+    cache.put("banana", 2, 1);
+    cache.put("cherry", 3, 1);
 
     // Access patterns (will cause promotions)
     cache.get(&"apple");
@@ -138,8 +138,8 @@ fn test_slru_cache(capacity: NonZeroUsize) -> SlruCache<&'static str, i32> {
     cache.record_miss(32);
 
     // More insertions
-    cache.put("date", 4, None);
-    cache.put("elderberry", 5, None);
+    cache.put("date", 4, 1);
+    cache.put("elderberry", 5, 1);
 
     println!("   ✅ SLRU test completed");
     cache
@@ -157,9 +157,9 @@ fn test_lfuda_cache(capacity: NonZeroUsize) -> LfudaCache<&'static str, i32> {
     let mut cache = LfudaCache::init(config, None);
 
     // Standard workload
-    cache.put("apple", 1, None);
-    cache.put("banana", 2, None);
-    cache.put("cherry", 3, None);
+    cache.put("apple", 1, 1);
+    cache.put("banana", 2, 1);
+    cache.put("cherry", 3, 1);
 
     // Access patterns
     cache.get(&"apple");
@@ -171,8 +171,8 @@ fn test_lfuda_cache(capacity: NonZeroUsize) -> LfudaCache<&'static str, i32> {
     cache.record_miss(32);
 
     // More insertions (will trigger aging)
-    cache.put("date", 4, None);
-    cache.put("elderberry", 5, None);
+    cache.put("date", 4, 1);
+    cache.put("elderberry", 5, 1);
 
     println!("   ✅ LFUDA test completed");
     cache
@@ -190,9 +190,9 @@ fn test_gdsf_cache(capacity: NonZeroUsize) -> GdsfCache<&'static str, i32> {
     let mut cache = GdsfCache::init(config, None);
 
     // Standard workload (with different sizes)
-    cache.put("apple", 1, Some(10)); // Small item
-    cache.put("banana", 2, Some(50)); // Large item
-    cache.put("cherry", 3, Some(25)); // Medium item
+    cache.put("apple", 1, 10); // Small item
+    cache.put("banana", 2, 50); // Large item
+    cache.put("cherry", 3, 25); // Medium item
 
     // Access patterns
     cache.get(&"apple");
@@ -204,8 +204,8 @@ fn test_gdsf_cache(capacity: NonZeroUsize) -> GdsfCache<&'static str, i32> {
     cache.record_miss(32);
 
     // More insertions
-    cache.put("date", 4, Some(15));
-    cache.put("elderberry", 5, Some(40));
+    cache.put("date", 4, 15);
+    cache.put("elderberry", 5, 40);
 
     println!("   ✅ GDSF test completed");
     cache

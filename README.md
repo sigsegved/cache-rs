@@ -60,8 +60,7 @@ All cache types support these core operations:
 
 | Method | Description |
 |--------|-------------|
-| `put(key, value)` | Insert or update an entry. Returns evicted entry if capacity exceeded. |
-| `put(key, value, Some(size))` | Insert with explicit size for size-limited caches. |
+| `put(key, value, size)` | Insert or update an entry with explicit size. Returns evicted entry if capacity exceeded. Use `1` for count-based caching. |
 | `get(&key)` | Retrieve a reference to the value. Updates access metadata (e.g., moves to front in LRU). |
 | `get_mut(&key)` | Retrieve a mutable reference. Updates access metadata. |
 | `remove(&key)` | Remove and return an entry. |
@@ -90,8 +89,8 @@ let config = LruCacheConfig {
 let mut cache = LruCache::init(config, None);
 
 // Insert entries
-cache.put("user:1001", "Alice", None);
-cache.put("user:1002", "Bob", None);
+cache.put("user:1001", "Alice", 1);
+cache.put("user:1002", "Bob", 1);
 
 // Retrieve (updates LRU position)
 assert_eq!(cache.get(&"user:1001"), Some(&"Alice"));
@@ -145,7 +144,7 @@ This dual-limit approach gives you precise control:
 
 ### Specifying Entry Size
 
-By default, `put(key, value)` treats each entry as having size `1`. For size-aware caching, use `put(key, value, Some(size))`:
+The `put(key, value, size)` method always requires a size parameter. For count-based caching (where you just want to limit the number of entries), use `1` for the size:
 
 ```rust
 use cache_rs::LruCache;
@@ -160,10 +159,10 @@ let mut cache: LruCache<&str, Vec<u8>> = LruCache::init(config, None);
 
 // Size-aware insertion: this blob consumes 5KB of the 10MB budget
 let blob = vec![0u8; 5000];
-cache.put("large-blob", blob, Some(5000));
+cache.put("large-blob", blob, 5000);
 ```
 
-**Note**: For GDSF caches, `put(key, value, size)` always requires the size parameter since size is integral to the eviction algorithm.
+**Note**: All cache types now use the same signature: `put(key, value, size)`. For count-based caching, pass `1` as the size.
 
 ### Sizing Strategies
 
@@ -204,7 +203,7 @@ let mut cache = LruCache::init(config, None);
 // Track actual sizes when inserting
 let image_data = load_image("photo.jpg");
 let image_size = image_data.len() as u64;
-cache.put("photo.jpg", image_data, Some(image_size));
+cache.put("photo.jpg", image_data, image_size);
 ```
 
 **Use case**: CDN caches, file caches, response caches where objects vary significantly in size.
@@ -249,18 +248,18 @@ let config = LruCacheConfig {
 let mut cache: LruCache<&str, &str> = LruCache::init(config, None);
 
 // Insert 3 entries, each with size 30 bytes
-cache.put("a", "value_a", Some(30));  // entries=1, size=30
-cache.put("b", "value_b", Some(30));  // entries=2, size=60
-cache.put("c", "value_c", Some(30));  // entries=3, size=90
+cache.put("a", "value_a", 30);  // entries=1, size=30
+cache.put("b", "value_b", 30);  // entries=2, size=60
+cache.put("c", "value_c", 30);  // entries=3, size=90
 
 // Case 1: Capacity-triggered eviction
 // Adding "d" would exceed capacity (3 entries), so "a" is evicted
-cache.put("d", "value_d", Some(30));  // evicts "a", entries=3, size=90
+cache.put("d", "value_d", 30);  // evicts "a", entries=3, size=90
 
 // Case 2: Size-triggered eviction
 // Adding a 50-byte entry would exceed max_size (90 + 50 > 100)
 // Multiple entries may be evicted to make room
-cache.put("big", "large_value", Some(50));  // evicts until size fits
+cache.put("big", "large_value", 50);  // evicts until size fits
 ```
 
 For concurrent caches, `capacity` and `max_size` apply to the **entire cache** (distributed across all segments), not per-segment
@@ -401,8 +400,8 @@ let config = GdsfCacheConfig {
 let mut cache: GdsfCache<&str, Vec<u8>> = GdsfCache::init(config, None);
 
 // put() requires size parameter
-cache.put("small.txt", "content", Some(1024));        // 1 KB
-cache.put("large.bin", "content", Some(10_000_000));  // 10 MB
+cache.put("small.txt", "content", 1024);        // 1 KB
+cache.put("large.bin", "content", 10_000_000);  // 10 MB
 ```
 
 ---
@@ -460,7 +459,7 @@ let handles: Vec<_> = (0..8).map(|i| {
     thread::spawn(move || {
         for j in 0..1000 {
             let key = format!("thread{}-key{}", i, j);
-            cache.put(key.clone(), i * 1000 + j, None);
+            cache.put(key.clone(), i * 1000 + j, 1);
             cache.get(&key);
         }
     })
@@ -488,7 +487,7 @@ let config = ConcurrentCacheConfig {
     segments: 16,
 };
 let cache: ConcurrentLruCache<String, Vec<u8>> = ConcurrentLruCache::init(config, None);
-cache.put("data".to_string(), vec![1u8; 1024], None);
+cache.put("data".to_string(), vec![1u8; 1024], 1);
 
 // Process in-place without cloning
 let sum: Option<u8> = cache.get_with(&"data".to_string(), |bytes| {
@@ -556,7 +555,7 @@ impl TieredCache {
         if let Some((_, evicted)) = self.index.put(
             key.to_string(),
             DiskEntry { path: path.clone(), size: content.len() as u64 },
-            None,
+            content.len() as u64,
         ) {
             // Clean up evicted file from disk
             let _ = fs::remove_file(&evicted.path);
@@ -603,7 +602,7 @@ let config = LruCacheConfig {
     max_size: u64::MAX,
 };
 let mut cache: LruCache<String, &str> = LruCache::init(config, None);
-cache.put(String::from("key"), "value", None);
+cache.put(String::from("key"), "value", 1);
 ```
 
 ### Feature Flags

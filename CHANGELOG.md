@@ -11,37 +11,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### **Unified `put` API**
 
-The `put` method signature has changed for all cache algorithms. The separate `put_with_size()` method has been removed in favor of a unified API:
+The `put` method signature has changed for all cache algorithms. The `size` parameter is now required (no longer `Option<u64>`):
 
 **Before (0.3.x):**
 ```rust
-cache.put(key, value);                    // Entry-count mode
-cache.put_with_size(key, value, size);    // Size-based mode
+cache.put(key, value, None);              // Entry-count mode (size defaults to 1)
+cache.put(key, value, Some(1024));        // Size-based mode
 ```
 
 **After:**
 ```rust
-cache.put(key, value, None);              // Entry-count mode (size defaults to 1)
-cache.put(key, value, Some(1024));        // Size-based mode
+cache.put(key, value, 1);              // Entry-count mode
+cache.put(key, value, 1024);           // Size-based mode
 ```
 
 #### **Migration Guide**
 
 | Old API | New API |
 |---------|---------|
-| `cache.put(key, value)` | `cache.put(key, value, None)` |
-| `cache.put_with_size(key, value, size)` | `cache.put(key, value, Some(size))` |
+| `cache.put(key, value, None)` | `cache.put(key, value, 1)` |
+| `cache.put(key, value, Some(size))` | `cache.put(key, value, size)` |
 
 This applies to all algorithms (LRU, LFU, LFUDA, SLRU, GDSF) and their concurrent variants.
 
 ### Changed
 
-- **GDSF**: The `size` parameter is now `Option<u64>` instead of required `u64`, defaulting to `1` when `None`
-- **Internal**: Removed `estimate_object_size()` helper functions as they are no longer needed
+- **API**: The `size` parameter is now required `u64` instead of `Option<u64>`
+- **Documentation**: Updated all examples to use the new required size parameter
+
+### Added
+
+- **`SIZE_UNIT` constant**: Use `cache_rs::SIZE_UNIT` (= 1) for entry-count mode caching
 
 ### Removed
 
-- `put_with_size()` method from all cache implementations
+- Support for `None` as a default size (use `1` or `SIZE_UNIT` explicitly)
 - Separate `put_with_size_stats` tracking in cache-simulator (merged into `put_stats`)
 
 ## [0.3.1] - 2026-02-03
@@ -69,9 +73,9 @@ All caches previously supported multiple initialization methods which have now b
 - `new()` → Use `init(config, None)`
 - `with_limits()` → Use `init(config, None)`
 - `with_max_size()` → Use `init(config, None)`
-- `with_hasher()` → Use `init(config, Some(hasher))`
-- `with_hasher_and_size()` → Use `init(config, Some(hasher))`
-- `init_with_hasher()` → Use `init(config, Some(hasher))`
+- `with_hasher()` → Use `init(config, hasher)`
+- `with_hasher_and_size()` → Use `init(config, hasher)`
+- `init_with_hasher()` → Use `init(config, hasher)`
 
 #### **Migration Guide**
 
@@ -96,7 +100,7 @@ let config = LruCacheConfig {
 let cache = LruCache::init(config, None);
 
 // With custom hasher
-let cache = LruCache::init(config, Some(my_hasher));
+let cache = LruCache::init(config, my_hasher);
 
 // SLRU example
 let config = SlruCacheConfig {

@@ -143,7 +143,7 @@ use std::collections::hash_map::RandomState as DefaultHashBuilder;
 /// let cache = Arc::new(ConcurrentLruCache::new(1000));
 ///
 /// // Safe to use from multiple threads
-/// cache.put("key".to_string(), 42, None);
+/// cache.put("key".to_string(), 42, 1);
 /// assert_eq!(cache.get(&"key".to_string()), Some(42));
 /// ```
 pub struct ConcurrentLruCache<K, V, S = DefaultHashBuilder> {
@@ -340,7 +340,7 @@ where
     ///
     /// If the key exists, the value is updated and moved to MRU position.
     /// If at capacity, the LRU entry in the target segment is evicted.
-    /// If `size` is `None`, defaults to 1.
+    /// Use `SIZE_UNIT` (1) for count-based caching.
     ///
     /// # Returns
     ///
@@ -350,9 +350,9 @@ where
     /// # Example
     ///
     /// ```rust,ignore
-    /// cache.put("key".to_string(), 42, None);
+    /// cache.put("key".to_string(), 42, 1);
     /// ```
-    pub fn put(&self, key: K, value: V, size: Option<u64>) -> Option<(K, V)> {
+    pub fn put(&self, key: K, value: V, size: u64) -> Option<(K, V)> {
         let idx = self.segment_index(&key);
         let mut segment = self.segments[idx].lock();
         segment.put(key, value, size)
@@ -604,9 +604,9 @@ mod tests {
         assert!(cache.is_empty());
         assert_eq!(cache.len(), 0);
 
-        cache.put("a".to_string(), 1, None);
-        cache.put("b".to_string(), 2, None);
-        cache.put("c".to_string(), 3, None);
+        cache.put("a".to_string(), 1, 1);
+        cache.put("b".to_string(), 2, 1);
+        cache.put("c".to_string(), 3, 1);
 
         assert_eq!(cache.len(), 3);
         assert!(!cache.is_empty());
@@ -622,7 +622,7 @@ mod tests {
         let cache: ConcurrentLruCache<String, String> =
             ConcurrentLruCache::init(make_config(100, 16), None);
 
-        cache.put("key".to_string(), "hello world".to_string(), None);
+        cache.put("key".to_string(), "hello world".to_string(), 1);
 
         let len = cache.get_with(&"key".to_string(), |v: &String| v.len());
         assert_eq!(len, Some(11));
@@ -636,7 +636,7 @@ mod tests {
         let cache: ConcurrentLruCache<String, i32> =
             ConcurrentLruCache::init(make_config(100, 16), None);
 
-        cache.put("counter".to_string(), 0, None);
+        cache.put("counter".to_string(), 0, 1);
 
         cache.get_mut_with(&"counter".to_string(), |v: &mut i32| *v += 1);
         cache.get_mut_with(&"counter".to_string(), |v: &mut i32| *v += 1);
@@ -649,8 +649,8 @@ mod tests {
         let cache: ConcurrentLruCache<String, i32> =
             ConcurrentLruCache::init(make_config(100, 16), None);
 
-        cache.put("a".to_string(), 1, None);
-        cache.put("b".to_string(), 2, None);
+        cache.put("a".to_string(), 1, 1);
+        cache.put("b".to_string(), 2, 1);
 
         assert_eq!(cache.remove(&"a".to_string()), Some(1));
         assert_eq!(cache.get(&"a".to_string()), None);
@@ -664,9 +664,9 @@ mod tests {
         let cache: ConcurrentLruCache<String, i32> =
             ConcurrentLruCache::init(make_config(100, 16), None);
 
-        cache.put("a".to_string(), 1, None);
-        cache.put("b".to_string(), 2, None);
-        cache.put("c".to_string(), 3, None);
+        cache.put("a".to_string(), 1, 1);
+        cache.put("b".to_string(), 2, 1);
+        cache.put("c".to_string(), 3, 1);
 
         assert_eq!(cache.len(), 3);
         cache.clear();
@@ -679,7 +679,7 @@ mod tests {
         let cache: ConcurrentLruCache<String, i32> =
             ConcurrentLruCache::init(make_config(100, 16), None);
 
-        cache.put("exists".to_string(), 1, None);
+        cache.put("exists".to_string(), 1, 1);
 
         assert!(cache.contains(&"exists".to_string()));
         assert!(!cache.contains(&"missing".to_string()));
@@ -699,7 +699,7 @@ mod tests {
             handles.push(thread::spawn(move || {
                 for i in 0..ops_per_thread {
                     let key = std::format!("thread_{}_key_{}", t, i);
-                    cache.put(key.clone(), t * 1000 + i, None);
+                    cache.put(key.clone(), t * 1000 + i, 1);
                     let _ = cache.get(&key);
                 }
             }));
@@ -729,7 +729,7 @@ mod tests {
 
                     match i % 4 {
                         0 => {
-                            cache.put(key, i, None);
+                            cache.put(key, i, 1);
                         }
                         1 => {
                             let _ = cache.get(&key);
@@ -783,14 +783,14 @@ mod tests {
         let cache: ConcurrentLruCache<String, i32> =
             ConcurrentLruCache::init(make_config(48, 16), None);
 
-        cache.put("a".to_string(), 1, None);
-        cache.put("b".to_string(), 2, None);
-        cache.put("c".to_string(), 3, None);
+        cache.put("a".to_string(), 1, 1);
+        cache.put("b".to_string(), 2, 1);
+        cache.put("c".to_string(), 3, 1);
 
         assert_eq!(cache.len(), 3);
 
         // This should evict the LRU item
-        cache.put("d".to_string(), 4, None);
+        cache.put("d".to_string(), 4, 1);
 
         assert!(cache.len() <= 48);
         assert!(cache.contains(&"d".to_string()));
@@ -801,10 +801,10 @@ mod tests {
         let cache: ConcurrentLruCache<String, i32> =
             ConcurrentLruCache::init(make_config(100, 16), None);
 
-        cache.put("key".to_string(), 1, None);
+        cache.put("key".to_string(), 1, 1);
         assert_eq!(cache.get(&"key".to_string()), Some(1));
 
-        cache.put("key".to_string(), 2, None);
+        cache.put("key".to_string(), 2, 1);
         assert_eq!(cache.get(&"key".to_string()), Some(2));
         assert_eq!(cache.len(), 1);
     }
@@ -814,15 +814,15 @@ mod tests {
         let cache: ConcurrentLruCache<String, i32> =
             ConcurrentLruCache::init(make_config(48, 16), None);
 
-        cache.put("a".to_string(), 1, None);
-        cache.put("b".to_string(), 2, None);
-        cache.put("c".to_string(), 3, None);
+        cache.put("a".to_string(), 1, 1);
+        cache.put("b".to_string(), 2, 1);
+        cache.put("c".to_string(), 3, 1);
 
         // Access "a" to make it recently used
         let _ = cache.get(&"a".to_string());
 
         // Add a new item
-        cache.put("d".to_string(), 4, None);
+        cache.put("d".to_string(), 4, 1);
 
         assert!(cache.contains(&"a".to_string()));
         assert!(cache.contains(&"d".to_string()));
@@ -833,8 +833,8 @@ mod tests {
         let cache: ConcurrentLruCache<String, i32> =
             ConcurrentLruCache::init(make_config(100, 16), None);
 
-        cache.put("a".to_string(), 1, None);
-        cache.put("b".to_string(), 2, None);
+        cache.put("a".to_string(), 1, 1);
+        cache.put("b".to_string(), 2, 1);
 
         let metrics = cache.metrics();
         // Metrics aggregation across segments
@@ -874,10 +874,10 @@ mod tests {
         let cache: ConcurrentLruCache<String, i32> =
             ConcurrentLruCache::init(make_config(16, 16), None);
 
-        cache.put("a".to_string(), 1, None);
+        cache.put("a".to_string(), 1, 1);
         assert!(!cache.is_empty());
 
-        cache.put("b".to_string(), 2, None);
+        cache.put("b".to_string(), 2, 1);
         assert!(cache.len() <= 16);
     }
 
@@ -886,7 +886,7 @@ mod tests {
         let cache: ConcurrentLruCache<String, i32> =
             ConcurrentLruCache::init(make_config(100, 16), None);
 
-        cache.put("test_key".to_string(), 42, None);
+        cache.put("test_key".to_string(), 42, 1);
 
         // Test with borrowed key
         let key_str = "test_key";
@@ -908,8 +908,8 @@ mod tests {
         let cache: ConcurrentLruCache<String, i32> =
             ConcurrentLruCache::init(make_config(100, 16), None);
 
-        cache.put("a".to_string(), 1, None);
-        cache.put("b".to_string(), 2, None);
+        cache.put("a".to_string(), 1, 1);
+        cache.put("b".to_string(), 2, 1);
 
         // contains() should check without promoting
         assert!(cache.contains(&"a".to_string()));
@@ -922,8 +922,8 @@ mod tests {
         let cache: ConcurrentLruCache<String, i32> =
             ConcurrentLruCache::init(make_config(100, 16), None);
 
-        cache.put("a".to_string(), 1, None);
-        cache.put("b".to_string(), 2, None);
+        cache.put("a".to_string(), 1, 1);
+        cache.put("b".to_string(), 2, 1);
 
         let initial_len = cache.len();
 
@@ -951,8 +951,8 @@ mod tests {
         let cache: ConcurrentLruCache<String, i32> =
             ConcurrentLruCache::init(make_config(100, 16), None);
 
-        cache.put("a".to_string(), 1, None);
-        cache.put("b".to_string(), 2, None);
+        cache.put("a".to_string(), 1, 1);
+        cache.put("b".to_string(), 2, 1);
 
         let initial_len = cache.len();
 
@@ -980,9 +980,9 @@ mod tests {
         let cache: ConcurrentLruCache<String, i32> =
             ConcurrentLruCache::init(make_config(100, 16), None);
 
-        cache.put("a".to_string(), 1, None);
-        cache.put("b".to_string(), 2, None);
-        cache.put("c".to_string(), 3, None);
+        cache.put("a".to_string(), 1, 1);
+        cache.put("b".to_string(), 2, 1);
+        cache.put("c".to_string(), 3, 1);
 
         let mut count = 0;
         while cache.pop().is_some() {
@@ -1000,11 +1000,11 @@ mod tests {
             ConcurrentLruCache::init(make_config(100, 1), None);
 
         // Initial state: a(LRU) -> b -> c -> d -> e(MRU)
-        cache.put("a".to_string(), 1, None);
-        cache.put("b".to_string(), 2, None);
-        cache.put("c".to_string(), 3, None);
-        cache.put("d".to_string(), 4, None);
-        cache.put("e".to_string(), 5, None);
+        cache.put("a".to_string(), 1, 1);
+        cache.put("b".to_string(), 2, 1);
+        cache.put("c".to_string(), 3, 1);
+        cache.put("d".to_string(), 4, 1);
+        cache.put("e".to_string(), 5, 1);
 
         // pop LRU: removes "a"
         assert_eq!(cache.pop(), Some(("a".to_string(), 1)));
@@ -1018,7 +1018,7 @@ mod tests {
         assert_eq!(cache.len(), 3);
 
         // Put new entry "f": c(LRU) -> d -> e -> f(MRU)
-        cache.put("f".to_string(), 6, None);
+        cache.put("f".to_string(), 6, 1);
         assert_eq!(cache.len(), 4);
 
         // pop LRU: removes "c"

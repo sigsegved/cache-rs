@@ -87,7 +87,7 @@ fn stress_lru_high_contention() {
             for i in 0..OPS_PER_THREAD {
                 let key = i % 10; // Only 10 keys for high contention
                 if t % 2 == 0 {
-                    cache.put(key, t * OPS_PER_THREAD + i, None);
+                    cache.put(key, t * OPS_PER_THREAD + i, 1);
                 } else {
                     let _ = cache.get(&key);
                 }
@@ -115,7 +115,7 @@ fn stress_segment_counts() {
             let cache = Arc::clone(&cache);
             handles.push(thread::spawn(move || {
                 for i in 0..1000 {
-                    cache.put(t * 1000 + i, i, None);
+                    cache.put(t * 1000 + i, i, 1);
                     let _ = cache.get(&(t * 1000 + i));
                 }
             }));
@@ -165,7 +165,7 @@ fn stress_single_item_cache() {
         let cache = Arc::clone(&cache);
         handles.push(thread::spawn(move || {
             for i in 0..1000 {
-                cache.put(t, i, None); // Each thread uses different key
+                cache.put(t, i, 1); // Each thread uses different key
                 let _ = cache.get(&t);
             }
         }));
@@ -191,7 +191,7 @@ fn stress_capacity_limits() {
         let cache = Arc::clone(&cache);
         handles.push(thread::spawn(move || {
             for i in 0..OPS_PER_THREAD {
-                cache.put(t * OPS_PER_THREAD + i, i, None);
+                cache.put(t * OPS_PER_THREAD + i, i, 1);
             }
         }));
     }
@@ -212,7 +212,7 @@ fn stress_concurrent_removes() {
 
     // Pre-populate
     for i in 0..1000 {
-        cache.put(i, i, None);
+        cache.put(i, i, 1);
     }
 
     let removed_count = Arc::new(AtomicUsize::new(0));
@@ -256,7 +256,7 @@ fn stress_concurrent_clear() {
         let cache = Arc::clone(&cache);
         handles.push(thread::spawn(move || {
             for i in 0..1000 {
-                cache.put(t * 1000 + i, i, None);
+                cache.put(t * 1000 + i, i, 1);
                 if i % 100 == 0 {
                     cache.clear();
                 }
@@ -284,7 +284,7 @@ fn stress_slru() {
         handles.push(thread::spawn(move || {
             for i in 0..OPS_PER_THREAD {
                 let key = t * OPS_PER_THREAD + i;
-                cache.put(key, i, None);
+                cache.put(key, i, 1);
                 // Access multiple times to promote to protected segment
                 for _ in 0..3 {
                     let _ = cache.get(&key);
@@ -312,7 +312,7 @@ fn stress_lfu() {
         handles.push(thread::spawn(move || {
             for i in 0..OPS_PER_THREAD {
                 let key = t * OPS_PER_THREAD + i;
-                cache.put(key, i, None);
+                cache.put(key, i, 1);
                 // Access some keys more frequently
                 if i % 10 == 0 {
                     for _ in 0..5 {
@@ -342,7 +342,7 @@ fn stress_lfuda() {
         handles.push(thread::spawn(move || {
             for i in 0..OPS_PER_THREAD {
                 let key = t * OPS_PER_THREAD + i;
-                cache.put(key, i, None);
+                cache.put(key, i, 1);
                 let _ = cache.get(&key);
             }
         }));
@@ -368,7 +368,7 @@ fn stress_gdsf() {
             for i in 0..OPS_PER_THREAD {
                 let key = t * OPS_PER_THREAD + i;
                 let size = ((i % 10) + 1) as u64;
-                cache.put(key, i, Some(size));
+                cache.put(key, i, size);
                 let _ = cache.get(&key);
             }
         }));
@@ -398,7 +398,7 @@ fn stress_mixed_all_caches() {
                 let value = format!("value_{}", i);
                 match i % 4 {
                     0 => {
-                        cache.put(key, value, None);
+                        cache.put(key, value, 1);
                     }
                     1 => {
                         let _ = cache.get(&key);
@@ -429,7 +429,7 @@ fn stress_get_with() {
 
     // Pre-populate with vectors
     for i in 0..100 {
-        cache.put(i, vec![i; 10], None);
+        cache.put(i, vec![i; 10], 1);
     }
 
     let sum = Arc::new(AtomicUsize::new(0));

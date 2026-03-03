@@ -16,18 +16,22 @@ This creates API inconsistency and forces users to remember different signatures
 
 ### Solution
 
-Unify all algorithms to use a single signature:
+Unify all algorithms to use a single signature with **required** size parameter:
 ```rust
-pub fn put(&mut self, key: K, value: V, size: Option<u64>) -> Option<(K, V)>
+pub fn put(&mut self, key: K, value: V, size: u64) -> Option<(K, V)>
 ```
 
-When `size` is `None`, default to `1` (count-based caching).
+Provide `SIZE_UNIT` constant for entry-count mode (where size tracking doesn't matter).
+
+> **Note**: The initial implementation used `Option<u64>` with `None` defaulting to `1`.
+> After analysis (see "Size Parameter Analysis" section below), this was found to be 
+> problematic. The recommended approach is to make `size` required.
 
 ---
 
 ## API Design
 
-### New Unified Signature
+### Final Unified Signature
 
 **Single-threaded caches:**
 ```rust
@@ -37,20 +41,27 @@ impl<K, V, S> [Algorithm]Cache<K, V, S> {
     /// # Arguments
     /// * `key` - The key to insert
     /// * `value` - The value to cache  
-    /// * `size` - Size of this entry for capacity tracking. `None` defaults to `1`.
+    /// * `size` - Size of this entry for capacity tracking. Use `SIZE_UNIT` (1) for count-based caching.
     ///
     /// # Returns
     /// Returns `Some((evicted_key, evicted_value))` if an entry was evicted or replaced,
     /// `None` if inserted without eviction.
-    pub fn put(&mut self, key: K, value: V, size: Option<u64>) -> Option<(K, V)>
+    pub fn put(&mut self, key: K, value: V, size: u64) -> Option<(K, V)>
 }
 ```
 
 **Concurrent caches:**
 ```rust
 impl<K, V, S> Concurrent[Algorithm]<K, V, S> {
-    pub fn put(&self, key: K, value: V, size: Option<u64>) -> Option<(K, V)>
+    pub fn put(&self, key: K, value: V, size: u64) -> Option<(K, V)>
 }
+```
+
+**SIZE_UNIT Constant:**
+```rust
+/// Size value for entry-count mode where actual size doesn't matter.
+/// Use this when you only want to limit the number of entries, not total size.
+pub const SIZE_UNIT: u64 = 1;
 ```
 
 ### Return Type Consideration
@@ -69,15 +80,15 @@ cache.put("key", value);                    // count-based
 cache.put_with_size("key", value, 1000);    // size-based
 
 // After (all algorithms)
-cache.put("key", value, None);              // count-based (size=1)
-cache.put("key", value, Some(1000));        // size-based
+cache.put("key", value, SIZE_UNIT);         // count-based (explicit)
+cache.put("key", value, 1000);              // size-based (no wrapping)
 
 // Before (GDSF only)
 cache.put("key", value, 1000);              // size required
 
-// After (GDSF)
-cache.put("key", value, None);              // size defaults to 1
-cache.put("key", value, Some(1000));        // explicit size
+// After (GDSF) - no change needed for size-based calls
+cache.put("key", value, SIZE_UNIT);         // count-based (new capability)
+cache.put("key", value, 1000);              // size-based (unchanged)
 ```
 
 ---
@@ -90,25 +101,25 @@ Modify these files:
 
 | File | Current Methods | New Signature |
 |------|-----------------|---------------|
-| `src/lru.rs` | `put()`, `put_with_size()` | `put(k, v, size: Option<u64>)` |
-| `src/lfu.rs` | `put()`, `put_with_size()` | `put(k, v, size: Option<u64>)` |
-| `src/lfuda.rs` | `put()`, `put_with_size()` | `put(k, v, size: Option<u64>)` |
-| `src/slru.rs` | `put()`, `put_with_size()` | `put(k, v, size: Option<u64>)` |
-| `src/gdsf.rs` | `put(k, v, size)` | `put(k, v, size: Option<u64>)` |
+| `src/lru.rs` | `put()`, `put_with_size()` | `put(k, v, size: u64)` |
+| `src/lfu.rs` | `put()`, `put_with_size()` | `put(k, v, size: u64)` |
+| `src/lfuda.rs` | `put()`, `put_with_size()` | `put(k, v, size: u64)` |
+| `src/slru.rs` | `put()`, `put_with_size()` | `put(k, v, size: u64)` |
+| `src/gdsf.rs` | `put(k, v, size)` | `put(k, v, size: u64)` |
 
 **Implementation pattern for LRU/LFU/LFUDA/SLRU:**
 ```rust
 // Segment level
-pub(crate) fn put(&mut self, key: K, value: V, size: Option<u64>) -> Option<(K, V)>
+pub(crate) fn put(&mut self, key: K, value: V, size: u64) -> Option<(K, V)>
 where
     K: Clone + Hash + Eq,
 {
-    let object_size = size.unwrap_or(1);
-    // ... existing put_with_size logic with object_size ...
+    // Size is now required - use directly
+    // ... existing put logic with size ...
 }
 
 // Cache wrapper level
-pub fn put(&mut self, key: K, value: V, size: Option<u64>) -> Option<(K, V)> {
+pub fn put(&mut self, key: K, value: V, size: u64) -> Option<(K, V)> {
     self.segment.put(key, value, size)
 }
 ```
@@ -116,12 +127,12 @@ pub fn put(&mut self, key: K, value: V, size: Option<u64>) -> Option<(K, V)> {
 **Implementation pattern for GDSF:**
 ```rust
 // Segment level
-pub(crate) fn put(&mut self, key: K, val: V, size: Option<u64>) -> Option<V>
+pub(crate) fn put(&mut self, key: K, val: V, size: u64) -> Option<V>
 where
     K: Clone,
 {
-    let object_size = size.unwrap_or(1);
-    // ... existing put logic with object_size ...
+    // Size is now required - use directly
+    // ... existing put logic with size ...
 }
 ```
 
@@ -131,17 +142,17 @@ Modify these files:
 
 | File | Current Methods | New Signature |
 |------|-----------------|---------------|
-| `src/concurrent/lru.rs` | `put()`, `put_with_size()` | `put(k, v, size: Option<u64>)` |
-| `src/concurrent/lfu.rs` | `put()`, `put_with_size()` | `put(k, v, size: Option<u64>)` |
-| `src/concurrent/lfuda.rs` | `put()`, `put_with_size()` | `put(k, v, size: Option<u64>)` |
-| `src/concurrent/slru.rs` | `put()`, `put_with_size()` | `put(k, v, size: Option<u64>)` |
-| `src/concurrent/gdsf.rs` | `put(k, v, size)` | `put(k, v, size: Option<u64>)` |
+| `src/concurrent/lru.rs` | `put()`, `put_with_size()` | `put(k, v, size: u64)` |
+| `src/concurrent/lfu.rs` | `put()`, `put_with_size()` | `put(k, v, size: u64)` |
+| `src/concurrent/lfuda.rs` | `put()`, `put_with_size()` | `put(k, v, size: u64)` |
+| `src/concurrent/slru.rs` | `put()`, `put_with_size()` | `put(k, v, size: u64)` |
+| `src/concurrent/gdsf.rs` | `put(k, v, size)` | `put(k, v, size: u64)` |
 
 ### Phase 3: Update Tests
 
 Files requiring updates:
 
-- `tests/correctness_tests.rs` - Update all `put()` and `put_with_size()` calls
+- `tests/correctness_tests.rs` - Update all `put()` calls
 - `tests/concurrent_correctness_tests.rs` - Update concurrent cache tests
 - `tests/concurrent_stress_tests.rs` - Update stress tests
 - `tests/no_std_tests.rs` - Update no_std compatibility tests
@@ -206,6 +217,114 @@ SlruSegment::put_with_size()
 ```
 
 Also remove: `estimate_object_size()` methods become unnecessary (can be deleted or kept internal).
+
+---
+
+## Size Parameter Analysis: Why Not Default to Value Size?
+
+### The Problem with `None → 1`
+
+The current implementation defaults `size` to `1` when `None` is passed. This is **problematic** for several reasons:
+
+1. **Memory Budget Violation**: If `max_size = 10MB` and entries are actually 1MB each:
+   - Cache thinks each entry is 1 byte
+   - Allows 10 million entries before hitting `max_size`
+   - Actual memory: 10TB → OOM
+
+2. **Size-Aware Algorithm Defeat**: GDSF and LFUDA use size for eviction priority:
+   ```
+   GDSF priority = frequency / size
+   ```
+   With `size=1`, all entries have equal size weight, defeating the algorithm's purpose.
+
+3. **Silent Failure Mode**: No warning when using `None` with size-constrained caches.
+
+### Why Can't We Use `size_of::<V>()` as Default?
+
+Rust's type system cannot determine the "true" memory footprint of heap-allocated types:
+
+```rust
+// std::mem::size_of::<V>() only measures STACK size, not heap
+size_of::<String>()     // → 24 bytes (3 pointers), regardless of string length
+size_of::<Vec<u8>>()    // → 24 bytes, regardless of capacity
+size_of::<Box<[u8]>>()  // → 16 bytes, regardless of slice length
+
+// A 1MB String still reports 24 bytes
+let s = "x".repeat(1_000_000);
+size_of_val(&s)  // → 24 bytes (WRONG for cache sizing!)
+```
+
+### Alternative Approaches Considered
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **A. Make size required** | Forces explicit decision; no silent failures | More verbose for count-based use |
+| **B. `Sizable` trait** | Auto-compute for implementing types | Adds trait bound; breaks generic V; no_std complexity |
+| **C. `size_of::<V>()` default** | Automatic, no trait needed | Wrong for heap types; misleading |
+| **D. Weigher function** (like Moka) | Consistent per-cache sizing | Major API redesign; closure complexity |
+| **E. Keep `None → 1`** | Simple; backward compatible | Silent failures; misleading semantics |
+
+### Recommended Solution: Make Size Required
+
+**Change the API to require size explicitly:**
+
+```rust
+// NEW: Size is required (u64, not Option<u64>)
+pub fn put(&mut self, key: K, value: V, size: u64) -> Option<(K, V)>
+
+// Provide a convenience constant for entry-count mode
+pub const SIZE_UNIT: u64 = 1;
+```
+
+**Usage patterns:**
+
+```rust
+// Entry-count mode (just limit number of entries)
+cache.put("key", value, SIZE_UNIT);
+
+// Size-aware mode (track actual memory/disk usage)
+cache.put("key", data, data.len() as u64);
+cache.put("key", response, response.body.len() as u64);
+
+// For structs, user computes size
+cache.put("key", user, size_of::<User>() as u64 + user.name.len() as u64);
+```
+
+### Rationale
+
+1. **Explicit is better than implicit**: Users MUST think about what size means for their workload.
+
+2. **No silent failures**: Can't accidentally use wrong size with `None`.
+
+3. **Cache semantics documented**: Using `SIZE_UNIT` explicitly signals "I want count-based caching."
+
+4. **Real-world alignment**: 
+   - In-memory caches: User knows actual heap allocation
+   - Disk/external caches: User knows external resource size
+   - Neither case can be inferred from `V`'s type
+
+5. **No_std compatible**: No traits or closures required.
+
+### Migration from `Option<u64>` to `u64`
+
+```rust
+// Before (problematic)
+cache.put("key", value, None);           // Silent size=1, may cause OOM
+cache.put("key", value, Some(1000));     // Explicit size
+
+// After (explicit)
+cache.put("key", value, SIZE_UNIT);      // Clearly indicates count-based
+cache.put("key", value, 1000);           // Size-based, no wrapping needed
+```
+
+### Implementation Impact
+
+If we proceed with required size:
+
+1. **API Signature**: `put(key, value, size: u64)` instead of `put(key, value, size: Option<u64>)`
+2. **Add constant**: `pub const SIZE_UNIT: u64 = 1;` in lib.rs or dedicated module
+3. **Update all call sites**: Replace `None` with `SIZE_UNIT`, unwrap `Some(x)` to `x`
+4. **Documentation**: Clearly explain when to use `SIZE_UNIT` vs actual size
 
 ---
 

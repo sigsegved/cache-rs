@@ -66,7 +66,7 @@ fn main() {
 
     println!("\n1. LRU Cache (Least Recently Used):");
     for (key, value) in &data {
-        if let Some(evicted) = lru_cache.put(*key, *value, None) {
+        if let Some(evicted) = lru_cache.put(*key, *value, 1) {
             println!("   Evicted: {evicted:?}");
         }
         println!("   Added: {key} -> {value}");
@@ -74,7 +74,7 @@ fn main() {
 
     println!("\n2. SLRU Cache (Segmented LRU):");
     for (key, value) in &data {
-        if let Some(evicted) = slru_cache.put(*key, *value, None) {
+        if let Some(evicted) = slru_cache.put(*key, *value, 1) {
             println!("   Evicted: {evicted:?}");
         }
         println!("   Added: {key} -> {value}");
@@ -82,7 +82,7 @@ fn main() {
 
     println!("\n3. LFU Cache (Least Frequently Used):");
     for (key, value) in &data {
-        if let Some(evicted) = lfu_cache.put(*key, *value, None) {
+        if let Some(evicted) = lfu_cache.put(*key, *value, 1) {
             println!("   Evicted: {evicted:?}");
         }
         println!("   Added: {key} -> {value}");
@@ -90,7 +90,7 @@ fn main() {
 
     println!("\n4. LFUDA Cache (LFU with Dynamic Aging):");
     for (key, value) in &data {
-        if let Some(evicted) = lfuda_cache.put(*key, *value, None) {
+        if let Some(evicted) = lfuda_cache.put(*key, *value, 1) {
             println!("   Evicted: {evicted:?}");
         }
         println!("   Added: {key} -> {value}");
@@ -101,7 +101,7 @@ fn main() {
         "   GDSF considers both frequency and size. Priority = (Frequency / Size) + Global_Age"
     );
     for (key, value, size) in &gdsf_data {
-        if let Some(evicted) = gdsf_cache.put(*key, *value, Some(*size)) {
+        if let Some(evicted) = gdsf_cache.put(*key, *value, *size) {
             println!("   Evicted: {evicted:?}");
         }
         println!(
@@ -130,23 +130,23 @@ fn main() {
 
     println!("\nAdding 'elderberry' to see different eviction behaviors...");
 
-    if let Some(evicted) = lru_cache.put("elderberry", 5, None) {
+    if let Some(evicted) = lru_cache.put("elderberry", 5, 1) {
         println!("LRU evicted: {evicted:?}");
     }
 
-    if let Some(evicted) = slru_cache.put("elderberry", 5, None) {
+    if let Some(evicted) = slru_cache.put("elderberry", 5, 1) {
         println!("SLRU evicted: {evicted:?}");
     }
 
-    if let Some(evicted) = lfu_cache.put("elderberry", 5, None) {
+    if let Some(evicted) = lfu_cache.put("elderberry", 5, 1) {
         println!("LFU evicted: {evicted:?}");
     }
 
-    if let Some(evicted) = lfuda_cache.put("elderberry", 5, None) {
+    if let Some(evicted) = lfuda_cache.put("elderberry", 5, 1) {
         println!("LFUDA evicted: {evicted:?}");
     }
 
-    if let Some(evicted) = gdsf_cache.put("elderberry", 5, Some(8)) {
+    if let Some(evicted) = gdsf_cache.put("elderberry", 5, 8) {
         println!(
             "GDSF evicted: {evicted:?} (algorithm chose based on lowest (frequency/size) + global_age)"
         );

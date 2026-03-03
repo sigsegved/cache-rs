@@ -71,15 +71,15 @@ fn test_lru_in_no_std() {
     let key2 = String::from("key2");
     let key3 = String::from("key3");
 
-    cache.put(key1.clone(), 1, None);
-    cache.put(key2.clone(), 2, None);
+    cache.put(key1.clone(), 1, 1);
+    cache.put(key2.clone(), 2, 1);
 
     // Check if keys are present
     assert_eq!(*cache.get(&key1).unwrap(), 1);
     assert_eq!(*cache.get(&key2).unwrap(), 2);
 
     // This should evict key1
-    cache.put(key3.clone(), 3, None);
+    cache.put(key3.clone(), 3, 1);
 
     assert!(cache.get(&key1).is_none());
     assert_eq!(*cache.get(&key2).unwrap(), 2);
@@ -93,8 +93,8 @@ fn test_lfu_in_no_std() {
     let key1 = String::from("key1");
     let key2 = String::from("key2");
 
-    cache.put(key1.clone(), 1, None);
-    cache.put(key2.clone(), 2, None);
+    cache.put(key1.clone(), 1, 1);
+    cache.put(key2.clone(), 2, 1);
 
     // Access key1 multiple times to increase its frequency
     cache.get(&key1);
@@ -102,7 +102,7 @@ fn test_lfu_in_no_std() {
 
     // Add a new item, which should evict key2 (lower frequency)
     let key3 = String::from("key3");
-    cache.put(key3.clone(), 3, None);
+    cache.put(key3.clone(), 3, 1);
 
     assert_eq!(*cache.get(&key1).unwrap(), 1);
     assert!(cache.get(&key2).is_none());
@@ -116,15 +116,15 @@ fn test_lfuda_in_no_std() {
     let key1 = String::from("key1");
     let key2 = String::from("key2");
 
-    cache.put(key1.clone(), 1, None);
-    cache.put(key2.clone(), 2, None);
+    cache.put(key1.clone(), 1, 1);
+    cache.put(key2.clone(), 2, 1);
 
     // Access key1 to increase its frequency
     cache.get(&key1);
 
     // Add a new key which should evict key2
     let key3 = String::from("key3");
-    cache.put(key3.clone(), 3, None);
+    cache.put(key3.clone(), 3, 1);
 
     assert_eq!(*cache.get(&key1).unwrap(), 1);
     assert!(cache.get(&key2).is_none());
@@ -139,14 +139,14 @@ fn test_slru_in_no_std() {
 
     // Add 4 items to fill the cache
     for (i, key) in keys.iter().enumerate().take(4) {
-        cache.put(key.clone(), i, None);
+        cache.put(key.clone(), i, 1);
     }
 
     // Access the first key to promote it to protected segment
     cache.get(&keys[0]);
 
     // Add a new item which should evict from probationary segment
-    cache.put(keys[4].clone(), 4, None);
+    cache.put(keys[4].clone(), 4, 1);
 
     // The first key should still be in the cache (protected)
     assert_eq!(*cache.get(&keys[0]).unwrap(), 0);
@@ -176,8 +176,8 @@ fn test_gdsf_in_no_std() {
     let key1 = String::from("key1");
     let key2 = String::from("key2");
 
-    cache.put(key1.clone(), "value1", Some(30));
-    cache.put(key2.clone(), "value2", Some(50));
+    cache.put(key1.clone(), "value1", 30);
+    cache.put(key2.clone(), "value2", 50);
 
     // Verify we can retrieve the items - GDSF get() returns values, not references
     assert_eq!(cache.get(&key1), Some("value1"));
@@ -190,7 +190,7 @@ fn test_gdsf_in_no_std() {
     cache.get(&key1);
 
     // Add a third item, which will cause an eviction if the total size exceeds capacity
-    cache.put(key3.clone(), "value3", Some(40));
+    cache.put(key3.clone(), "value3", 40);
 
     // Verify we can still access at least one of the items
     assert!(cache.get(&key1).is_some() || cache.get(&key2).is_some() || cache.get(&key3).is_some());
@@ -213,8 +213,8 @@ fn test_complex_types_in_no_std() {
     let key2 = Vec::<u8>::from([4, 5, 6]);
     let value2 = Vec::<i32>::from([40, 50, 60]);
 
-    cache.put(key1.clone(), value1.clone(), None);
-    cache.put(key2.clone(), value2.clone(), None);
+    cache.put(key1.clone(), value1.clone(), 1);
+    cache.put(key2.clone(), value2.clone(), 1);
 
     assert_eq!(*cache.get(&key1).unwrap(), value1);
     assert_eq!(*cache.get(&key2).unwrap(), value2);

@@ -60,7 +60,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     {
         let mut cache = make_lru(CACHE_SIZE);
         for i in 0..CACHE_SIZE {
-            cache.put(i, i, None);
+            cache.put(i, i, 1);
         }
 
         group.bench_function("LRU get hit", |b| {
@@ -82,7 +82,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         group.bench_function("LRU put existing", |b| {
             b.iter(|| {
                 for i in 0..100 {
-                    black_box(cache.put(i % CACHE_SIZE, i, None));
+                    black_box(cache.put(i % CACHE_SIZE, i, 1));
                 }
             });
         });
@@ -92,7 +92,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     {
         let mut cache = make_lfu(CACHE_SIZE);
         for i in 0..CACHE_SIZE {
-            cache.put(i, i, None);
+            cache.put(i, i, 1);
         }
 
         group.bench_function("LFU get hit", |b| {
@@ -108,7 +108,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     {
         let mut cache = make_lfuda(CACHE_SIZE);
         for i in 0..CACHE_SIZE {
-            cache.put(i, i, None);
+            cache.put(i, i, 1);
         }
 
         group.bench_function("LFUDA get hit", |b| {
@@ -124,7 +124,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     {
         let mut cache = make_slru(CACHE_SIZE, CACHE_SIZE / 2);
         for i in 0..CACHE_SIZE {
-            cache.put(i, i, None);
+            cache.put(i, i, 1);
         }
 
         group.bench_function("SLRU get hit", |b| {
@@ -140,7 +140,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     {
         let mut cache = make_gdsf(CACHE_SIZE * 10);
         for i in 0..CACHE_SIZE {
-            cache.put(i, i, Some(((i % 10) + 1) as u64)); // Size between 1-10, cast to u64
+            cache.put(i, i, ((i % 10) + 1) as u64); // Size between 1-10, cast to u64
         }
 
         group.bench_function("GDSF get hit", |b| {

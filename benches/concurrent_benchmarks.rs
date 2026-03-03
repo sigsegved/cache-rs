@@ -106,11 +106,11 @@ fn concurrent_reads(c: &mut Criterion) {
 
     // Fill caches
     for i in 0..CACHE_SIZE {
-        lru_cache.put(i, i, None);
-        slru_cache.put(i, i, None);
-        lfu_cache.put(i, i, None);
-        lfuda_cache.put(i, i, None);
-        gdsf_cache.put(i, i, Some(((i % 10) + 1) as u64));
+        lru_cache.put(i, i, 1);
+        slru_cache.put(i, i, 1);
+        lfu_cache.put(i, i, 1);
+        lfuda_cache.put(i, i, 1);
+        gdsf_cache.put(i, i, ((i % 10) + 1) as u64);
     }
 
     group.bench_function("LRU", |b| {
@@ -218,7 +218,7 @@ fn concurrent_mixed(c: &mut Criterion) {
             Arc::new(ConcurrentLruCache::init(lru_config(CACHE_SIZE), None));
         // Pre-populate
         for i in 0..CACHE_SIZE {
-            cache.put(i, i, None);
+            cache.put(i, i, 1);
         }
         b.iter(|| {
             let cache = Arc::clone(&cache);
@@ -232,7 +232,7 @@ fn concurrent_mixed(c: &mut Criterion) {
             None,
         ));
         for i in 0..CACHE_SIZE {
-            cache.put(i, i, None);
+            cache.put(i, i, 1);
         }
         b.iter(|| {
             let cache = Arc::clone(&cache);
@@ -244,7 +244,7 @@ fn concurrent_mixed(c: &mut Criterion) {
         let cache: Arc<ConcurrentLfuCache<usize, usize>> =
             Arc::new(ConcurrentLfuCache::init(lfu_config(CACHE_SIZE), None));
         for i in 0..CACHE_SIZE {
-            cache.put(i, i, None);
+            cache.put(i, i, 1);
         }
         b.iter(|| {
             let cache = Arc::clone(&cache);
@@ -256,7 +256,7 @@ fn concurrent_mixed(c: &mut Criterion) {
         let cache: Arc<ConcurrentLfudaCache<usize, usize>> =
             Arc::new(ConcurrentLfudaCache::init(lfuda_config(CACHE_SIZE), None));
         for i in 0..CACHE_SIZE {
-            cache.put(i, i, None);
+            cache.put(i, i, 1);
         }
         b.iter(|| {
             let cache = Arc::clone(&cache);
@@ -270,7 +270,7 @@ fn concurrent_mixed(c: &mut Criterion) {
             None,
         ));
         for i in 0..CACHE_SIZE {
-            cache.put(i, i, Some(((i % 10) + 1) as u64));
+            cache.put(i, i, ((i % 10) + 1) as u64);
         }
         b.iter(|| {
             let cache = Arc::clone(&cache);
@@ -296,7 +296,7 @@ fn segment_count_comparison(c: &mut Criterion) {
                 );
                 // Pre-populate
                 for i in 0..CACHE_SIZE {
-                    cache.put(i, i, None);
+                    cache.put(i, i, 1);
                 }
                 b.iter(|| {
                     let cache = Arc::clone(&cache);
@@ -324,7 +324,7 @@ where
         self.get(key)
     }
     fn cache_put(&self, key: K, value: V) {
-        self.put(key, value, None);
+        self.put(key, value, 1);
     }
 }
 
@@ -337,7 +337,7 @@ where
         self.get(key)
     }
     fn cache_put(&self, key: K, value: V) {
-        self.put(key, value, None);
+        self.put(key, value, 1);
     }
 }
 
@@ -350,7 +350,7 @@ where
         self.get(key)
     }
     fn cache_put(&self, key: K, value: V) {
-        self.put(key, value, None);
+        self.put(key, value, 1);
     }
 }
 
@@ -363,7 +363,7 @@ where
         self.get(key)
     }
     fn cache_put(&self, key: K, value: V) {
-        self.put(key, value, None);
+        self.put(key, value, 1);
     }
 }
 
@@ -466,7 +466,7 @@ fn run_concurrent_writes_gdsf(
             for i in 0..ops_per_thread {
                 let key = t * ops_per_thread + i;
                 let size = ((key % 10) + 1) as u64;
-                cache.put(key, key, Some(size));
+                cache.put(key, key, size);
             }
         }));
     }
@@ -488,7 +488,7 @@ fn run_concurrent_mixed_gdsf(
                 let key = (t * ops_per_thread + i) % CACHE_SIZE;
                 if i % 5 == 0 {
                     let size = ((key % 10) + 1) as u64;
-                    cache.put(key, key, Some(size));
+                    cache.put(key, key, size);
                 } else {
                     black_box(cache.get(&key));
                 }

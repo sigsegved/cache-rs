@@ -55,7 +55,7 @@ const DEFAULT_SEGMENT_COUNT: usize = 16;
 /// Wrapper enum for all cache implementations
 /// This allows us to handle both sequential and concurrent caches uniformly
 ///
-/// Variants ending in `Size` use `put(key, value, Some(size))` for size-based eviction.
+/// Variants ending in `Size` use `put(key, value, size)` for size-based eviction.
 /// This avoids per-request `if` checks by encoding the mode in the variant.
 #[allow(dead_code)]
 enum CacheWrapper {
@@ -297,61 +297,61 @@ impl CacheWrapper {
         match self {
             // Sequential - entry count mode (no size tracking)
             CacheWrapper::LruSeq(c) => {
-                c.put(key, value, None);
+                c.put(key, value, 1);
             }
             CacheWrapper::LfuSeq(c) => {
-                c.put(key, value, None);
+                c.put(key, value, 1);
             }
             CacheWrapper::LfudaSeq(c) => {
-                c.put(key, value, None);
+                c.put(key, value, 1);
             }
             CacheWrapper::SlruSeq(c) => {
-                c.put(key, value, None);
+                c.put(key, value, 1);
             }
             CacheWrapper::GdsfSeq(c) => {
-                c.put(key, value, Some(safe_size));
+                c.put(key, value, safe_size);
             } // GDSF always uses size
             // Sequential - size-based mode
             CacheWrapper::LruSeqSize(c) => {
-                c.put(key, value, Some(safe_size));
+                c.put(key, value, safe_size);
             }
             CacheWrapper::LfuSeqSize(c) => {
-                c.put(key, value, Some(safe_size));
+                c.put(key, value, safe_size);
             }
             CacheWrapper::LfudaSeqSize(c) => {
-                c.put(key, value, Some(safe_size));
+                c.put(key, value, safe_size);
             }
             CacheWrapper::SlruSeqSize(c) => {
-                c.put(key, value, Some(safe_size));
+                c.put(key, value, safe_size);
             }
             // Concurrent - entry count mode
             CacheWrapper::LruConc(c) => {
-                c.put(key, value, None);
+                c.put(key, value, 1);
             }
             CacheWrapper::LfuConc(c) => {
-                c.put(key, value, None);
+                c.put(key, value, 1);
             }
             CacheWrapper::LfudaConc(c) => {
-                c.put(key, value, None);
+                c.put(key, value, 1);
             }
             CacheWrapper::SlruConc(c) => {
-                c.put(key, value, None);
+                c.put(key, value, 1);
             }
             CacheWrapper::GdsfConc(c) => {
-                c.put(key, value, Some(safe_size));
+                c.put(key, value, safe_size);
             } // GDSF always uses size
             // Concurrent - size-based mode
             CacheWrapper::LruConcSize(c) => {
-                c.put(key, value, Some(safe_size));
+                c.put(key, value, safe_size);
             }
             CacheWrapper::LfuConcSize(c) => {
-                c.put(key, value, Some(safe_size));
+                c.put(key, value, safe_size);
             }
             CacheWrapper::LfudaConcSize(c) => {
-                c.put(key, value, Some(safe_size));
+                c.put(key, value, safe_size);
             }
             CacheWrapper::SlruConcSize(c) => {
-                c.put(key, value, Some(safe_size));
+                c.put(key, value, safe_size);
             }
             // External caches (Moka handles size via weigher at build time)
             CacheWrapper::Moka(c) => {

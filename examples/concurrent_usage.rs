@@ -113,7 +113,7 @@ fn basic_concurrent_usage() {
                     let value = thread_id * 10000 + i;
 
                     // Write
-                    cache.put(key.clone(), value, None);
+                    cache.put(key.clone(), value, 1);
 
                     // Read
                     if let Some(v) = cache.get(&key) {
@@ -147,7 +147,7 @@ fn zero_copy_get_with() {
 
     // Store a large value
     let large_data = vec![1u8; 1024]; // 1KB of data
-    cache.put("large_key".to_string(), large_data, None);
+    cache.put("large_key".to_string(), large_data, 1);
 
     // Process the value without cloning using get_with()
     let sum: Option<u64> = cache.get_with(&"large_key".to_string(), |data| {
@@ -213,31 +213,31 @@ fn all_concurrent_cache_types() {
 
     // ConcurrentLruCache - General purpose
     let lru: ConcurrentLruCache<String, i32> = ConcurrentLruCache::init(lru_config(100, 16), None);
-    lru.put("key".to_string(), 1, None);
+    lru.put("key".to_string(), 1, 1);
     println!("   ConcurrentLruCache: General purpose, recency-based");
 
     // ConcurrentSlruCache - Scan resistant
     let slru: ConcurrentSlruCache<String, i32> =
         ConcurrentSlruCache::init(slru_config(100, 20, 16), None);
-    slru.put("key".to_string(), 1, None);
+    slru.put("key".to_string(), 1, 1);
     println!("   ConcurrentSlruCache: Scan resistant, two-segment design");
 
     // ConcurrentLfuCache - Frequency based
     let lfu: ConcurrentLfuCache<String, i32> = ConcurrentLfuCache::init(lfu_config(100, 16), None);
-    lfu.put("key".to_string(), 1, None);
+    lfu.put("key".to_string(), 1, 1);
     println!("   ConcurrentLfuCache: Frequency-based eviction");
 
     // ConcurrentLfudaCache - Adaptive frequency
     let lfuda: ConcurrentLfudaCache<String, i32> =
         ConcurrentLfudaCache::init(lfuda_config(100, 16), None);
-    lfuda.put("key".to_string(), 1, None);
+    lfuda.put("key".to_string(), 1, 1);
     println!("   ConcurrentLfudaCache: Frequency + aging for changing patterns");
 
     // ConcurrentGdsfCache - Size-aware (note: put takes size parameter)
     let gdsf: ConcurrentGdsfCache<String, Vec<u8>> =
         ConcurrentGdsfCache::init(gdsf_config(10000, 16), None);
-    gdsf.put("small.txt".to_string(), vec![0u8; 100], Some(100));
-    gdsf.put("large.jpg".to_string(), vec![0u8; 5000], Some(5000));
+    gdsf.put("small.txt".to_string(), vec![0u8; 100], 100);
+    gdsf.put("large.jpg".to_string(), vec![0u8; 5000], 5000);
     println!("   ConcurrentGdsfCache: Size-aware, for variable-size objects");
 }
 
@@ -262,7 +262,7 @@ fn throughput_comparison() {
                     let offset = t * ops_per_thread;
                     for i in 0..ops_per_thread {
                         let key = offset + i;
-                        cache.put(key, key, None);
+                        cache.put(key, key, 1);
                         cache.get(&key);
                     }
                 })
