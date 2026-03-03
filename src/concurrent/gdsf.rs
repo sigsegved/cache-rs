@@ -161,7 +161,7 @@
 //!
 //! // Insert small frequently-accessed items
 //! for i in 0..100 {
-//!     cache.put(format!("small-{}", i, None), vec![0u8; 1024], 1024);
+//!     cache.put(format!("small-{}", i), vec![0u8; 1024], Some(1024));
 //!     // Access multiple times to increase frequency
 //!     for _ in 0..5 {
 //!         let _ = cache.get(&format!("small-{}", i));
