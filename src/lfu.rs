@@ -122,16 +122,16 @@
 //! };
 //! let mut cache = LfuCache::init(config, None);
 //!
-//! cache.put("a", 1);
-//! cache.put("b", 2);
-//! cache.put("c", 3);
+//! cache.put("a", 1, 1);
+//! cache.put("b", 2, 1);
+//! cache.put("c", 3, 1);
 //!
 //! // Access "a" multiple times - increases its frequency
 //! assert_eq!(cache.get(&"a"), Some(&1));
 //! assert_eq!(cache.get(&"a"), Some(&1));
 //!
 //! // Add new item - "b" or "c" evicted (both at frequency 1)
-//! cache.put("d", 4);
+//! cache.put("d", 4, 1);
 //!
 //! // "a" survives due to higher frequency
 //! assert_eq!(cache.get(&"a"), Some(&1));
@@ -152,7 +152,7 @@
 //! let mut cache: LfuCache<String, Vec<u8>> = LfuCache::init(config, None);
 //!
 //! let data = vec![0u8; 1024];  // 1KB
-//! cache.put_with_size("file.bin".to_string(), data.clone(), 1024);
+//! cache.put("file.bin".to_string(), data.clone(), 1024);
 //! ```
 
 extern crate alloc;
@@ -209,7 +209,6 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use core::borrow::Borrow;
 use core::hash::{BuildHasher, Hash};
-use core::mem;
 use core::num::NonZeroUsize;
 
 #[cfg(feature = "hashbrown")]
@@ -319,11 +318,6 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
     #[inline]
     pub(crate) fn max_size(&self) -> u64 {
         self.config.max_size
-    }
-
-    /// Estimates the size of a key-value pair in bytes for metrics tracking
-    fn estimate_object_size(&self, _key: &K, _value: &V) -> u64 {
-        mem::size_of::<K>() as u64 + mem::size_of::<V>() as u64 + 64
     }
 
     /// Returns a reference to the metrics for this segment.
@@ -447,17 +441,11 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
         }
     }
 
-    /// Inserts a key-value pair into the segment.
-    pub(crate) fn put(&mut self, key: K, value: V) -> Option<(K, V)>
-    where
-        K: Clone,
-    {
-        let object_size = self.estimate_object_size(&key, &value);
-        self.put_with_size(key, value, object_size)
-    }
-
-    /// Insert a key-value pair with explicit size tracking.
-    pub(crate) fn put_with_size(&mut self, key: K, value: V, size: u64) -> Option<(K, V)>
+    /// Insert a key-value pair with optional size tracking.
+    ///
+    /// The `size` parameter specifies how much of `max_size` this entry consumes.
+    /// Use `SIZE_UNIT` (1) for count-based caching for count-based caching.
+    pub(crate) fn put(&mut self, key: K, value: V, size: u64) -> Option<(K, V)>
     where
         K: Clone,
     {
@@ -627,7 +615,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
     ///
     /// This method does **not** increment the eviction counter in metrics.
     /// Eviction metrics are only recorded when the cache internally evicts
-    /// entries to make room during `put()`/`put_with_size()` operations.
+    /// entries to make room during `put()` operations.
     ///
     /// Returns `None` if the cache is empty.
     pub(crate) fn pop(&mut self) -> Option<(K, V)> {
@@ -757,16 +745,16 @@ impl<K, V, S> core::fmt::Debug for LfuSegment<K, V, S> {
 /// let mut cache = LfuCache::init(config, None);
 ///
 /// // Add some items
-/// cache.put("a", 1);
-/// cache.put("b", 2);
-/// cache.put("c", 3);
+/// cache.put("a", 1, 1);
+/// cache.put("b", 2, 1);
+/// cache.put("c", 3, 1);
 ///
 /// // Access "a" multiple times to increase its frequency
 /// assert_eq!(cache.get(&"a"), Some(&1));
 /// assert_eq!(cache.get(&"a"), Some(&1));
 ///
 /// // Add a new item, which will evict the least frequently used item
-/// cache.put("d", 4);
+/// cache.put("d", 4, 1);
 /// assert_eq!(cache.get(&"b"), None); // "b" was evicted as it had frequency 0
 /// ```
 #[derive(Debug)]
@@ -852,31 +840,26 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
     /// a large entry may cause **multiple** smaller entries to be evicted to
     /// free enough space. In this case, only the **last** evicted entry is
     /// returned. For count-based caches, at most one entry is evicted.
-    #[inline]
-    pub fn put(&mut self, key: K, value: V) -> Option<(K, V)>
-    where
-        K: Clone,
-    {
-        self.segment.put(key, value)
-    }
-
-    /// Insert a key-value pair with explicit size tracking.
+    /// Inserts a key-value pair into the cache.
     ///
-    /// The `size` parameter specifies how much of `max_size` this entry consumes.
-    /// Use `size=1` for count-based caches.
+    /// # Arguments
+    ///
+    /// * `key` - The key to insert
+    /// * `value` - The value to cache
+    /// * `size` - Size of this entry for capacity tracking. Use `SIZE_UNIT` (1) for count-based caching.
     ///
     /// # Multi-eviction behavior
     ///
-    /// When the new entry's size would exceed `max_size`, multiple existing
-    /// entries may be evicted to free enough space. Only the **last** evicted
-    /// entry is returned. All evicted entries are counted in the `evictions`
-    /// metric.
+    /// When using size-based caching (`max_size` is not `u64::MAX`), inserting
+    /// a large entry may cause **multiple** smaller entries to be evicted to
+    /// free enough space. In this case, only the **last** evicted entry is
+    /// returned. For count-based caches, at most one entry is evicted.
     #[inline]
-    pub fn put_with_size(&mut self, key: K, value: V, size: u64) -> Option<(K, V)>
+    pub fn put(&mut self, key: K, value: V, size: u64) -> Option<(K, V)>
     where
         K: Clone,
     {
-        self.segment.put_with_size(key, value, size)
+        self.segment.put(key, value, size)
     }
 
     /// Removes a key from the cache, returning the value at the key if the key was previously in the cache.
@@ -924,8 +907,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
     ///     max_size: u64::MAX,
     /// };
     /// let mut cache = LfuCache::init(config, None);
-    /// cache.put("a", 1);
-    /// cache.put("b", 2);
+    /// cache.put("a", 1, 1);
+    /// cache.put("b", 2, 1);
     ///
     /// // contains() does NOT update frequency
     /// assert!(cache.contains(&"a"));
@@ -956,7 +939,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
     ///     max_size: u64::MAX,
     /// };
     /// let mut cache = LfuCache::init(config, None);
-    /// cache.put("a", 1);
+    /// cache.put("a", 1, 1);
     ///
     /// // peek does not change frequency
     /// assert_eq!(cache.peek(&"a"), Some(&1));
@@ -990,8 +973,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
     ///     max_size: u64::MAX,
     /// };
     /// let mut cache = LfuCache::init(config, None);
-    /// cache.put("a", 1);
-    /// cache.put("b", 2);
+    /// cache.put("a", 1, 1);
+    /// cache.put("b", 2, 1);
     /// cache.get(&"b");  // Increase frequency of "b"
     ///
     /// // Pop the eviction candidate (lowest frequency item)
@@ -1042,7 +1025,7 @@ where
     ///     max_size: u64::MAX,
     /// };
     /// let mut cache: LfuCache<&str, i32> = LfuCache::init(config, None);
-    /// cache.put("key", 42);
+    /// cache.put("key", 42, 1);
     ///
     /// // Cache with size limit
     /// let config = LfuCacheConfig {
@@ -1096,9 +1079,9 @@ mod tests {
         let mut cache = make_cache(3);
 
         // Add items
-        assert_eq!(cache.put("a", 1), None);
-        assert_eq!(cache.put("b", 2), None);
-        assert_eq!(cache.put("c", 3), None);
+        assert_eq!(cache.put("a", 1, 1), None);
+        assert_eq!(cache.put("b", 2, 1), None);
+        assert_eq!(cache.put("c", 3, 1), None);
 
         // Access "a" multiple times to increase its frequency
         assert_eq!(cache.get(&"a"), Some(&1));
@@ -1108,7 +1091,7 @@ mod tests {
         assert_eq!(cache.get(&"b"), Some(&2));
 
         // Add a new item, should evict "c" (frequency 0, least recently used among frequency 0)
-        let evicted = cache.put("d", 4);
+        let evicted = cache.put("d", 4, 1);
         assert!(evicted.is_some());
         let (evicted_key, evicted_val) = evicted.unwrap();
         assert_eq!(evicted_key, "c");
@@ -1126,8 +1109,8 @@ mod tests {
         let mut cache = make_cache(2);
 
         // Add items
-        cache.put("a", 1);
-        cache.put("b", 2);
+        cache.put("a", 1, 1);
+        cache.put("b", 2, 1);
 
         // Access "a" multiple times
         cache.get(&"a");
@@ -1138,7 +1121,7 @@ mod tests {
         cache.get(&"b");
 
         // Add new item, should evict "b" (lower frequency)
-        let evicted = cache.put("c", 3);
+        let evicted = cache.put("c", 3, 1);
         assert_eq!(evicted.unwrap().0, "b");
 
         assert_eq!(cache.get(&"a"), Some(&1));
@@ -1150,16 +1133,16 @@ mod tests {
     fn test_lfu_update_existing() {
         let mut cache = make_cache(2);
 
-        cache.put("a", 1);
+        cache.put("a", 1, 1);
         cache.get(&"a"); // frequency becomes 2
 
         // Update existing key
-        let old_value = cache.put("a", 10);
+        let old_value = cache.put("a", 10, 1);
         assert_eq!(old_value.unwrap().1, 1);
 
         // The frequency should be preserved
-        cache.put("b", 2);
-        cache.put("c", 3); // Should evict "b" because "a" has higher frequency
+        cache.put("b", 2, 1);
+        cache.put("c", 3, 1); // Should evict "b" because "a" has higher frequency
 
         assert_eq!(cache.get(&"a"), Some(&10));
         assert_eq!(cache.get(&"c"), Some(&3));
@@ -1170,9 +1153,9 @@ mod tests {
     fn test_lfu_remove() {
         let mut cache = make_cache(3);
 
-        cache.put("a", 1);
-        cache.put("b", 2);
-        cache.put("c", 3);
+        cache.put("a", 1, 1);
+        cache.put("b", 2, 1);
+        cache.put("c", 3, 1);
 
         // Remove item
         assert_eq!(cache.remove(&"b"), Some(2));
@@ -1188,9 +1171,9 @@ mod tests {
     fn test_lfu_clear() {
         let mut cache = make_cache(3);
 
-        cache.put("a", 1);
-        cache.put("b", 2);
-        cache.put("c", 3);
+        cache.put("a", 1, 1);
+        cache.put("b", 2, 1);
+        cache.put("c", 3, 1);
 
         assert_eq!(cache.len(), 3);
         cache.clear();
@@ -1198,7 +1181,7 @@ mod tests {
         assert!(cache.is_empty());
 
         // Should be able to add items after clear
-        cache.put("d", 4);
+        cache.put("d", 4, 1);
         assert_eq!(cache.get(&"d"), Some(&4));
     }
 
@@ -1206,7 +1189,7 @@ mod tests {
     fn test_lfu_get_mut() {
         let mut cache = make_cache(2);
 
-        cache.put("a", 1);
+        cache.put("a", 1, 1);
 
         // Modify value using get_mut
         if let Some(value) = cache.get_mut(&"a") {
@@ -1233,6 +1216,7 @@ mod tests {
                 id: 1,
                 data: "a-data".to_string(),
             },
+            1,
         );
 
         cache.put(
@@ -1241,6 +1225,7 @@ mod tests {
                 id: 2,
                 data: "b-data".to_string(),
             },
+            1,
         );
 
         // Modify a value using get_mut
@@ -1261,9 +1246,9 @@ mod tests {
         let mut cache = make_cache(10);
 
         // Insert some items
-        cache.put("a", 1);
-        cache.put("b", 2);
-        cache.put("c", 3);
+        cache.put("a", 1, 1);
+        cache.put("b", 2, 1);
+        cache.put("c", 3, 1);
 
         // Access items multiple times to trigger frequency updates
         for _ in 0..3 {
@@ -1295,8 +1280,8 @@ mod tests {
         assert!(segment.is_empty());
         assert_eq!(segment.cap().get(), 3);
 
-        segment.put("a", 1);
-        segment.put("b", 2);
+        segment.put("a", 1, 1);
+        segment.put("b", 2, 1);
         assert_eq!(segment.len(), 2);
 
         // Access to increase frequency
@@ -1324,7 +1309,7 @@ mod tests {
                 for i in 0..ops_per_thread {
                     let key = std::format!("key_{}_{}", t, i);
                     let mut guard = cache.lock().unwrap();
-                    guard.put(key.clone(), i);
+                    guard.put(key.clone(), i, 1);
                     // Access some keys multiple times to test frequency tracking
                     if i % 3 == 0 {
                         let _ = guard.get(&key);
@@ -1350,9 +1335,9 @@ mod tests {
         assert_eq!(cache.current_size(), 0);
         assert_eq!(cache.max_size(), u64::MAX);
 
-        cache.put_with_size("a", 1, 100);
-        cache.put_with_size("b", 2, 200);
-        cache.put_with_size("c", 3, 150);
+        cache.put("a", 1, 100);
+        cache.put("b", 2, 200);
+        cache.put("c", 3, 150);
 
         assert_eq!(cache.current_size(), 450);
         assert_eq!(cache.len(), 3);
@@ -1410,7 +1395,7 @@ mod tests {
             } else {
                 format!("long_tail_{}", i) // Many unique keys
             };
-            cache.put(key.clone(), i);
+            cache.put(key.clone(), i, 1);
 
             // Also do some gets to build frequency
             if i % 10 == 0 {
@@ -1463,8 +1448,8 @@ mod tests {
     #[test]
     fn test_lfu_contains_non_promoting() {
         let mut cache = make_cache(2);
-        cache.put("a", 1);
-        cache.put("b", 2);
+        cache.put("a", 1, 1);
+        cache.put("b", 2, 1);
 
         // contains() should return true for existing keys
         assert!(cache.contains(&"a"));
@@ -1479,7 +1464,7 @@ mod tests {
         assert!(cache.contains(&"a"));
 
         // Adding "c" should evict "a" (lowest frequency), not "b"
-        cache.put("c", 3);
+        cache.put("c", 3, 1);
         assert!(!cache.contains(&"a")); // "a" was evicted
         assert!(cache.contains(&"b")); // "b" still exists
         assert!(cache.contains(&"c")); // "c" was just added
@@ -1488,9 +1473,9 @@ mod tests {
     #[test]
     fn test_lfu_pop_returns_lowest_frequency() {
         let mut cache = make_cache(3);
-        cache.put("a", 1);
-        cache.put("b", 2);
-        cache.put("c", 3);
+        cache.put("a", 1, 1);
+        cache.put("b", 2, 1);
+        cache.put("c", 3, 1);
 
         // Access "b" and "c" to increase their frequencies
         cache.get(&"b");
@@ -1516,9 +1501,9 @@ mod tests {
     #[test]
     fn test_lfu_pop_r_returns_highest_frequency() {
         let mut cache = make_cache(3);
-        cache.put("a", 1);
-        cache.put("b", 2);
-        cache.put("c", 3);
+        cache.put("a", 1, 1);
+        cache.put("b", 2, 1);
+        cache.put("c", 3, 1);
 
         // Access items to build different frequencies
         cache.get(&"b"); // "b" frequency = 2
@@ -1551,7 +1536,7 @@ mod tests {
     #[test]
     fn test_lfu_pop_single_element() {
         let mut cache = make_cache(2);
-        cache.put("a", 1);
+        cache.put("a", 1, 1);
 
         let popped = cache.pop();
         assert_eq!(popped, Some(("a", 1)));
@@ -1561,7 +1546,7 @@ mod tests {
     #[test]
     fn test_lfu_pop_r_single_element() {
         let mut cache = make_cache(2);
-        cache.put("a", 1);
+        cache.put("a", 1, 1);
 
         let popped = cache.pop_r();
         assert_eq!(popped, Some(("a", 1)));
@@ -1571,15 +1556,15 @@ mod tests {
     #[test]
     fn test_lfu_pop_interleaved_with_put() {
         let mut cache = make_cache(3);
-        cache.put("a", 1);
-        cache.put("b", 2);
+        cache.put("a", 1, 1);
+        cache.put("b", 2, 1);
 
         // Pop lowest frequency
         assert_eq!(cache.pop(), Some(("a", 1)));
 
         // Add new items
-        cache.put("c", 3);
-        cache.put("d", 4);
+        cache.put("c", 3, 1);
+        cache.put("d", 4, 1);
 
         // "b", "c", "d" all have frequency 1 now. Pop order depends on recency
         assert_eq!(cache.len(), 3);
@@ -1600,11 +1585,11 @@ mod tests {
         let mut cache = make_cache(5);
 
         // Insert entries: all start with frequency 1
-        cache.put("a", 1);
-        cache.put("b", 2);
-        cache.put("c", 3);
-        cache.put("d", 4);
-        cache.put("e", 5);
+        cache.put("a", 1, 1);
+        cache.put("b", 2, 1);
+        cache.put("c", 3, 1);
+        cache.put("d", 4, 1);
+        cache.put("e", 5, 1);
 
         // Access some entries to differentiate frequencies
         // a: freq 3, b: freq 2, c: freq 1, d: freq 4, e: freq 1
@@ -1625,7 +1610,7 @@ mod tests {
         assert_eq!(cache.len(), 3);
 
         // Put new entry "f" with freq 1
-        cache.put("f", 6);
+        cache.put("f", 6, 1);
         assert_eq!(cache.len(), 4);
 
         // pop() removes lowest freq (e with freq 1, older than f)

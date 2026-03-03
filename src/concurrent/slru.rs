@@ -259,21 +259,14 @@ where
         segment.get(key).map(f)
     }
 
-    /// Inserts a key-value pair into the cache.
+    /// Inserts a key-value pair into the cache with optional size tracking.
     ///
     /// New items enter the probationary segment and are promoted to the protected
-    /// segment on subsequent access.
-    pub fn put(&self, key: K, value: V) -> Option<(K, V)> {
+    /// segment on subsequent access. Use `SIZE_UNIT` (1) for count-based caching.
+    pub fn put(&self, key: K, value: V, size: u64) -> Option<(K, V)> {
         let idx = self.segment_index(&key);
         let mut segment = self.segments[idx].lock();
-        segment.put(key, value)
-    }
-
-    /// Inserts a key-value pair with explicit size tracking.
-    pub fn put_with_size(&self, key: K, value: V, size: u64) -> Option<(K, V)> {
-        let idx = self.segment_index(&key);
-        let mut segment = self.segments[idx].lock();
-        segment.put_with_size(key, value, size)
+        segment.put(key, value, size)
     }
 
     /// Removes a key from the cache, returning the value if it existed.
@@ -501,8 +494,8 @@ mod tests {
         let cache: ConcurrentSlruCache<String, i32> =
             ConcurrentSlruCache::init(make_config(100, 50, 16), None);
 
-        cache.put("a".to_string(), 1);
-        cache.put("b".to_string(), 2);
+        cache.put("a".to_string(), 1, 1);
+        cache.put("b".to_string(), 2, 1);
 
         assert_eq!(cache.get(&"a".to_string()), Some(1));
         assert_eq!(cache.get(&"b".to_string()), Some(2));
@@ -522,7 +515,7 @@ mod tests {
             handles.push(thread::spawn(move || {
                 for i in 0..ops_per_thread {
                     let key = std::format!("key_{}_{}", t, i);
-                    cache.put(key.clone(), i);
+                    cache.put(key.clone(), i, 1);
                     let _ = cache.get(&key);
                 }
             }));
@@ -562,11 +555,11 @@ mod tests {
         assert!(cache.is_empty());
         assert_eq!(cache.len(), 0);
 
-        cache.put("key1".to_string(), 1);
+        cache.put("key1".to_string(), 1, 1);
         assert_eq!(cache.len(), 1);
         assert!(!cache.is_empty());
 
-        cache.put("key2".to_string(), 2);
+        cache.put("key2".to_string(), 2, 1);
         assert_eq!(cache.len(), 2);
     }
 
@@ -575,8 +568,8 @@ mod tests {
         let cache: ConcurrentSlruCache<String, i32> =
             ConcurrentSlruCache::init(make_config(100, 50, 16), None);
 
-        cache.put("key1".to_string(), 1);
-        cache.put("key2".to_string(), 2);
+        cache.put("key1".to_string(), 1, 1);
+        cache.put("key2".to_string(), 2, 1);
 
         assert_eq!(cache.remove(&"key1".to_string()), Some(1));
         assert_eq!(cache.len(), 1);
@@ -590,9 +583,9 @@ mod tests {
         let cache: ConcurrentSlruCache<String, i32> =
             ConcurrentSlruCache::init(make_config(100, 50, 16), None);
 
-        cache.put("key1".to_string(), 1);
-        cache.put("key2".to_string(), 2);
-        cache.put("key3".to_string(), 3);
+        cache.put("key1".to_string(), 1, 1);
+        cache.put("key2".to_string(), 2, 1);
+        cache.put("key3".to_string(), 3, 1);
 
         assert_eq!(cache.len(), 3);
 
@@ -608,7 +601,7 @@ mod tests {
         let cache: ConcurrentSlruCache<String, i32> =
             ConcurrentSlruCache::init(make_config(100, 50, 16), None);
 
-        cache.put("exists".to_string(), 1);
+        cache.put("exists".to_string(), 1, 1);
 
         assert!(cache.contains(&"exists".to_string()));
         assert!(!cache.contains(&"missing".to_string()));
@@ -619,7 +612,7 @@ mod tests {
         let cache: ConcurrentSlruCache<String, String> =
             ConcurrentSlruCache::init(make_config(100, 50, 16), None);
 
-        cache.put("key".to_string(), "hello world".to_string());
+        cache.put("key".to_string(), "hello world".to_string(), 1);
 
         let len = cache.get_with(&"key".to_string(), |v: &String| v.len());
         assert_eq!(len, Some(11));
@@ -635,7 +628,7 @@ mod tests {
 
         // Fill the cache
         for i in 0..10 {
-            cache.put(std::format!("key{}", i), i);
+            cache.put(std::format!("key{}", i), i, 1);
         }
 
         // Cache should not exceed capacity
@@ -647,7 +640,7 @@ mod tests {
         let cache: ConcurrentSlruCache<String, i32> =
             ConcurrentSlruCache::init(make_config(160, 80, 16), None);
 
-        cache.put("key".to_string(), 1);
+        cache.put("key".to_string(), 1, 1);
 
         // Access multiple times to promote to protected segment
         for _ in 0..3 {
@@ -663,8 +656,8 @@ mod tests {
         let cache: ConcurrentSlruCache<String, i32> =
             ConcurrentSlruCache::init(make_config(100, 50, 16), None);
 
-        cache.put("a".to_string(), 1);
-        cache.put("b".to_string(), 2);
+        cache.put("a".to_string(), 1, 1);
+        cache.put("b".to_string(), 2, 1);
 
         let metrics = cache.metrics();
         // Metrics aggregation across segments
@@ -696,7 +689,7 @@ mod tests {
         let cache: ConcurrentSlruCache<String, i32> =
             ConcurrentSlruCache::init(make_config(100, 50, 16), None);
 
-        cache.put("test_key".to_string(), 42);
+        cache.put("test_key".to_string(), 42, 1);
 
         // Test with borrowed key
         let key_str = "test_key";
@@ -710,8 +703,8 @@ mod tests {
         let cache: ConcurrentSlruCache<String, i32> =
             ConcurrentSlruCache::init(make_config(100, 50, 16), None);
 
-        cache.put("a".to_string(), 1);
-        cache.put("b".to_string(), 2);
+        cache.put("a".to_string(), 1, 1);
+        cache.put("b".to_string(), 2, 1);
 
         // contains() should check without promoting
         assert!(cache.contains(&"a".to_string()));
@@ -725,9 +718,9 @@ mod tests {
         let cache: ConcurrentSlruCache<String, i32> =
             ConcurrentSlruCache::init(make_config(100, 50, 1), None);
 
-        cache.put("a".to_string(), 1);
-        cache.put("b".to_string(), 2);
-        cache.put("c".to_string(), 3);
+        cache.put("a".to_string(), 1, 1);
+        cache.put("b".to_string(), 2, 1);
+        cache.put("c".to_string(), 3, 1);
 
         // Pop returns LRU entry (oldest = "a")
         assert_eq!(cache.pop(), Some(("a".to_string(), 1)));
@@ -750,9 +743,9 @@ mod tests {
         let cache: ConcurrentSlruCache<String, i32> =
             ConcurrentSlruCache::init(make_config(100, 50, 1), None);
 
-        cache.put("a".to_string(), 1);
-        cache.put("b".to_string(), 2);
-        cache.put("c".to_string(), 3);
+        cache.put("a".to_string(), 1, 1);
+        cache.put("b".to_string(), 2, 1);
+        cache.put("c".to_string(), 3, 1);
 
         // Pop_r returns MRU entry (newest = "c")
         assert_eq!(cache.pop_r(), Some(("c".to_string(), 3)));
@@ -775,9 +768,9 @@ mod tests {
         let cache: ConcurrentSlruCache<String, i32> =
             ConcurrentSlruCache::init(make_config(100, 50, 1), None);
 
-        cache.put("a".to_string(), 1);
-        cache.put("b".to_string(), 2);
-        cache.put("c".to_string(), 3);
+        cache.put("a".to_string(), 1, 1);
+        cache.put("b".to_string(), 2, 1);
+        cache.put("c".to_string(), 3, 1);
 
         // Pop all in LRU order
         assert_eq!(cache.pop(), Some(("a".to_string(), 1)));
@@ -793,11 +786,11 @@ mod tests {
             ConcurrentSlruCache::init(make_config(10, 5, 1), None);
 
         // Insert entries: all start in probationary
-        cache.put("a".to_string(), 1);
-        cache.put("b".to_string(), 2);
-        cache.put("c".to_string(), 3);
-        cache.put("d".to_string(), 4);
-        cache.put("e".to_string(), 5);
+        cache.put("a".to_string(), 1, 1);
+        cache.put("b".to_string(), 2, 1);
+        cache.put("c".to_string(), 3, 1);
+        cache.put("d".to_string(), 4, 1);
+        cache.put("e".to_string(), 5, 1);
 
         // pop() removes LRU from probationary: "a"
         assert_eq!(cache.pop(), Some(("a".to_string(), 1)));
@@ -811,7 +804,7 @@ mod tests {
         assert_eq!(cache.len(), 3);
 
         // Put new entry "f"
-        cache.put("f".to_string(), 6);
+        cache.put("f".to_string(), 6, 1);
         assert_eq!(cache.len(), 4);
 
         // Access "c" to promote it
@@ -825,7 +818,7 @@ mod tests {
         cache.remove(&"c".to_string());
 
         // Put and promote another entry
-        cache.put("g".to_string(), 7);
+        cache.put("g".to_string(), 7, 1);
         cache.get(&"g".to_string());
 
         // Pop remaining entries alternating pop/pop_r

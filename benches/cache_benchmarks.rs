@@ -120,7 +120,7 @@ fn benchmark_caches(c: &mut Criterion) {
             for &idx in &samples {
                 if idx % 4 == 0 {
                     // 25% puts
-                    black_box(cache.put(idx, idx));
+                    black_box(cache.put(idx, idx, 1));
                 } else {
                     // 75% gets
                     black_box(cache.get(&idx));
@@ -136,7 +136,7 @@ fn benchmark_caches(c: &mut Criterion) {
             for &idx in &samples {
                 if idx % 4 == 0 {
                     // 25% puts
-                    black_box(cache.put(idx, idx));
+                    black_box(cache.put(idx, idx, 1));
                 } else {
                     // 75% gets
                     black_box(cache.get(&idx));
@@ -152,7 +152,7 @@ fn benchmark_caches(c: &mut Criterion) {
             for &idx in &samples {
                 if idx % 4 == 0 {
                     // 25% puts
-                    black_box(cache.put(idx, idx));
+                    black_box(cache.put(idx, idx, 1));
                 } else {
                     // 75% gets
                     black_box(cache.get(&idx));
@@ -168,7 +168,7 @@ fn benchmark_caches(c: &mut Criterion) {
             for &idx in &samples {
                 if idx % 4 == 0 {
                     // 25% puts
-                    black_box(cache.put(idx, idx));
+                    black_box(cache.put(idx, idx, 1));
                 } else {
                     // 75% gets
                     black_box(cache.get(&idx));

@@ -106,10 +106,10 @@ fn concurrent_reads(c: &mut Criterion) {
 
     // Fill caches
     for i in 0..CACHE_SIZE {
-        lru_cache.put(i, i);
-        slru_cache.put(i, i);
-        lfu_cache.put(i, i);
-        lfuda_cache.put(i, i);
+        lru_cache.put(i, i, 1);
+        slru_cache.put(i, i, 1);
+        lfu_cache.put(i, i, 1);
+        lfuda_cache.put(i, i, 1);
         gdsf_cache.put(i, i, ((i % 10) + 1) as u64);
     }
 
@@ -218,7 +218,7 @@ fn concurrent_mixed(c: &mut Criterion) {
             Arc::new(ConcurrentLruCache::init(lru_config(CACHE_SIZE), None));
         // Pre-populate
         for i in 0..CACHE_SIZE {
-            cache.put(i, i);
+            cache.put(i, i, 1);
         }
         b.iter(|| {
             let cache = Arc::clone(&cache);
@@ -232,7 +232,7 @@ fn concurrent_mixed(c: &mut Criterion) {
             None,
         ));
         for i in 0..CACHE_SIZE {
-            cache.put(i, i);
+            cache.put(i, i, 1);
         }
         b.iter(|| {
             let cache = Arc::clone(&cache);
@@ -244,7 +244,7 @@ fn concurrent_mixed(c: &mut Criterion) {
         let cache: Arc<ConcurrentLfuCache<usize, usize>> =
             Arc::new(ConcurrentLfuCache::init(lfu_config(CACHE_SIZE), None));
         for i in 0..CACHE_SIZE {
-            cache.put(i, i);
+            cache.put(i, i, 1);
         }
         b.iter(|| {
             let cache = Arc::clone(&cache);
@@ -256,7 +256,7 @@ fn concurrent_mixed(c: &mut Criterion) {
         let cache: Arc<ConcurrentLfudaCache<usize, usize>> =
             Arc::new(ConcurrentLfudaCache::init(lfuda_config(CACHE_SIZE), None));
         for i in 0..CACHE_SIZE {
-            cache.put(i, i);
+            cache.put(i, i, 1);
         }
         b.iter(|| {
             let cache = Arc::clone(&cache);
@@ -296,7 +296,7 @@ fn segment_count_comparison(c: &mut Criterion) {
                 );
                 // Pre-populate
                 for i in 0..CACHE_SIZE {
-                    cache.put(i, i);
+                    cache.put(i, i, 1);
                 }
                 b.iter(|| {
                     let cache = Arc::clone(&cache);
@@ -324,7 +324,7 @@ where
         self.get(key)
     }
     fn cache_put(&self, key: K, value: V) {
-        self.put(key, value);
+        self.put(key, value, 1);
     }
 }
 
@@ -337,7 +337,7 @@ where
         self.get(key)
     }
     fn cache_put(&self, key: K, value: V) {
-        self.put(key, value);
+        self.put(key, value, 1);
     }
 }
 
@@ -350,7 +350,7 @@ where
         self.get(key)
     }
     fn cache_put(&self, key: K, value: V) {
-        self.put(key, value);
+        self.put(key, value, 1);
     }
 }
 
@@ -363,7 +363,7 @@ where
         self.get(key)
     }
     fn cache_put(&self, key: K, value: V) {
-        self.put(key, value);
+        self.put(key, value, 1);
     }
 }
 

@@ -146,9 +146,9 @@ fn test_lru_evicts_least_recently_used() {
     let mut cache = make_lru(3);
 
     // Fill cache: order of insertion determines initial LRU order
-    cache.put(1, 10);
-    cache.put(2, 20);
-    cache.put(3, 30);
+    cache.put(1, 10, 1);
+    cache.put(2, 20, 1);
+    cache.put(3, 30, 1);
     // LRU order: 1 (LRU) -> 2 -> 3 (MRU)
 
     // Verify all present before any eviction
@@ -158,7 +158,7 @@ fn test_lru_evicts_least_recently_used() {
     // After gets: LRU order is now 1 -> 2 -> 3 (order of access)
 
     // Insert new key - should evict key 1 (LRU)
-    cache.put(4, 40);
+    cache.put(4, 40, 1);
 
     // VALIDATE EVICTION: Key 1 should be evicted
     assert!(
@@ -171,7 +171,7 @@ fn test_lru_evicts_least_recently_used() {
     // After gets: LRU order is 2 -> 3 -> 4
 
     // Insert another - should evict key 2 (now LRU)
-    cache.put(5, 50);
+    cache.put(5, 50, 1);
 
     // VALIDATE EVICTION: Key 2 should be evicted
     assert!(
@@ -189,26 +189,26 @@ fn test_lru_eviction_order_is_predictable() {
 
     // Fill cache with keys 0..4
     for i in 0..5 {
-        cache.put(i, i * 10);
+        cache.put(i, i * 10, 1);
     }
     // LRU order: 0 (LRU) -> 1 -> 2 -> 3 -> 4 (MRU)
 
     // Insert key 5 - should evict key 0
-    cache.put(5, 50);
+    cache.put(5, 50, 1);
     assert!(
         cache.get(&0).is_none(),
         "First eviction: Key 0 should be evicted"
     );
 
     // Insert key 6 - should evict key 1
-    cache.put(6, 60);
+    cache.put(6, 60, 1);
     assert!(
         cache.get(&1).is_none(),
         "Second eviction: Key 1 should be evicted"
     );
 
     // Insert key 7 - should evict key 2
-    cache.put(7, 70);
+    cache.put(7, 70, 1);
     assert!(
         cache.get(&2).is_none(),
         "Third eviction: Key 2 should be evicted"
@@ -227,9 +227,9 @@ fn test_lru_get_updates_recency() {
     let mut cache = make_lru(3);
 
     // Fill cache
-    cache.put(1, 10);
-    cache.put(2, 20);
-    cache.put(3, 30);
+    cache.put(1, 10, 1);
+    cache.put(2, 20, 1);
+    cache.put(3, 30, 1);
     // LRU order: 1 (LRU) -> 2 -> 3 (MRU)
 
     // Access key 1 to make it recently used
@@ -237,7 +237,7 @@ fn test_lru_get_updates_recency() {
     // LRU order: 2 (LRU) -> 3 -> 1 (MRU)
 
     // Insert new key - should evict key 2 (now LRU), NOT key 1
-    cache.put(4, 40);
+    cache.put(4, 40, 1);
 
     // VALIDATE: Key 2 evicted (not key 1 which was accessed)
     assert!(
@@ -266,9 +266,9 @@ fn test_lfu_evicts_least_frequently_used() {
     let mut cache = make_lfu(3);
 
     // Fill cache
-    cache.put(1, 10); // freq=1
-    cache.put(2, 20); // freq=1
-    cache.put(3, 30); // freq=1
+    cache.put(1, 10, 1); // freq=1
+    cache.put(2, 20, 1); // freq=1
+    cache.put(3, 30, 1); // freq=1
 
     // Access key 1 and 2 to increase their frequency
     cache.get(&1); // freq=2
@@ -278,7 +278,7 @@ fn test_lfu_evicts_least_frequently_used() {
     // Frequencies: key1=3, key2=2, key3=1 (lowest)
 
     // Insert new key - should evict key 3 (lowest frequency)
-    cache.put(4, 40);
+    cache.put(4, 40, 1);
 
     // VALIDATE EVICTION: Key 3 should be evicted (freq=1)
     assert!(
@@ -294,9 +294,9 @@ fn test_lfu_evicts_least_frequently_used() {
 fn test_lfu_frequency_accumulates() {
     let mut cache = make_lfu(3);
 
-    cache.put("hot", 1);
-    cache.put("warm", 2);
-    cache.put("cold", 3);
+    cache.put("hot", 1, 1);
+    cache.put("warm", 2, 1);
+    cache.put("cold", 3, 1);
 
     // Access "hot" many times (freq=11)
     for _ in 0..10 {
@@ -311,7 +311,7 @@ fn test_lfu_frequency_accumulates() {
     // Frequencies: hot=11, warm=4, cold=1 (lowest)
 
     // Insert new item - should evict "cold"
-    cache.put("new", 4);
+    cache.put("new", 4, 1);
 
     // VALIDATE EVICTION: "cold" should be evicted (freq=1)
     assert!(
@@ -328,12 +328,12 @@ fn test_lfu_same_frequency_uses_fifo() {
     let mut cache = make_lfu(3);
 
     // Insert 3 items - all have same frequency (1)
-    cache.put(1, 10);
-    cache.put(2, 20);
-    cache.put(3, 30);
+    cache.put(1, 10, 1);
+    cache.put(2, 20, 1);
+    cache.put(3, 30, 1);
 
     // Insert new item - should evict key 1 (first inserted among same frequency)
-    cache.put(4, 40);
+    cache.put(4, 40, 1);
 
     // VALIDATE EVICTION: Key 1 should be evicted (FIFO among same freq)
     assert!(
@@ -342,7 +342,7 @@ fn test_lfu_same_frequency_uses_fifo() {
     );
 
     // Insert another - should evict key 2 (next in FIFO order)
-    cache.put(5, 50);
+    cache.put(5, 50, 1);
 
     // VALIDATE EVICTION: Key 2 should be evicted (FIFO)
     assert!(
@@ -366,9 +366,9 @@ fn test_lfuda_evicts_lowest_priority() {
     let mut cache = make_lfuda(3);
 
     // Fill cache
-    cache.put(1, 10); // priority = freq + age = 1 + 0 = 1
-    cache.put(2, 20); // priority = 1 + 0 = 1
-    cache.put(3, 30); // priority = 1 + 0 = 1
+    cache.put(1, 10, 1); // priority = freq + age = 1 + 0 = 1
+    cache.put(2, 20, 1); // priority = 1 + 0 = 1
+    cache.put(3, 30, 1); // priority = 1 + 0 = 1
 
     // Access key 1 and 2 to increase their priority
     cache.get(&1); // priority increases
@@ -378,7 +378,7 @@ fn test_lfuda_evicts_lowest_priority() {
     // Key 3 has lowest priority (only initial put, no gets)
 
     // Insert new key - should evict key 3
-    cache.put(4, 40);
+    cache.put(4, 40, 1);
 
     // VALIDATE EVICTION: Key 3 should be evicted (lowest priority)
     assert!(
@@ -398,9 +398,9 @@ fn test_lfuda_aging_helps_new_items() {
     let mut cache = make_lfuda(3);
 
     // Insert items
-    cache.put(1, 10);
-    cache.put(2, 20);
-    cache.put(3, 30);
+    cache.put(1, 10, 1);
+    cache.put(2, 20, 1);
+    cache.put(3, 30, 1);
 
     // Access all items to increase frequency
     for _ in 0..5 {
@@ -411,8 +411,8 @@ fn test_lfuda_aging_helps_new_items() {
 
     // Now evict and insert several times to increase global age
     // Each eviction increases the age
-    cache.put(4, 40); // evicts one item, age increases
-    cache.put(5, 50); // evicts another, age increases more
+    cache.put(4, 40, 1); // evicts one item, age increases
+    cache.put(5, 50, 1); // evicts another, age increases more
 
     // New items benefit from the elevated global age
     // The surviving items should be those with highest effective priority
@@ -424,10 +424,10 @@ fn test_lfuda_basic_eviction() {
     let mut cache = make_lfuda(4);
 
     // Fill cache
-    cache.put(1, 10);
-    cache.put(2, 20);
-    cache.put(3, 30);
-    cache.put(4, 40);
+    cache.put(1, 10, 1);
+    cache.put(2, 20, 1);
+    cache.put(3, 30, 1);
+    cache.put(4, 40, 1);
 
     // Access first two items more frequently
     for _ in 0..3 {
@@ -436,7 +436,7 @@ fn test_lfuda_basic_eviction() {
     }
 
     // Insert new item - should evict 3 or 4 (lowest frequency)
-    cache.put(5, 50);
+    cache.put(5, 50, 1);
 
     // VALIDATE EVICTION: One of 3 or 4 should be evicted (both have freq=1)
     let key3_evicted = cache.get(&3).is_none();
@@ -467,10 +467,10 @@ fn test_slru_promotion_to_protected() {
     let mut cache = make_slru(4, 2);
 
     // Insert items - they start in probationary
-    cache.put(1, 10);
-    cache.put(2, 20);
-    cache.put(3, 30);
-    cache.put(4, 40);
+    cache.put(1, 10, 1);
+    cache.put(2, 20, 1);
+    cache.put(3, 30, 1);
+    cache.put(4, 40, 1);
 
     // Access key 1 to promote it to protected segment
     cache.get(&1);
@@ -484,7 +484,7 @@ fn test_slru_promotion_to_protected() {
     // Probationary LRU order: 3 (LRU) -> 4 (MRU)
 
     // Insert new item - should evict from probationary (LRU in probationary = 3)
-    cache.put(5, 50);
+    cache.put(5, 50, 1);
 
     // VALIDATE EVICTION: Key 3 should be evicted from probationary
     assert!(
@@ -502,10 +502,10 @@ fn test_slru_probationary_evicted_first() {
     let mut cache = make_slru(4, 2);
 
     // Insert 4 items (all in probationary initially)
-    cache.put(1, 10);
-    cache.put(2, 20);
-    cache.put(3, 30);
-    cache.put(4, 40);
+    cache.put(1, 10, 1);
+    cache.put(2, 20, 1);
+    cache.put(3, 30, 1);
+    cache.put(4, 40, 1);
 
     // Promote keys 3 and 4 to protected by accessing them
     cache.get(&3);
@@ -517,7 +517,7 @@ fn test_slru_probationary_evicted_first() {
     // Probationary LRU order: 1 (LRU) -> 2 (MRU)
 
     // Insert new item - should evict key 1 (LRU in probationary)
-    cache.put(5, 50);
+    cache.put(5, 50, 1);
 
     // VALIDATE EVICTION: Key 1 should be evicted (LRU in probationary)
     assert!(
@@ -540,10 +540,10 @@ fn test_slru_eviction_order_in_probationary() {
     let mut cache = make_slru(4, 1);
 
     // Insert 4 items
-    cache.put(1, 10);
-    cache.put(2, 20);
-    cache.put(3, 30);
-    cache.put(4, 40);
+    cache.put(1, 10, 1);
+    cache.put(2, 20, 1);
+    cache.put(3, 30, 1);
+    cache.put(4, 40, 1);
 
     // Promote only key 4 to protected
     cache.get(&4);
@@ -552,19 +552,19 @@ fn test_slru_eviction_order_in_probationary() {
     // Probationary: 1 (LRU) -> 2 -> 3 (MRU), Protected: 4
 
     // Insert new items and verify eviction order from probationary
-    cache.put(5, 50);
+    cache.put(5, 50, 1);
     assert!(
         cache.get(&1).is_none(),
         "First eviction: Key 1 should be evicted"
     );
 
-    cache.put(6, 60);
+    cache.put(6, 60, 1);
     assert!(
         cache.get(&2).is_none(),
         "Second eviction: Key 2 should be evicted"
     );
 
-    cache.put(7, 70);
+    cache.put(7, 70, 1);
     assert!(
         cache.get(&3).is_none(),
         "Third eviction: Key 3 should be evicted"
@@ -729,28 +729,28 @@ fn test_all_caches_basic_operations() {
 
     // LRU
     let mut lru = make_lru(10);
-    lru.put("key", 42);
+    lru.put("key", 42, 1);
     assert_eq!(lru.get(&"key"), Some(&42));
     assert_eq!(lru.remove(&"key"), Some(42));
     assert_eq!(lru.get(&"key"), None);
 
     // LFU
     let mut lfu = make_lfu(10);
-    lfu.put("key", 42);
+    lfu.put("key", 42, 1);
     assert_eq!(lfu.get(&"key"), Some(&42));
     assert_eq!(lfu.remove(&"key"), Some(42));
     assert_eq!(lfu.get(&"key"), None);
 
     // LFUDA
     let mut lfuda = make_lfuda(10);
-    lfuda.put("key", 42);
+    lfuda.put("key", 42, 1);
     assert_eq!(lfuda.get(&"key"), Some(&42));
     assert_eq!(lfuda.remove(&"key"), Some(42));
     assert_eq!(lfuda.get(&"key"), None);
 
     // SLRU
     let mut slru = make_slru(10, 5);
-    slru.put("key", 42);
+    slru.put("key", 42, 1);
     assert_eq!(slru.get(&"key"), Some(&42));
     assert_eq!(slru.remove(&"key"), Some(42));
     assert_eq!(slru.get(&"key"), None);
@@ -769,28 +769,28 @@ fn test_all_caches_capacity_enforcement() {
     // LRU
     let mut lru = make_lru(3);
     for i in 0..10 {
-        lru.put(i, i);
+        lru.put(i, i, 1);
     }
     assert_eq!(lru.len(), 3, "LRU should enforce capacity");
 
     // LFU
     let mut lfu = make_lfu(3);
     for i in 0..10 {
-        lfu.put(i, i);
+        lfu.put(i, i, 1);
     }
     assert_eq!(lfu.len(), 3, "LFU should enforce capacity");
 
     // LFUDA
     let mut lfuda = make_lfuda(3);
     for i in 0..10 {
-        lfuda.put(i, i);
+        lfuda.put(i, i, 1);
     }
     assert_eq!(lfuda.len(), 3, "LFUDA should enforce capacity");
 
     // SLRU
     let mut slru = make_slru(3, 1);
     for i in 0..10 {
-        slru.put(i, i);
+        slru.put(i, i, 1);
     }
     assert_eq!(slru.len(), 3, "SLRU should enforce capacity");
 
@@ -806,33 +806,33 @@ fn test_all_caches_capacity_enforcement() {
 fn test_all_caches_update_existing_key() {
     // LRU - updating existing key should not change len
     let mut lru = make_lru(3);
-    lru.put(1, 10);
-    lru.put(2, 20);
-    lru.put(1, 100); // Update key 1
+    lru.put(1, 10, 1);
+    lru.put(2, 20, 1);
+    lru.put(1, 100, 1); // Update key 1
     assert_eq!(lru.len(), 2, "LRU: update should not increase len");
     assert_eq!(lru.get(&1), Some(&100), "LRU: value should be updated");
 
     // LFU
     let mut lfu = make_lfu(3);
-    lfu.put(1, 10);
-    lfu.put(2, 20);
-    lfu.put(1, 100);
+    lfu.put(1, 10, 1);
+    lfu.put(2, 20, 1);
+    lfu.put(1, 100, 1);
     assert_eq!(lfu.len(), 2, "LFU: update should not increase len");
     assert_eq!(lfu.get(&1), Some(&100), "LFU: value should be updated");
 
     // LFUDA
     let mut lfuda = make_lfuda(3);
-    lfuda.put(1, 10);
-    lfuda.put(2, 20);
-    lfuda.put(1, 100);
+    lfuda.put(1, 10, 1);
+    lfuda.put(2, 20, 1);
+    lfuda.put(1, 100, 1);
     assert_eq!(lfuda.len(), 2, "LFUDA: update should not increase len");
     assert_eq!(lfuda.get(&1), Some(&100), "LFUDA: value should be updated");
 
     // SLRU
     let mut slru = make_slru(3, 1);
-    slru.put(1, 10);
-    slru.put(2, 20);
-    slru.put(1, 100);
+    slru.put(1, 10, 1);
+    slru.put(2, 20, 1);
+    slru.put(1, 100, 1);
     assert_eq!(slru.len(), 2, "SLRU: update should not increase len");
     assert_eq!(slru.get(&1), Some(&100), "SLRU: value should be updated");
 
@@ -850,7 +850,7 @@ fn test_all_caches_clear() {
     // LRU
     let mut lru = make_lru(5);
     for i in 0..5 {
-        lru.put(i, i);
+        lru.put(i, i, 1);
     }
     lru.clear();
     assert_eq!(lru.len(), 0, "LRU: clear should empty cache");
@@ -862,7 +862,7 @@ fn test_all_caches_clear() {
     // LFU
     let mut lfu = make_lfu(5);
     for i in 0..5 {
-        lfu.put(i, i);
+        lfu.put(i, i, 1);
     }
     lfu.clear();
     assert_eq!(lfu.len(), 0, "LFU: clear should empty cache");
@@ -870,7 +870,7 @@ fn test_all_caches_clear() {
     // LFUDA
     let mut lfuda = make_lfuda(5);
     for i in 0..5 {
-        lfuda.put(i, i);
+        lfuda.put(i, i, 1);
     }
     lfuda.clear();
     assert_eq!(lfuda.len(), 0, "LFUDA: clear should empty cache");
@@ -878,7 +878,7 @@ fn test_all_caches_clear() {
     // SLRU
     let mut slru = make_slru(5, 2);
     for i in 0..5 {
-        slru.put(i, i);
+        slru.put(i, i, 1);
     }
     slru.clear();
     assert_eq!(slru.len(), 0, "SLRU: clear should empty cache");
@@ -909,21 +909,21 @@ fn test_lru_size_tracking() {
     let mut cache = make_lru_with_max_size(100);
 
     // Insert items with sizes
-    cache.put_with_size(1, "a", 30); // size=30, total=30
+    cache.put(1, "a", 30); // size=30, total=30
     assert_eq!(
         cache.current_size(),
         30,
         "Size should be 30 after first insert"
     );
 
-    cache.put_with_size(2, "b", 40); // size=40, total=70
+    cache.put(2, "b", 40); // size=40, total=70
     assert_eq!(
         cache.current_size(),
         70,
         "Size should be 70 after second insert"
     );
 
-    cache.put_with_size(3, "c", 20); // size=20, total=90
+    cache.put(3, "c", 20); // size=20, total=90
     assert_eq!(
         cache.current_size(),
         90,
@@ -942,7 +942,7 @@ fn test_lru_size_tracking_accumulates() {
 
     // Insert multiple items and verify size accumulates
     for i in 0..10 {
-        cache.put_with_size(i, format!("value{}", i), 50);
+        cache.put(i, format!("value{}", i), 50);
     }
 
     assert_eq!(
@@ -958,14 +958,14 @@ fn test_lru_entry_count_eviction_updates_size() {
     // Create cache with entry count limit of 3
     let mut cache = make_lru_with_limits(3, 1000);
 
-    cache.put_with_size(1, "a", 30);
-    cache.put_with_size(2, "b", 40);
-    cache.put_with_size(3, "c", 50);
+    cache.put(1, "a", 30);
+    cache.put(2, "b", 40);
+    cache.put(3, "c", 50);
     assert_eq!(cache.current_size(), 120);
     assert_eq!(cache.len(), 3);
 
     // Insert 4th item - triggers count-based eviction of key 1
-    cache.put_with_size(4, "d", 60);
+    cache.put(4, "d", 60);
 
     assert!(
         cache.get(&1).is_none(),
@@ -980,9 +980,9 @@ fn test_lru_entry_count_eviction_updates_size() {
 fn test_lfu_size_tracking() {
     let mut cache = make_lfu_with_max_size(1000);
 
-    cache.put_with_size(1, "a", 100);
-    cache.put_with_size(2, "b", 200);
-    cache.put_with_size(3, "c", 150);
+    cache.put(1, "a", 100);
+    cache.put(2, "b", 200);
+    cache.put(3, "c", 150);
 
     assert_eq!(cache.current_size(), 450, "Total size should be 450");
     assert_eq!(cache.len(), 3);
@@ -992,8 +992,8 @@ fn test_lfu_size_tracking() {
 fn test_lfuda_size_tracking() {
     let mut cache = make_lfuda_with_max_size(1000);
 
-    cache.put_with_size(1, "a", 100);
-    cache.put_with_size(2, "b", 200);
+    cache.put(1, "a", 100);
+    cache.put(2, "b", 200);
 
     assert_eq!(cache.current_size(), 300, "Total size should be 300");
 }
@@ -1002,9 +1002,9 @@ fn test_lfuda_size_tracking() {
 fn test_slru_size_tracking() {
     let mut cache = make_slru_with_max_size(1000);
 
-    cache.put_with_size(1, "a", 100);
-    cache.put_with_size(2, "b", 200);
-    cache.put_with_size(3, "c", 150);
+    cache.put(1, "a", 100);
+    cache.put(2, "b", 200);
+    cache.put(3, "c", 150);
 
     assert_eq!(cache.current_size(), 450, "Total size should be 450");
 }
@@ -1013,8 +1013,8 @@ fn test_slru_size_tracking() {
 fn test_size_reset_on_clear() {
     let mut cache = make_lru_with_max_size(1000);
 
-    cache.put_with_size(1, "a", 30);
-    cache.put_with_size(2, "b", 40);
+    cache.put(1, "a", 30);
+    cache.put(2, "b", 40);
     assert_eq!(cache.current_size(), 70);
 
     cache.clear();
@@ -1058,16 +1058,16 @@ fn test_lru_capacity_one() {
     // Edge case: cache that can only hold 1 item
     let mut cache = make_lru(1);
 
-    cache.put(1, 10);
+    cache.put(1, 10, 1);
     assert_eq!(cache.get(&1), Some(&10));
 
     // Second insert immediately evicts first
-    cache.put(2, 20);
+    cache.put(2, 20, 1);
     assert!(cache.get(&1).is_none(), "Key 1 should be evicted");
     assert_eq!(cache.get(&2), Some(&20), "Key 2 should be present");
 
     // Third insert evicts second
-    cache.put(3, 30);
+    cache.put(3, 30, 1);
     assert!(cache.get(&2).is_none(), "Key 2 should be evicted");
     assert_eq!(cache.get(&3), Some(&30), "Key 3 should be present");
 }
@@ -1076,17 +1076,17 @@ fn test_lru_capacity_one() {
 fn test_lru_update_moves_to_mru() {
     let mut cache = make_lru(3);
 
-    cache.put(1, 10);
-    cache.put(2, 20);
-    cache.put(3, 30);
+    cache.put(1, 10, 1);
+    cache.put(2, 20, 1);
+    cache.put(3, 30, 1);
     // LRU order: 1 -> 2 -> 3
 
     // Update key 1 - should move to MRU position
-    cache.put(1, 100);
+    cache.put(1, 100, 1);
     // LRU order should now be: 2 -> 3 -> 1
 
     // Insert new key - should evict 2 (now LRU), not 1
-    cache.put(4, 40);
+    cache.put(4, 40, 1);
 
     assert!(
         cache.get(&2).is_none(),
@@ -1107,7 +1107,7 @@ fn test_lru_reverse_access_order() {
 
     // Insert 1, 2, 3, 4, 5
     for i in 1..=5 {
-        cache.put(i, i * 10);
+        cache.put(i, i * 10, 1);
     }
     // LRU order: 1 -> 2 -> 3 -> 4 -> 5
 
@@ -1118,7 +1118,7 @@ fn test_lru_reverse_access_order() {
     // LRU order should now be: 5 -> 4 -> 3 -> 2 -> 1 (reversed)
 
     // Insert new key - should evict 5 (now LRU)
-    cache.put(6, 60);
+    cache.put(6, 60, 1);
     assert!(
         cache.get(&5).is_none(),
         "Key 5 should be evicted (was LRU after reverse access)"
@@ -1130,20 +1130,20 @@ fn test_lru_reverse_access_order() {
 fn test_lru_remove_and_reinsert() {
     let mut cache = make_lru(3);
 
-    cache.put(1, 10);
-    cache.put(2, 20);
-    cache.put(3, 30);
+    cache.put(1, 10, 1);
+    cache.put(2, 20, 1);
+    cache.put(3, 30, 1);
 
     // Remove middle item
     assert_eq!(cache.remove(&2), Some(20));
     assert_eq!(cache.len(), 2);
 
     // Reinsert - should go to MRU position
-    cache.put(2, 200);
+    cache.put(2, 200, 1);
     // LRU order: 1 -> 3 -> 2
 
     // Insert new key - should evict 1
-    cache.put(4, 40);
+    cache.put(4, 40, 1);
     assert!(cache.get(&1).is_none(), "Key 1 should be evicted");
     assert_eq!(
         cache.get(&2),
@@ -1163,29 +1163,29 @@ fn test_lfu_all_equal_frequency_fifo() {
     let mut cache = make_lfu(4);
 
     // Insert 4 items - all have freq=1
-    cache.put(1, 10);
-    cache.put(2, 20);
-    cache.put(3, 30);
-    cache.put(4, 40);
+    cache.put(1, 10, 1);
+    cache.put(2, 20, 1);
+    cache.put(3, 30, 1);
+    cache.put(4, 40, 1);
 
     // All items have same frequency, FIFO order: 1 -> 2 -> 3 -> 4
 
     // Insert new item - should evict 1 (first in FIFO)
-    cache.put(5, 50);
+    cache.put(5, 50, 1);
     assert!(
         cache.get(&1).is_none(),
         "Key 1 should be evicted (FIFO tiebreaker)"
     );
 
     // Insert another - should evict 2 (next in FIFO)
-    cache.put(6, 60);
+    cache.put(6, 60, 1);
     assert!(
         cache.get(&2).is_none(),
         "Key 2 should be evicted (FIFO tiebreaker)"
     );
 
     // Insert another - should evict 3
-    cache.put(7, 70);
+    cache.put(7, 70, 1);
     assert!(
         cache.get(&3).is_none(),
         "Key 3 should be evicted (FIFO tiebreaker)"
@@ -1197,9 +1197,9 @@ fn test_lfu_new_item_lowest_frequency() {
     // New item has freq=1, could be immediately evicted
     let mut cache = make_lfu(3);
 
-    cache.put(1, 10);
-    cache.put(2, 20);
-    cache.put(3, 30);
+    cache.put(1, 10, 1);
+    cache.put(2, 20, 1);
+    cache.put(3, 30, 1);
 
     // Access all items many times - they all have high frequency
     for _ in 0..10 {
@@ -1210,12 +1210,12 @@ fn test_lfu_new_item_lowest_frequency() {
     // Frequencies: 1=11, 2=11, 3=11
 
     // Insert new item (freq=1), then another (freq=1)
-    cache.put(4, 40); // Evicts based on FIFO among freq=11 items
+    cache.put(4, 40, 1); // Evicts based on FIFO among freq=11 items
     let _first_evicted = (1..=3).find(|&i| cache.get(&i).is_none());
 
     // Insert another - the NEW item (4) has freq=1, much lower than others
     // If freq=1 ties with remaining items at freq=11, FIFO applies
-    cache.put(5, 50);
+    cache.put(5, 50, 1);
 
     // Key 4 should be evicted because it has lowest freq (1)
     assert!(
@@ -1229,14 +1229,14 @@ fn test_lfu_new_item_lowest_frequency() {
 fn test_lfu_capacity_one() {
     let mut cache = make_lfu(1);
 
-    cache.put(1, 10);
+    cache.put(1, 10, 1);
     // Access many times
     for _ in 0..100 {
         cache.get(&1);
     }
 
     // Even with high frequency, must be evicted when new item comes
-    cache.put(2, 20);
+    cache.put(2, 20, 1);
     assert!(
         cache.get(&1).is_none(),
         "Key 1 must be evicted (capacity=1)"
@@ -1248,9 +1248,9 @@ fn test_lfu_capacity_one() {
 fn test_lfu_update_preserves_frequency() {
     let mut cache = make_lfu(3);
 
-    cache.put(1, 10);
-    cache.put(2, 20);
-    cache.put(3, 30);
+    cache.put(1, 10, 1);
+    cache.put(2, 20, 1);
+    cache.put(3, 30, 1);
 
     // Build up frequency for key 1
     for _ in 0..10 {
@@ -1259,10 +1259,10 @@ fn test_lfu_update_preserves_frequency() {
     // freq: 1=11, 2=1, 3=1
 
     // Update key 1's value - should preserve high frequency
-    cache.put(1, 100);
+    cache.put(1, 100, 1);
 
     // Insert new item - should evict 2 or 3 (low freq), NOT key 1
-    cache.put(4, 40);
+    cache.put(4, 40, 1);
 
     assert!(
         cache.get(&1).is_some(),
@@ -1282,19 +1282,19 @@ fn test_slru_all_in_probationary() {
 
     // Insert 5 items, access each only once (no promotion)
     for i in 1..=5 {
-        cache.put(i, i * 10);
+        cache.put(i, i * 10, 1);
     }
     // All items in probationary, LRU order: 1 -> 2 -> 3 -> 4 -> 5
 
     // Insert new item - should evict from probationary (key 1)
-    cache.put(6, 60);
+    cache.put(6, 60, 1);
     assert!(
         cache.get(&1).is_none(),
         "Key 1 should be evicted (LRU in probationary)"
     );
 
     // Continue inserting - should keep evicting from probationary
-    cache.put(7, 70);
+    cache.put(7, 70, 1);
     assert!(cache.get(&2).is_none(), "Key 2 should be evicted");
 }
 
@@ -1304,8 +1304,8 @@ fn test_slru_protected_full_demotion() {
     let mut cache = make_slru(4, 2);
 
     // Insert and promote 2 items to fill protected
-    cache.put(1, 10);
-    cache.put(2, 20);
+    cache.put(1, 10, 1);
+    cache.put(2, 20, 1);
     cache.get(&1); // Access to start promotion
     cache.get(&1); // Second access promotes to protected
     cache.get(&2);
@@ -1313,8 +1313,8 @@ fn test_slru_protected_full_demotion() {
                    // Protected: {1, 2}, Probationary: empty
 
     // Add items to probationary
-    cache.put(3, 30);
-    cache.put(4, 40);
+    cache.put(3, 30, 1);
+    cache.put(4, 40, 1);
     // Protected: {1, 2}, Probationary: {3, 4}
 
     // Promote key 3 - protected is full, so key 1 (oldest) should be demoted
@@ -1324,7 +1324,7 @@ fn test_slru_protected_full_demotion() {
 
     // Insert new item - should evict from probationary
     // Depending on implementation, either demoted key 1 or key 4 is LRU
-    cache.put(5, 50);
+    cache.put(5, 50, 1);
 
     // Key 2 and 3 should be safe (in protected)
     assert!(cache.get(&2).is_some(), "Key 2 should remain (protected)");
@@ -1335,8 +1335,8 @@ fn test_slru_protected_full_demotion() {
 fn test_slru_access_in_protected_stays() {
     let mut cache = make_slru(4, 2);
 
-    cache.put(1, 10);
-    cache.put(2, 20);
+    cache.put(1, 10, 1);
+    cache.put(2, 20, 1);
 
     // Promote both to protected
     cache.get(&1);
@@ -1348,8 +1348,8 @@ fn test_slru_access_in_protected_stays() {
     cache.get(&1);
 
     // Add probationary items
-    cache.put(3, 30);
-    cache.put(4, 40);
+    cache.put(3, 30, 1);
+    cache.put(4, 40, 1);
 
     // Promote key 3 - key 2 should be demoted (LRU in protected)
     cache.get(&3);
@@ -1357,7 +1357,7 @@ fn test_slru_access_in_protected_stays() {
 
     // Key 1 should still be in protected (was accessed, moved to MRU)
     // Key 2 should be demoted to probationary
-    cache.put(5, 50);
+    cache.put(5, 50, 1);
 
     assert!(
         cache.get(&1).is_some(),
@@ -1376,7 +1376,7 @@ fn test_slru_probationary_larger_than_protected() {
 
     // Fill cache
     for i in 1..=5 {
-        cache.put(i, i * 10);
+        cache.put(i, i * 10, 1);
     }
 
     // Promote only key 5 to protected
@@ -1386,7 +1386,7 @@ fn test_slru_probationary_larger_than_protected() {
 
     // Insert 4 new items - should evict all original probationary items
     for i in 6..=9 {
-        cache.put(i, i * 10);
+        cache.put(i, i * 10, 1);
     }
 
     // Key 5 should survive (protected)
@@ -1407,14 +1407,14 @@ fn test_lfuda_all_equal_priority() {
     let mut cache = make_lfuda(4);
 
     // Insert 4 items - all have same initial priority
-    cache.put(1, 10);
-    cache.put(2, 20);
-    cache.put(3, 30);
-    cache.put(4, 40);
+    cache.put(1, 10, 1);
+    cache.put(2, 20, 1);
+    cache.put(3, 30, 1);
+    cache.put(4, 40, 1);
 
     // No accesses - all have equal priority
     // Should use FIFO as tiebreaker
-    cache.put(5, 50);
+    cache.put(5, 50, 1);
     assert!(
         cache.get(&1).is_none(),
         "Key 1 should be evicted (FIFO among equal priority)"
@@ -1425,18 +1425,18 @@ fn test_lfuda_all_equal_priority() {
 fn test_lfuda_aging_reduces_priority_gap() {
     let mut cache = make_lfuda(3);
 
-    cache.put(1, 10);
+    cache.put(1, 10, 1);
     // Build very high frequency for key 1
     for _ in 0..50 {
         cache.get(&1);
     }
 
-    cache.put(2, 20);
-    cache.put(3, 30);
+    cache.put(2, 20, 1);
+    cache.put(3, 30, 1);
 
     // Force multiple evictions to increase global age
     for i in 100..120 {
-        cache.put(i, i);
+        cache.put(i, i, 1);
     }
 
     // At this point, high global age means new items have boosted priority
@@ -1448,13 +1448,13 @@ fn test_lfuda_aging_reduces_priority_gap() {
 fn test_lfuda_capacity_one() {
     let mut cache = make_lfuda(1);
 
-    cache.put(1, 10);
+    cache.put(1, 10, 1);
     for _ in 0..100 {
         cache.get(&1);
     }
 
     // Must evict even with high priority
-    cache.put(2, 20);
+    cache.put(2, 20, 1);
     assert!(
         cache.get(&1).is_none(),
         "Key 1 must be evicted (capacity=1)"
@@ -1473,8 +1473,8 @@ fn test_lfuda_cap_len_is_empty() {
     assert_eq!(cache.len(), 0);
 
     // Add some items
-    cache.put(1, 10);
-    cache.put(2, 20);
+    cache.put(1, 10, 1);
+    cache.put(2, 20, 1);
 
     // Test len() and is_empty() with items
     assert!(!cache.is_empty());
@@ -1497,14 +1497,14 @@ fn test_lfuda_current_size_max_size() {
     assert_eq!(cache.current_size(), 0);
 
     // Add items with explicit sizes
-    cache.put_with_size(1, 10, 100);
+    cache.put(1, 10, 100);
     assert_eq!(cache.current_size(), 100);
 
-    cache.put_with_size(2, 20, 200);
+    cache.put(2, 20, 200);
     assert_eq!(cache.current_size(), 300);
 
     // Update existing key with different size
-    cache.put_with_size(1, 15, 150);
+    cache.put(1, 15, 150);
     assert_eq!(cache.current_size(), 350);
 
     // Remove item and verify size decreases
@@ -1524,15 +1524,15 @@ fn test_lfuda_global_age_tracking() {
     assert_eq!(cache.global_age(), 0);
 
     // Fill cache
-    cache.put(1, 10);
-    cache.put(2, 20);
-    cache.put(3, 30);
+    cache.put(1, 10, 1);
+    cache.put(2, 20, 1);
+    cache.put(3, 30, 1);
 
     // Global age should still be 0 (no evictions yet)
     assert_eq!(cache.global_age(), 0);
 
     // Trigger eviction - global age should increase
-    cache.put(4, 40);
+    cache.put(4, 40, 1);
     let age_after_first_eviction = cache.global_age();
     // LFUDA sets global age to evicted item's priority (freq + age_at_insertion)
     // Evicted item had priority = 1 + 0 = 1
@@ -1542,7 +1542,7 @@ fn test_lfuda_global_age_tracking() {
     );
 
     // More evictions should continue increasing age
-    cache.put(5, 50);
+    cache.put(5, 50, 1);
     let age_after_second = cache.global_age();
     assert!(
         age_after_second >= age_after_first_eviction,
@@ -1575,8 +1575,8 @@ fn test_lfuda_record_miss() {
 fn test_lfuda_get_mut_modifies_value() {
     let mut cache: LfudaCache<&str, i32> = make_lfuda(10);
 
-    cache.put("a", 10);
-    cache.put("b", 20);
+    cache.put("a", 10, 1);
+    cache.put("b", 20, 1);
 
     // Use get_mut to modify value
     if let Some(val) = cache.get_mut(&"a") {
@@ -1594,9 +1594,9 @@ fn test_lfuda_get_mut_modifies_value() {
 fn test_lfuda_get_mut_affects_priority() {
     let mut cache: LfudaCache<i32, i32> = make_lfuda(3);
 
-    cache.put(1, 10);
-    cache.put(2, 20);
-    cache.put(3, 30);
+    cache.put(1, 10, 1);
+    cache.put(2, 20, 1);
+    cache.put(3, 30, 1);
 
     // Access key 1 via get_mut to increase its priority
     for _ in 0..5 {
@@ -1609,7 +1609,7 @@ fn test_lfuda_get_mut_affects_priority() {
     assert_eq!(cache.get(&1), Some(&15));
 
     // Trigger eviction - key 2 or 3 should be evicted, not key 1
-    cache.put(4, 40);
+    cache.put(4, 40, 1);
 
     assert!(
         cache.get(&1).is_some(),
@@ -1622,16 +1622,16 @@ fn test_lfuda_size_eviction_multiple_items() {
     let mut cache: LfudaCache<i32, String> = make_lfuda_with_max_size(100);
 
     // Add several small items
-    cache.put_with_size(1, "a".to_string(), 25);
-    cache.put_with_size(2, "b".to_string(), 25);
-    cache.put_with_size(3, "c".to_string(), 25);
-    cache.put_with_size(4, "d".to_string(), 25);
+    cache.put(1, "a".to_string(), 25);
+    cache.put(2, "b".to_string(), 25);
+    cache.put(3, "c".to_string(), 25);
+    cache.put(4, "d".to_string(), 25);
 
     assert_eq!(cache.current_size(), 100);
     assert_eq!(cache.len(), 4);
 
     // Adding a large item should evict multiple small items
-    cache.put_with_size(5, "large".to_string(), 60);
+    cache.put(5, "large".to_string(), 60);
 
     // Should have evicted at least 2 items to make room
     assert!(cache.current_size() <= 100);
@@ -1645,7 +1645,7 @@ fn test_lfuda_pop_updates_global_age() {
 
     // Fill cache
     for i in 1..=5 {
-        cache.put(i, i * 10);
+        cache.put(i, i * 10, 1);
     }
 
     // Access some items to create priority differences
@@ -1671,12 +1671,12 @@ fn test_lfuda_put_returns_evicted() {
     let mut cache: LfudaCache<i32, i32> = make_lfuda(3);
 
     // Fill cache
-    cache.put(1, 10);
-    cache.put(2, 20);
-    cache.put(3, 30);
+    cache.put(1, 10, 1);
+    cache.put(2, 20, 1);
+    cache.put(3, 30, 1);
 
     // Next put should return evicted item
-    let evicted = cache.put(4, 40);
+    let evicted = cache.put(4, 40, 1);
     assert!(evicted.is_some(), "Should return evicted item");
 
     let (key, value) = evicted.unwrap();
@@ -1689,11 +1689,11 @@ fn test_lfuda_put_returns_evicted() {
 fn test_lfuda_update_existing_key() {
     let mut cache: LfudaCache<i32, i32> = make_lfuda(10);
 
-    cache.put(1, 10);
-    cache.put(2, 20);
+    cache.put(1, 10, 1);
+    cache.put(2, 20, 1);
 
     // Update existing key
-    let old = cache.put(1, 100);
+    let old = cache.put(1, 100, 1);
 
     // Should return old value wrapped in tuple
     assert_eq!(old, Some((1, 10)));
@@ -1842,8 +1842,8 @@ fn test_operations_on_empty_cache() {
 fn test_remove_nonexistent_key() {
     let mut cache = make_lru(3);
 
-    cache.put(1, 10);
-    cache.put(2, 20);
+    cache.put(1, 10, 1);
+    cache.put(2, 20, 1);
 
     // Remove key that doesn't exist
     assert_eq!(cache.remove(&99), None);
@@ -1858,16 +1858,16 @@ fn test_remove_nonexistent_key() {
 fn test_insert_after_clear() {
     let mut cache = make_lru(3);
 
-    cache.put(1, 10);
-    cache.put(2, 20);
-    cache.put(3, 30);
+    cache.put(1, 10, 1);
+    cache.put(2, 20, 1);
+    cache.put(3, 30, 1);
 
     cache.clear();
     assert_eq!(cache.len(), 0);
 
     // Insert after clear - should work normally
-    cache.put(4, 40);
-    cache.put(5, 50);
+    cache.put(4, 40, 1);
+    cache.put(5, 50, 1);
 
     assert_eq!(cache.len(), 2);
     assert_eq!(cache.get(&4), Some(&40));
@@ -1880,7 +1880,7 @@ fn test_rapid_update_same_key() {
 
     // Insert same key many times
     for i in 0..100 {
-        cache.put(1, i);
+        cache.put(1, i, 1);
     }
 
     assert_eq!(cache.len(), 1, "Should only have 1 entry");
@@ -1893,7 +1893,7 @@ fn test_alternating_keys() {
 
     // Alternating pattern that causes continuous eviction
     for i in 0..10 {
-        cache.put(i % 3, i); // Keys 0, 1, 2, 0, 1, 2, ...
+        cache.put(i % 3, i, 1); // Keys 0, 1, 2, 0, 1, 2, ...
     }
 
     // Should have the last 2 keys inserted
@@ -1904,18 +1904,18 @@ fn test_alternating_keys() {
 fn test_lfu_get_does_not_exist() {
     let mut cache = make_lfu(3);
 
-    cache.put(1, 10);
+    cache.put(1, 10, 1);
 
     // Get non-existent key should not affect frequencies
     assert_eq!(cache.get(&99), None);
     assert_eq!(cache.get(&99), None);
 
-    cache.put(2, 20);
-    cache.put(3, 30);
+    cache.put(2, 20, 1);
+    cache.put(3, 30, 1);
 
     // Key 1 should still be at freq=1 (only the put)
     // Insert new - all equal freq, FIFO
-    cache.put(4, 40);
+    cache.put(4, 40, 1);
     assert!(cache.get(&1).is_none(), "Key 1 should be evicted (FIFO)");
 }
 
@@ -1952,8 +1952,8 @@ fn test_metrics_size_tracking_no_underflow() {
     let mut cache = make_lru_with_limits(2, 1000);
 
     // Insert items with explicit small sizes
-    cache.put_with_size(1, "a", 1); // Track as 1 byte
-    cache.put_with_size(2, "b", 1); // Track as 1 byte
+    cache.put(1, "a", 1); // Track as 1 byte
+    cache.put(2, "b", 1); // Track as 1 byte
 
     // Current size should be 2
     assert_eq!(cache.current_size(), 2, "Should track 2 bytes");
@@ -1961,7 +1961,7 @@ fn test_metrics_size_tracking_no_underflow() {
     // Insert third item - triggers eviction of key 1
     // On eviction, estimate_object_size() may return a value different from 1
     // This should NOT panic due to subtraction underflow
-    cache.put_with_size(3, "c", 1);
+    cache.put(3, "c", 1);
 
     // Cache should still function correctly
     assert_eq!(cache.len(), 2);
@@ -1981,15 +1981,15 @@ fn test_metrics_size_mismatch_on_eviction() {
 
     // Insert items with size=1 but the actual values are larger
     // (estimate_object_size will calculate a bigger size)
-    cache.put_with_size(1, "hello world this is a long string".to_string(), 1);
-    cache.put_with_size(2, "another fairly long string value".to_string(), 1);
-    cache.put_with_size(3, "yet another long string for testing".to_string(), 1);
+    cache.put(1, "hello world this is a long string".to_string(), 1);
+    cache.put(2, "another fairly long string value".to_string(), 1);
+    cache.put(3, "yet another long string for testing".to_string(), 1);
 
     // Force evictions by inserting more items
     // Each eviction will try to subtract estimate_object_size() from metrics
     // which is larger than the 1 byte we recorded on insertion
     for i in 4..10 {
-        cache.put_with_size(i, format!("value number {}", i), 1);
+        cache.put(i, format!("value number {}", i), 1);
     }
 
     // Should not have panicked, and size should be reasonable
@@ -2027,16 +2027,16 @@ fn test_lru_max_size_triggers_eviction() {
     let mut cache: LruCache<String, i32> = make_lru_with_limits(1000, 100);
 
     // Insert items that fit within max_size
-    cache.put_with_size("a".to_string(), 1, 30); // total: 30
-    cache.put_with_size("b".to_string(), 2, 30); // total: 60
-    cache.put_with_size("c".to_string(), 3, 30); // total: 90
+    cache.put("a".to_string(), 1, 30); // total: 30
+    cache.put("b".to_string(), 2, 30); // total: 60
+    cache.put("c".to_string(), 3, 30); // total: 90
 
     assert_eq!(cache.len(), 3, "Should have 3 items");
     assert_eq!(cache.current_size(), 90, "Size should be 90");
 
     // Insert item that would exceed max_size (90 + 20 = 110 > 100)
     // LRU should evict "a" to stay within max_size
-    cache.put_with_size("d".to_string(), 4, 20);
+    cache.put("d".to_string(), 4, 20);
 
     // Verify LRU respects max_size
     assert!(
@@ -2071,16 +2071,16 @@ fn test_slru_max_size_triggers_eviction() {
     let mut cache: SlruCache<String, i32> = make_slru_with_limits(1000, 200, 100);
 
     // Insert items that fit within max_size
-    cache.put_with_size("a".to_string(), 1, 30); // total: 30
-    cache.put_with_size("b".to_string(), 2, 30); // total: 60
-    cache.put_with_size("c".to_string(), 3, 30); // total: 90
+    cache.put("a".to_string(), 1, 30); // total: 30
+    cache.put("b".to_string(), 2, 30); // total: 60
+    cache.put("c".to_string(), 3, 30); // total: 90
 
     assert_eq!(cache.len(), 3, "Should have 3 items");
     assert_eq!(cache.current_size(), 90, "Size should be 90");
 
     // Insert item that would exceed max_size (90 + 20 = 110 > 100)
     // SLRU should evict to stay within max_size
-    cache.put_with_size("d".to_string(), 4, 20);
+    cache.put("d".to_string(), 4, 20);
 
     assert!(
         cache.current_size() <= 100,
@@ -2094,14 +2094,14 @@ fn test_lfu_max_size_triggers_eviction() {
     // Create LFU with large entry capacity but small max_size
     let mut cache: LfuCache<String, i32> = make_lfu_with_max_size(100);
 
-    cache.put_with_size("a".to_string(), 1, 30);
-    cache.put_with_size("b".to_string(), 2, 30);
-    cache.put_with_size("c".to_string(), 3, 30);
+    cache.put("a".to_string(), 1, 30);
+    cache.put("b".to_string(), 2, 30);
+    cache.put("c".to_string(), 3, 30);
 
     assert_eq!(cache.current_size(), 90);
 
     // Insert item that would exceed max_size
-    cache.put_with_size("d".to_string(), 4, 20);
+    cache.put("d".to_string(), 4, 20);
 
     assert!(
         cache.current_size() <= 100,
@@ -2115,14 +2115,14 @@ fn test_lfuda_max_size_triggers_eviction() {
     // Create LFUDA with large entry capacity but small max_size
     let mut cache: LfudaCache<String, i32> = make_lfuda_with_max_size(100);
 
-    cache.put_with_size("a".to_string(), 1, 30);
-    cache.put_with_size("b".to_string(), 2, 30);
-    cache.put_with_size("c".to_string(), 3, 30);
+    cache.put("a".to_string(), 1, 30);
+    cache.put("b".to_string(), 2, 30);
+    cache.put("c".to_string(), 3, 30);
 
     assert_eq!(cache.current_size(), 90);
 
     // Insert item that would exceed max_size
-    cache.put_with_size("d".to_string(), 4, 20);
+    cache.put("d".to_string(), 4, 20);
 
     assert!(
         cache.current_size() <= 100,
@@ -2138,14 +2138,14 @@ fn test_slru_max_size_should_evict_multiple_items() {
 
     // Fill with small items
     for i in 0..10 {
-        cache.put_with_size(format!("key{}", i), i, 10); // 10 items × 10 bytes = 100
+        cache.put(format!("key{}", i), i, 10); // 10 items × 10 bytes = 100
     }
 
     assert_eq!(cache.len(), 10);
     assert_eq!(cache.current_size(), 100, "Cache should be at max_size");
 
     // Insert a large item (50 bytes) - should evict multiple small items
-    cache.put_with_size("big".to_string(), 999, 50);
+    cache.put("big".to_string(), 999, 50);
 
     // Expected: evict enough items to fit the new 50-byte item
     // Final size should be <= 100
@@ -2166,9 +2166,9 @@ fn test_slru_max_size_should_evict_multiple_items() {
 #[test]
 fn test_lru_get_mut_updates_value() {
     let mut cache: LruCache<&str, i32> = make_lru(3);
-    cache.put("a", 1);
-    cache.put("b", 2);
-    cache.put("c", 3);
+    cache.put("a", 1, 1);
+    cache.put("b", 2, 1);
+    cache.put("c", 3, 1);
 
     // Mutate value through get_mut
     if let Some(v) = cache.get_mut(&"b") {
@@ -2178,7 +2178,7 @@ fn test_lru_get_mut_updates_value() {
 
     // get_mut should update recency like get does
     // "a" is now LRU (we touched "b" via get_mut, then "b" again via get)
-    cache.put("d", 4); // evicts "a"
+    cache.put("d", 4, 1); // evicts "a"
     assert!(cache.get(&"a").is_none());
     assert_eq!(cache.get(&"b"), Some(&20));
 }
@@ -2186,9 +2186,9 @@ fn test_lru_get_mut_updates_value() {
 #[test]
 fn test_lfu_get_mut_updates_value() {
     let mut cache: LfuCache<&str, i32> = make_lfu(3);
-    cache.put("a", 1);
-    cache.put("b", 2);
-    cache.put("c", 3);
+    cache.put("a", 1, 1);
+    cache.put("b", 2, 1);
+    cache.put("c", 3, 1);
 
     if let Some(v) = cache.get_mut(&"b") {
         *v = 20;
@@ -2199,9 +2199,9 @@ fn test_lfu_get_mut_updates_value() {
 #[test]
 fn test_lfuda_get_mut_updates_value() {
     let mut cache: LfudaCache<&str, i32> = make_lfuda(3);
-    cache.put("a", 1);
-    cache.put("b", 2);
-    cache.put("c", 3);
+    cache.put("a", 1, 1);
+    cache.put("b", 2, 1);
+    cache.put("c", 3, 1);
 
     if let Some(v) = cache.get_mut(&"b") {
         *v = 20;
@@ -2212,9 +2212,9 @@ fn test_lfuda_get_mut_updates_value() {
 #[test]
 fn test_slru_get_mut_updates_value() {
     let mut cache: SlruCache<&str, i32> = make_slru(5, 2);
-    cache.put("a", 1);
-    cache.put("b", 2);
-    cache.put("c", 3);
+    cache.put("a", 1, 1);
+    cache.put("b", 2, 1);
+    cache.put("c", 3, 1);
 
     if let Some(v) = cache.get_mut(&"b") {
         *v = 20;
@@ -2247,7 +2247,7 @@ fn test_all_caches_contains() {
     // LRU
     let mut lru: LruCache<&str, i32> = make_lru(3);
     assert!(!lru.contains(&"a"));
-    lru.put("a", 1);
+    lru.put("a", 1, 1);
     assert!(lru.contains(&"a"));
     lru.remove(&"a");
     assert!(!lru.contains(&"a"));
@@ -2255,7 +2255,7 @@ fn test_all_caches_contains() {
     // LFU
     let mut lfu: LfuCache<&str, i32> = make_lfu(3);
     assert!(!lfu.contains(&"a"));
-    lfu.put("a", 1);
+    lfu.put("a", 1, 1);
     assert!(lfu.contains(&"a"));
     lfu.remove(&"a");
     assert!(!lfu.contains(&"a"));
@@ -2263,7 +2263,7 @@ fn test_all_caches_contains() {
     // LFUDA
     let mut lfuda: LfudaCache<&str, i32> = make_lfuda(3);
     assert!(!lfuda.contains(&"a"));
-    lfuda.put("a", 1);
+    lfuda.put("a", 1, 1);
     assert!(lfuda.contains(&"a"));
     lfuda.remove(&"a");
     assert!(!lfuda.contains(&"a"));
@@ -2271,7 +2271,7 @@ fn test_all_caches_contains() {
     // SLRU
     let mut slru: SlruCache<&str, i32> = make_slru(5, 2);
     assert!(!slru.contains(&"a"));
-    slru.put("a", 1);
+    slru.put("a", 1, 1);
     assert!(slru.contains(&"a"));
     slru.remove(&"a");
     assert!(!slru.contains(&"a"));
@@ -2288,11 +2288,11 @@ fn test_all_caches_contains() {
 #[test]
 fn test_contains_after_eviction() {
     let mut cache: LruCache<&str, i32> = make_lru(2);
-    cache.put("a", 1);
-    cache.put("b", 2);
+    cache.put("a", 1, 1);
+    cache.put("b", 2, 1);
     assert!(cache.contains(&"a"));
 
-    cache.put("c", 3); // evicts "a"
+    cache.put("c", 3, 1); // evicts "a"
     assert!(!cache.contains(&"a"));
     assert!(cache.contains(&"b"));
     assert!(cache.contains(&"c"));
@@ -2307,15 +2307,15 @@ fn test_contains_after_eviction() {
 #[test]
 fn test_lru_peek_does_not_affect_eviction() {
     let mut cache: LruCache<&str, i32> = make_lru(3);
-    cache.put("a", 1);
-    cache.put("b", 2);
-    cache.put("c", 3);
+    cache.put("a", 1, 1);
+    cache.put("b", 2, 1);
+    cache.put("c", 3, 1);
 
     // Peek at "a" - should NOT update recency
     assert_eq!(cache.peek(&"a"), Some(&1));
 
     // "a" is still LRU despite peek, so it should be evicted
-    cache.put("d", 4);
+    cache.put("d", 4, 1);
     assert!(
         cache.get(&"a").is_none(),
         "peek should NOT prevent eviction of LRU item"
@@ -2325,9 +2325,9 @@ fn test_lru_peek_does_not_affect_eviction() {
 #[test]
 fn test_lfu_peek_does_not_affect_eviction() {
     let mut cache: LfuCache<&str, i32> = make_lfu(3);
-    cache.put("a", 1);
-    cache.put("b", 2);
-    cache.put("c", 3);
+    cache.put("a", 1, 1);
+    cache.put("b", 2, 1);
+    cache.put("c", 3, 1);
 
     // Access b and c to increase frequency, but only peek at a
     cache.get(&"b");
@@ -2335,7 +2335,7 @@ fn test_lfu_peek_does_not_affect_eviction() {
     assert_eq!(cache.peek(&"a"), Some(&1));
 
     // "a" should still have lowest frequency and be evicted
-    cache.put("d", 4);
+    cache.put("d", 4, 1);
     assert!(
         cache.get(&"a").is_none(),
         "peek should NOT increase frequency"
@@ -2345,15 +2345,15 @@ fn test_lfu_peek_does_not_affect_eviction() {
 #[test]
 fn test_lfuda_peek_does_not_affect_eviction() {
     let mut cache: LfudaCache<&str, i32> = make_lfuda(3);
-    cache.put("a", 1);
-    cache.put("b", 2);
-    cache.put("c", 3);
+    cache.put("a", 1, 1);
+    cache.put("b", 2, 1);
+    cache.put("c", 3, 1);
 
     cache.get(&"b");
     cache.get(&"c");
     assert_eq!(cache.peek(&"a"), Some(&1));
 
-    cache.put("d", 4);
+    cache.put("d", 4, 1);
     assert!(
         cache.get(&"a").is_none(),
         "peek should NOT increase priority in LFUDA"
@@ -2363,17 +2363,17 @@ fn test_lfuda_peek_does_not_affect_eviction() {
 #[test]
 fn test_slru_peek_does_not_affect_eviction() {
     let mut cache: SlruCache<&str, i32> = make_slru(5, 2);
-    cache.put("a", 1);
-    cache.put("b", 2);
-    cache.put("c", 3);
-    cache.put("d", 4);
-    cache.put("e", 5);
+    cache.put("a", 1, 1);
+    cache.put("b", 2, 1);
+    cache.put("c", 3, 1);
+    cache.put("d", 4, 1);
+    cache.put("e", 5, 1);
 
     // Peek at "a" - should NOT promote to protected
     assert_eq!(cache.peek(&"a"), Some(&1));
 
     // "a" should still be evictable from probationary
-    cache.put("f", 6);
+    cache.put("f", 6, 1);
     assert!(
         cache.get(&"a").is_none(),
         "peek should NOT promote items in SLRU"
@@ -2404,7 +2404,7 @@ fn test_peek_nonexistent_key() {
     let mut cache: LruCache<&str, i32> = make_lru(3);
     assert_eq!(cache.peek(&"missing"), None);
 
-    cache.put("a", 1);
+    cache.put("a", 1, 1);
     assert_eq!(cache.peek(&"missing"), None);
     assert_eq!(cache.peek(&"a"), Some(&1));
 }
@@ -2420,9 +2420,9 @@ fn test_lru_pop_returns_lru_item() {
     let mut cache: LruCache<&str, i32> = make_lru(3);
     assert_eq!(cache.pop(), None); // empty cache
 
-    cache.put("a", 1);
-    cache.put("b", 2);
-    cache.put("c", 3);
+    cache.put("a", 1, 1);
+    cache.put("b", 2, 1);
+    cache.put("c", 3, 1);
 
     // "a" is LRU
     let popped = cache.pop();
@@ -2436,9 +2436,9 @@ fn test_lfu_pop_returns_least_frequent() {
     let mut cache: LfuCache<&str, i32> = make_lfu(3);
     assert_eq!(cache.pop(), None);
 
-    cache.put("a", 1);
-    cache.put("b", 2);
-    cache.put("c", 3);
+    cache.put("a", 1, 1);
+    cache.put("b", 2, 1);
+    cache.put("c", 3, 1);
 
     // Access b and c to increase their frequency
     cache.get(&"b");
@@ -2455,9 +2455,9 @@ fn test_lfuda_pop_returns_lowest_priority() {
     let mut cache: LfudaCache<&str, i32> = make_lfuda(3);
     assert_eq!(cache.pop(), None);
 
-    cache.put("a", 1);
-    cache.put("b", 2);
-    cache.put("c", 3);
+    cache.put("a", 1, 1);
+    cache.put("b", 2, 1);
+    cache.put("c", 3, 1);
 
     cache.get(&"b");
     cache.get(&"c");
@@ -2472,9 +2472,9 @@ fn test_slru_pop_returns_probationary_item() {
     let mut cache: SlruCache<&str, i32> = make_slru(5, 2);
     assert_eq!(cache.pop(), None);
 
-    cache.put("a", 1);
-    cache.put("b", 2);
-    cache.put("c", 3);
+    cache.put("a", 1, 1);
+    cache.put("b", 2, 1);
+    cache.put("c", 3, 1);
 
     let popped = cache.pop();
     assert!(popped.is_some());
@@ -2528,7 +2528,7 @@ fn test_all_caches_cap() {
 #[test]
 fn test_all_caches_record_miss() {
     let mut lru: LruCache<&str, i32> = make_lru(3);
-    lru.put("a", 1);
+    lru.put("a", 1, 1);
     lru.record_miss(100);
     lru.record_miss(200);
     assert_eq!(lru.len(), 1); // cache contents unchanged
@@ -2539,17 +2539,17 @@ fn test_all_caches_record_miss() {
     );
 
     let mut lfu: LfuCache<&str, i32> = make_lfu(3);
-    lfu.put("a", 1);
+    lfu.put("a", 1, 1);
     lfu.record_miss(100);
     assert_eq!(lfu.len(), 1);
 
     let mut lfuda: LfudaCache<&str, i32> = make_lfuda(3);
-    lfuda.put("a", 1);
+    lfuda.put("a", 1, 1);
     lfuda.record_miss(100);
     assert_eq!(lfuda.len(), 1);
 
     let mut slru: SlruCache<&str, i32> = make_slru(5, 2);
-    slru.put("a", 1);
+    slru.put("a", 1, 1);
     slru.record_miss(100);
     assert_eq!(slru.len(), 1);
 
@@ -2585,10 +2585,10 @@ fn test_all_caches_algorithm_name() {
 fn test_all_caches_metrics_after_operations() {
     // LRU metrics
     let mut lru: LruCache<&str, i32> = make_lru(2);
-    lru.put("a", 1);
-    lru.put("b", 2);
+    lru.put("a", 1, 1);
+    lru.put("b", 2, 1);
     lru.get(&"a"); // hit
-    lru.put("c", 3); // eviction
+    lru.put("c", 3, 1); // eviction
 
     let metrics = lru.metrics();
     assert!(
@@ -2610,10 +2610,10 @@ fn test_all_caches_metrics_after_operations() {
 
     // LFU metrics
     let mut lfu: LfuCache<&str, i32> = make_lfu(2);
-    lfu.put("a", 1);
-    lfu.put("b", 2);
+    lfu.put("a", 1, 1);
+    lfu.put("b", 2, 1);
     lfu.get(&"a");
-    lfu.put("c", 3);
+    lfu.put("c", 3, 1);
 
     let metrics = lfu.metrics();
     assert!(
@@ -2623,10 +2623,10 @@ fn test_all_caches_metrics_after_operations() {
 
     // LFUDA metrics
     let mut lfuda: LfudaCache<&str, i32> = make_lfuda(2);
-    lfuda.put("a", 1);
-    lfuda.put("b", 2);
+    lfuda.put("a", 1, 1);
+    lfuda.put("b", 2, 1);
     lfuda.get(&"a");
-    lfuda.put("c", 3);
+    lfuda.put("c", 3, 1);
 
     let metrics = lfuda.metrics();
     assert!(
@@ -2636,8 +2636,8 @@ fn test_all_caches_metrics_after_operations() {
 
     // SLRU metrics
     let mut slru: SlruCache<&str, i32> = make_slru(3, 1);
-    slru.put("a", 1);
-    slru.put("b", 2);
+    slru.put("a", 1, 1);
+    slru.put("b", 2, 1);
     slru.get(&"a");
 
     let metrics = slru.metrics();
@@ -2672,7 +2672,7 @@ fn test_all_caches_metrics_after_operations() {
 #[should_panic(expected = "not yet implemented")]
 fn test_lru_iter_is_unimplemented() {
     let mut cache: LruCache<&str, i32> = make_lru(3);
-    cache.put("a", 1);
+    cache.put("a", 1, 1);
     let _iter = cache.iter();
 }
 
@@ -2680,7 +2680,7 @@ fn test_lru_iter_is_unimplemented() {
 #[should_panic(expected = "not yet implemented")]
 fn test_lru_iter_mut_is_unimplemented() {
     let mut cache: LruCache<&str, i32> = make_lru(3);
-    cache.put("a", 1);
+    cache.put("a", 1, 1);
     let _iter = cache.iter_mut();
 }
 
@@ -2693,11 +2693,11 @@ fn test_lfuda_global_age_increases_on_eviction() {
     let mut cache: LfudaCache<&str, i32> = make_lfuda(2);
     assert_eq!(cache.global_age(), 0);
 
-    cache.put("a", 1);
-    cache.put("b", 2);
+    cache.put("a", 1, 1);
+    cache.put("b", 2, 1);
 
     // Trigger eviction to increase global age
-    cache.put("c", 3);
+    cache.put("c", 3, 1);
     // Global age should have increased (set to evicted item's priority)
     // The exact value depends on implementation - we just verify the method works
     let _age_after = cache.global_age();

@@ -57,7 +57,7 @@
 //!
 //! ```rust,ignore
 //! // Standard caches
-//! lru_cache.put(key, value);
+//! lru_cache.put(key, value, 1);
 //!
 //! // GDSF requires size
 //! gdsf_cache.put(key, value, 2048);  // size in bytes
@@ -169,7 +169,7 @@
 //! }
 //!
 //! // Insert large item - may evict multiple small items based on priority
-//! cache.put("large".to_string(), vec![0u8; 5 * 1024 * 1024], 5 * 1024 * 1024);
+//! cache.put("large".to_string(), vec![0u8; 5 * 1024 * 1024], Some(5 * 1024 * 1024));
 //!
 //! // GDSF may choose to keep small popular items over one large item
 //! ```
@@ -327,7 +327,9 @@ where
 
     /// Inserts a key-value pair with its size into the cache.
     ///
-    /// Unlike other caches, GDSF requires the size of the object for priority calculation.
+    /// Inserts a key-value pair into the cache with optional size tracking.
+    ///
+    /// GDSF uses size for priority calculation. Use `SIZE_UNIT` (1) for count-based caching.
     /// Returns the old value if the key was already present.
     pub fn put(&self, key: K, value: V, size: u64) -> Option<V>
     where

@@ -190,7 +190,7 @@ fn test_concurrent_lru_basic_eviction() {
             for i in 0..OPS_PER_THREAD {
                 let key = (t * OPS_PER_THREAD + i) as i32;
                 // Mixed operations simulating real-world usage
-                c.put(key, key * 10);
+                c.put(key, key * 10, 1);
                 let _ = c.get(&key);
                 if i % 5 == 0 {
                     let _ = c.contains(&key);
@@ -224,7 +224,7 @@ fn test_concurrent_lru_access_prevents_eviction() {
 
     // Insert hot keys first
     for &key in &hot_keys {
-        cache.put(key, key * 100);
+        cache.put(key, key * 100, 1);
     }
 
     let mut handles = vec![];
@@ -242,7 +242,7 @@ fn test_concurrent_lru_access_prevents_eviction() {
 
                 // Also insert new cold keys that may get evicted
                 let cold_key = 1000 + (t * OPS_PER_THREAD + i) as i32;
-                c.put(cold_key, cold_key);
+                c.put(cold_key, cold_key, 1);
 
                 // Realistic operations mix
                 if i % 3 == 0 {
@@ -279,7 +279,7 @@ fn test_concurrent_lru_multi_segment_eviction() {
             for i in 0..OPS_PER_THREAD {
                 let key = (t * OPS_PER_THREAD + i) as i32;
                 // Real-world pattern: put, then read multiple times
-                c.put(key, key * 10);
+                c.put(key, key * 10, 1);
                 for _ in 0..3 {
                     let _ = c.get(&key);
                 }
@@ -315,7 +315,7 @@ fn test_concurrent_lru_concurrent_writes_maintain_capacity() {
         handles.push(thread::spawn(move || {
             for i in 0..100 {
                 let key = t * 1000 + i;
-                cache.put(key, key);
+                cache.put(key, key, 1);
             }
         }));
     }
@@ -345,7 +345,7 @@ fn test_concurrent_lfu_frequency_based_eviction() {
 
     // Insert hot keys first
     for &key in &hot_keys {
-        cache.put(key, key * 100);
+        cache.put(key, key * 100, 1);
     }
 
     let mut handles = vec![];
@@ -365,7 +365,7 @@ fn test_concurrent_lfu_frequency_based_eviction() {
 
                 // Insert cold keys that should get evicted due to low frequency
                 let cold_key = 1000 + (t * OPS_PER_THREAD + i) as i32;
-                c.put(cold_key, cold_key);
+                c.put(cold_key, cold_key, 1);
 
                 // Realistic mix: peek doesn't update frequency
                 if i % 5 == 0 {
@@ -393,9 +393,9 @@ fn test_concurrent_lfu_frequency_accumulation() {
         Arc::new(ConcurrentLfuCache::init(lfu_config(6, 2), None));
 
     // Insert items
-    cache.put("hot".to_string(), 1);
-    cache.put("warm".to_string(), 2);
-    cache.put("cold".to_string(), 3);
+    cache.put("hot".to_string(), 1, 1);
+    cache.put("warm".to_string(), 2, 1);
+    cache.put("cold".to_string(), 3, 1);
 
     let cache_clone = Arc::clone(&cache);
 
@@ -416,10 +416,10 @@ fn test_concurrent_lfu_frequency_accumulation() {
 
     // "hot" should have very high frequency now
     // Fill cache to trigger eviction
-    cache_clone.put("new1".to_string(), 4);
-    cache_clone.put("new2".to_string(), 5);
-    cache_clone.put("new3".to_string(), 6);
-    cache_clone.put("new4".to_string(), 7);
+    cache_clone.put("new1".to_string(), 4, 1);
+    cache_clone.put("new2".to_string(), 5, 1);
+    cache_clone.put("new3".to_string(), 6, 1);
+    cache_clone.put("new4".to_string(), 7, 1);
 
     // "hot" should survive due to high frequency
     assert!(
@@ -442,7 +442,7 @@ fn test_concurrent_lfu_multi_segment_correctness() {
             for i in 0..OPS_PER_THREAD {
                 let key = (t * OPS_PER_THREAD + i) as i32;
                 // Put and then access to build frequency
-                c.put(key, key * 10);
+                c.put(key, key * 10, 1);
 
                 // Access some keys more to increase frequency
                 if key % 10 < 3 {
@@ -488,7 +488,7 @@ fn test_concurrent_lfuda_priority_eviction() {
 
     // Insert hot keys first
     for &key in &hot_keys {
-        cache.put(key, key * 100);
+        cache.put(key, key * 100, 1);
     }
 
     let mut handles = vec![];
@@ -508,7 +508,7 @@ fn test_concurrent_lfuda_priority_eviction() {
 
                 // Insert cold keys that may get evicted
                 let cold_key = 1000 + (t * OPS_PER_THREAD + i) as i32;
-                c.put(cold_key, cold_key);
+                c.put(cold_key, cold_key, 1);
 
                 // Mix in other operations
                 if i % 5 == 0 {
@@ -545,7 +545,7 @@ fn test_concurrent_lfuda_aging_mechanism() {
         handles.push(thread::spawn(move || {
             for i in 0..OPS_PER_THREAD {
                 let key = (t * OPS_PER_THREAD + i) as i32;
-                c.put(key, key * 10);
+                c.put(key, key * 10, 1);
 
                 // Access some keys to build priority
                 if i % 3 == 0 {
@@ -591,7 +591,7 @@ fn test_concurrent_slru_segment_behavior() {
             for i in 0..OPS_PER_THREAD {
                 let key = (t * OPS_PER_THREAD + i) as i32;
                 // Items start in probationary
-                c.put(key, key * 10);
+                c.put(key, key * 10, 1);
 
                 // Access multiple times to promote to protected
                 if i % 3 == 0 {
@@ -629,7 +629,7 @@ fn test_concurrent_slru_promotion_under_concurrency() {
 
     // Pre-populate with items
     for i in 0..20 {
-        cache.put(i, i * 10);
+        cache.put(i, i * 10, 1);
     }
 
     let mut handles = vec![];
@@ -640,7 +640,7 @@ fn test_concurrent_slru_promotion_under_concurrency() {
         handles.push(thread::spawn(move || {
             for i in 0..OPS_PER_THREAD {
                 let key = (t * OPS_PER_THREAD + i) as i32;
-                c.put(key, key * 10);
+                c.put(key, key * 10, 1);
 
                 // Access repeatedly to promote to protected
                 for _ in 0..4 {
@@ -824,7 +824,7 @@ fn test_capacity_never_exceeded_lru() {
         handles.push(thread::spawn(move || {
             for i in 0..500 {
                 let key = t * 1000 + i;
-                c.put(key, key);
+                c.put(key, key, 1);
                 wc.fetch_add(1, Ordering::Relaxed);
 
                 // Check invariant during operation
@@ -857,7 +857,7 @@ fn test_capacity_never_exceeded_lfu() {
         handles.push(thread::spawn(move || {
             for i in 0..500 {
                 let key = t * 1000 + i;
-                c.put(key, key);
+                c.put(key, key, 1);
                 assert!(c.len() <= capacity, "Capacity exceeded!");
             }
         }));
@@ -885,7 +885,7 @@ fn test_capacity_never_exceeded_slru() {
         handles.push(thread::spawn(move || {
             for i in 0..500 {
                 let key = t * 1000 + i;
-                c.put(key, key);
+                c.put(key, key, 1);
                 assert!(c.len() <= capacity, "Capacity exceeded!");
             }
         }));
@@ -911,7 +911,7 @@ fn test_capacity_never_exceeded_lfuda() {
         handles.push(thread::spawn(move || {
             for i in 0..500 {
                 let key = t * 1000 + i;
-                c.put(key, key);
+                c.put(key, key, 1);
                 assert!(c.len() <= capacity, "Capacity exceeded!");
             }
         }));
@@ -961,7 +961,7 @@ fn test_get_returns_correct_value() {
 
     // Insert known values
     for i in 0..50 {
-        cache.put(i, i * 100);
+        cache.put(i, i * 100, 1);
     }
 
     let errors = Arc::new(AtomicUsize::new(0));
@@ -994,7 +994,7 @@ fn test_update_is_atomic() {
     let cache: Arc<ConcurrentLruCache<i32, i32>> =
         Arc::new(ConcurrentLruCache::init(lru_config(10, 2), None));
 
-    cache.put(1, 0);
+    cache.put(1, 0, 1);
 
     let mut handles = vec![];
 
@@ -1003,7 +1003,7 @@ fn test_update_is_atomic() {
         let c = Arc::clone(&cache);
         handles.push(thread::spawn(move || {
             for _ in 0..100 {
-                c.put(1, t);
+                c.put(1, t, 1);
             }
         }));
     }
@@ -1030,7 +1030,7 @@ fn test_remove_consistency() {
 
     // Insert items
     for i in 0..50 {
-        cache.put(i, i);
+        cache.put(i, i, 1);
     }
 
     // Verify all items were inserted before attempting removes
@@ -1082,7 +1082,7 @@ fn test_mixed_operations_lru() {
         let c = Arc::clone(&cache);
         handles.push(thread::spawn(move || {
             for i in 0..200 {
-                c.put(t * 1000 + i, i);
+                c.put(t * 1000 + i, i, 1);
             }
         }));
     }
@@ -1126,7 +1126,7 @@ fn test_mixed_operations_lfu() {
         let c = Arc::clone(&cache);
         handles.push(thread::spawn(move || {
             for i in 0..200 {
-                c.put(t * 1000 + i, i);
+                c.put(t * 1000 + i, i, 1);
                 let _ = c.get(&(t * 1000 + i));
             }
         }));
@@ -1150,7 +1150,7 @@ fn test_mixed_operations_slru() {
         let c = Arc::clone(&cache);
         handles.push(thread::spawn(move || {
             for i in 0..200 {
-                c.put(t * 1000 + i, i);
+                c.put(t * 1000 + i, i, 1);
                 // Access multiple times to trigger promotion
                 for _ in 0..3 {
                     let _ = c.get(&(t * 1000 + i));
@@ -1210,7 +1210,7 @@ fn test_clear_during_operations() {
         handles.push(thread::spawn(move || {
             let mut i = 0;
             while sf.load(Ordering::Relaxed) == 0 {
-                c.put(t * 10000 + i, i);
+                c.put(t * 10000 + i, i, 1);
                 i += 1;
             }
         }));
@@ -1254,7 +1254,7 @@ fn test_size_tracking_concurrent_lru() {
         handles.push(thread::spawn(move || {
             for i in 0..25 {
                 let key = t * 100 + i;
-                c.put_with_size(key, format!("value_{}", key), 10);
+                c.put(key, format!("value_{}", key), 10);
             }
         }));
     }
@@ -1286,7 +1286,7 @@ fn test_size_tracking_concurrent_lfu() {
         handles.push(thread::spawn(move || {
             for i in 0..25 {
                 let key = t * 100 + i;
-                c.put_with_size(key, format!("value_{}", key), 10);
+                c.put(key, format!("value_{}", key), 10);
             }
         }));
     }
@@ -1343,7 +1343,7 @@ fn test_concurrent_single_key() {
         let gc = Arc::clone(&get_count);
         handles.push(thread::spawn(move || {
             for i in 0..100 {
-                c.put(1, i);
+                c.put(1, i, 1);
                 pc.fetch_add(1, Ordering::Relaxed);
                 if c.get(&1).is_some() {
                     gc.fetch_add(1, Ordering::Relaxed);
@@ -1373,7 +1373,7 @@ fn test_concurrent_capacity_one() {
         let c = Arc::clone(&cache);
         handles.push(thread::spawn(move || {
             for i in 0..100 {
-                c.put(t * 100 + i, i);
+                c.put(t * 100 + i, i, 1);
             }
         }));
     }
@@ -1393,7 +1393,7 @@ fn test_contains_key_consistency() {
 
     // Insert known keys
     for i in 0..30 {
-        cache.put(i, i);
+        cache.put(i, i, 1);
     }
 
     let mut handles = vec![];
@@ -1449,10 +1449,10 @@ fn test_all_concurrent_caches_len_consistency() {
             for i in 0..OPS_PER_THREAD {
                 let key = (t * OPS_PER_THREAD + i) as i32;
                 // Mixed operations on all cache types
-                lru_c.put(key, key);
-                lfu_c.put(key, key);
-                lfuda_c.put(key, key);
-                slru_c.put(key, key);
+                lru_c.put(key, key, 1);
+                lfu_c.put(key, key, 1);
+                lfuda_c.put(key, key, 1);
+                slru_c.put(key, key, 1);
                 gdsf_c.put(key, key, 1);
 
                 if i % 3 == 0 {
@@ -1510,10 +1510,10 @@ fn test_all_concurrent_caches_clear() {
         handles.push(thread::spawn(move || {
             for i in 0..OPS_PER_THREAD {
                 let key = (t * OPS_PER_THREAD + i) as i32;
-                lru_c.put(key, key);
-                lfu_c.put(key, key);
-                lfuda_c.put(key, key);
-                slru_c.put(key, key);
+                lru_c.put(key, key, 1);
+                lfu_c.put(key, key, 1);
+                lfuda_c.put(key, key, 1);
+                slru_c.put(key, key, 1);
                 gdsf_c.put(key, key, 1);
 
                 // Periodically clear all caches (simulates cache reset)
@@ -1574,7 +1574,7 @@ fn test_concurrent_lru_size_based_eviction() {
         handles.push(thread::spawn(move || {
             for i in 0..OPS_PER_THREAD {
                 let key = (t * OPS_PER_THREAD + i) as i32;
-                c.put_with_size(key, format!("value_{}", key), object_size);
+                c.put(key, format!("value_{}", key), object_size);
 
                 // Mixed operations
                 if i % 3 == 0 {
@@ -1627,7 +1627,7 @@ fn test_concurrent_lfu_size_based_eviction() {
         handles.push(thread::spawn(move || {
             for i in 0..OPS_PER_THREAD {
                 let key = (t * OPS_PER_THREAD + i) as i32;
-                c.put_with_size(key, format!("value_{}", key), object_size);
+                c.put(key, format!("value_{}", key), object_size);
 
                 // Build frequency on some keys
                 if i % 5 == 0 {
@@ -1680,7 +1680,7 @@ fn test_concurrent_lfuda_size_based_eviction() {
         handles.push(thread::spawn(move || {
             for i in 0..OPS_PER_THREAD {
                 let key = (t * OPS_PER_THREAD + i) as i32;
-                c.put_with_size(key, format!("value_{}", key), object_size);
+                c.put(key, format!("value_{}", key), object_size);
 
                 // Build priority on some keys
                 if i % 4 == 0 {
@@ -1791,7 +1791,7 @@ fn test_concurrent_lru_per_segment_size_limit() {
                 let key = (t * OPS_PER_THREAD + i) as i32;
                 // Use varying large object sizes
                 let size = ((i % 4) + 1) as u64 * 2048; // 2KB to 8KB
-                c.put_with_size(key, format!("large_value_{}", key), size);
+                c.put(key, format!("large_value_{}", key), size);
 
                 // Verify size limits during concurrent access
                 let current = c.current_size();
@@ -1847,7 +1847,7 @@ fn test_concurrent_size_tracking_accuracy() {
             std::thread::spawn(move || {
                 for i in 0..25 {
                     let key = t * 25 + i;
-                    cache.put_with_size(key, format!("value_{}", key), item_size);
+                    cache.put(key, format!("value_{}", key), item_size);
                 }
             })
         })
@@ -1889,7 +1889,7 @@ fn test_concurrent_size_tracking_on_remove() {
 
     // Pre-populate cache
     for i in 0..100 {
-        cache.put_with_size(i, format!("value_{}", i), item_size);
+        cache.put(i, format!("value_{}", i), item_size);
     }
 
     let size_before = cache.current_size();
@@ -1910,7 +1910,7 @@ fn test_concurrent_size_tracking_on_remove() {
                 }
 
                 // Add new keys
-                c.put_with_size(key + 1000, format!("new_value_{}", key), item_size);
+                c.put(key + 1000, format!("new_value_{}", key), item_size);
 
                 // Mixed operations
                 if i % 3 == 0 {
@@ -1975,7 +1975,7 @@ fn test_concurrent_lru_with_max_size() {
             for i in 0..OPS_PER_THREAD {
                 let key = format!("key_{}_{}", t, i);
                 let data = vec![0u8; 100];
-                c.put_with_size(key.clone(), data, 100);
+                c.put(key.clone(), data, 100);
 
                 if i % 3 == 0 {
                     let _ = c.get(&key);
@@ -2014,7 +2014,7 @@ fn test_concurrent_lru_with_limits() {
         handles.push(thread::spawn(move || {
             for i in 0..OPS_PER_THREAD {
                 let key = (t * OPS_PER_THREAD + i) as i32;
-                c.put_with_size(key, format!("value_{}", key), 100);
+                c.put(key, format!("value_{}", key), 100);
 
                 // Periodically clear to test clear under concurrency
                 if i % 50 == 0 {
@@ -2063,7 +2063,7 @@ fn test_concurrent_lfu_with_max_size() {
         handles.push(thread::spawn(move || {
             for i in 0..OPS_PER_THREAD {
                 let key = format!("key_{}_{}", t, i);
-                c.put_with_size(key.clone(), vec![1, 2, 3], 100);
+                c.put(key.clone(), vec![1, 2, 3], 100);
                 if i % 3 == 0 {
                     let _ = c.get(&key);
                 }
@@ -2093,7 +2093,7 @@ fn test_concurrent_lfu_with_limits() {
         handles.push(thread::spawn(move || {
             for i in 0..OPS_PER_THREAD {
                 let key = (t * OPS_PER_THREAD + i) as i32;
-                c.put_with_size(key, format!("value_{}", key), 100);
+                c.put(key, format!("value_{}", key), 100);
                 if i % 50 == 0 {
                     c.clear();
                 }
@@ -2139,7 +2139,7 @@ fn test_concurrent_lfuda_with_max_size() {
         handles.push(thread::spawn(move || {
             for i in 0..OPS_PER_THREAD {
                 let key = format!("key_{}_{}", t, i);
-                c.put_with_size(key.clone(), vec![1, 2, 3], 100);
+                c.put(key.clone(), vec![1, 2, 3], 100);
                 if i % 3 == 0 {
                     let _ = c.get(&key);
                 }
@@ -2169,7 +2169,7 @@ fn test_concurrent_lfuda_with_limits() {
         handles.push(thread::spawn(move || {
             for i in 0..OPS_PER_THREAD {
                 let key = (t * OPS_PER_THREAD + i) as i32;
-                c.put_with_size(key, format!("value_{}", key), 100);
+                c.put(key, format!("value_{}", key), 100);
                 if i % 50 == 0 {
                     c.clear();
                 }
@@ -2291,7 +2291,7 @@ fn test_concurrent_slru_with_max_size() {
         handles.push(thread::spawn(move || {
             for i in 0..OPS_PER_THREAD {
                 let key = format!("key_{}_{}", t, i);
-                c.put_with_size(key.clone(), vec![1, 2, 3], 100);
+                c.put(key.clone(), vec![1, 2, 3], 100);
                 // Access multiple times to test promotion
                 for _ in 0..3 {
                     let _ = c.get(&key);
@@ -2322,7 +2322,7 @@ fn test_concurrent_slru_with_limits() {
         handles.push(thread::spawn(move || {
             for i in 0..OPS_PER_THREAD {
                 let key = (t * OPS_PER_THREAD + i) as i32;
-                c.put_with_size(key, format!("value_{}", key), 100);
+                c.put(key, format!("value_{}", key), 100);
                 // Access to trigger promotion to protected
                 for _ in 0..3 {
                     let _ = c.get(&key);
@@ -2354,7 +2354,7 @@ fn test_concurrent_clear_during_operations() {
 
     // Pre-fill
     for i in 0..100 {
-        cache.put(i, i);
+        cache.put(i, i, 1);
     }
     assert_eq!(cache.len(), 100);
 
@@ -2372,7 +2372,7 @@ fn test_concurrent_clear_during_operations() {
 
     // Insert while clear is happening
     for i in 100..200 {
-        cache.put(i, i);
+        cache.put(i, i, 1);
     }
 
     handle.join().unwrap();
@@ -2403,7 +2403,7 @@ fn test_concurrent_lru_record_miss() {
 
                 // Also do actual cache operations
                 let key = (t * OPS_PER_THREAD + i) as i32;
-                c.put(key, key);
+                c.put(key, key, 1);
                 let _ = c.get(&key);
             }
         }));
@@ -2439,7 +2439,7 @@ fn test_concurrent_lru_get_with() {
         handles.push(thread::spawn(move || {
             for i in 0..OPS_PER_THREAD {
                 let key = (t * OPS_PER_THREAD + i) as i32;
-                c.put(key, key * 2);
+                c.put(key, key * 2, 1);
                 // Use get_with to transform value - may be None if evicted
                 let doubled = c.get_with(&key, |v| v * 2);
                 if let Some(val) = doubled {
@@ -2470,7 +2470,7 @@ fn test_concurrent_lfu_get_with() {
         handles.push(thread::spawn(move || {
             for i in 0..OPS_PER_THREAD {
                 let key = (t * OPS_PER_THREAD + i) as i32;
-                c.put(key, key * 2);
+                c.put(key, key * 2, 1);
                 // Use get_with to transform value - may be None if evicted
                 let doubled = c.get_with(&key, |v| v * 2);
                 // Value could be evicted by another thread, so it may be None
@@ -2502,7 +2502,7 @@ fn test_concurrent_lfuda_get_with() {
         handles.push(thread::spawn(move || {
             for i in 0..OPS_PER_THREAD {
                 let key = (t * OPS_PER_THREAD + i) as i32;
-                c.put(key, key * 2);
+                c.put(key, key * 2, 1);
                 // Value could be evicted by another thread, so it may be None
                 let doubled = c.get_with(&key, |v| v * 2);
                 if let Some(val) = doubled {
@@ -2532,7 +2532,7 @@ fn test_concurrent_slru_get_with() {
         handles.push(thread::spawn(move || {
             for i in 0..OPS_PER_THREAD {
                 let key = (t * OPS_PER_THREAD + i) as i32;
-                c.put(key, key * 2);
+                c.put(key, key * 2, 1);
                 // Value could be evicted by another thread
                 let doubled = c.get_with(&key, |v| v * 2);
                 if let Some(val) = doubled {
@@ -2596,7 +2596,7 @@ fn test_concurrent_lru_get_mut_with() {
         handles.push(thread::spawn(move || {
             for i in 0..OPS_PER_THREAD {
                 let key = (t * OPS_PER_THREAD + i) as i32;
-                c.put(key, key);
+                c.put(key, key, 1);
                 // Use get_mut_with to mutate value in-place - may be None if evicted
                 let old_val = c.get_mut_with(&key, |v| {
                     let old = *v;
@@ -2652,28 +2652,28 @@ fn test_concurrent_all_caches_contains() {
                 // Note: We can't assert contains() results in concurrent tests because
                 // another thread may evict entries at any time between put and contains
                 let _ = lru_c.contains(&key);
-                lru_c.put(key, key);
+                lru_c.put(key, key, 1);
                 let _ = lru_c.contains(&key); // May be false if evicted by another thread
                 if i % 10 == 0 {
                     lru_c.remove(&key);
                 }
 
                 // LFU
-                lfu_c.put(key, key);
+                lfu_c.put(key, key, 1);
                 let _ = lfu_c.contains(&key);
                 if i % 10 == 0 {
                     lfu_c.remove(&key);
                 }
 
                 // LFUDA
-                lfuda_c.put(key, key);
+                lfuda_c.put(key, key, 1);
                 let _ = lfuda_c.contains(&key);
                 if i % 10 == 0 {
                     lfuda_c.remove(&key);
                 }
 
                 // SLRU
-                slru_c.put(key, key);
+                slru_c.put(key, key, 1);
                 let _ = slru_c.contains(&key);
                 if i % 10 == 0 {
                     slru_c.remove(&key);
@@ -2710,7 +2710,7 @@ fn test_concurrent_lru_peek() {
         handles.push(thread::spawn(move || {
             for i in 0..OPS_PER_THREAD {
                 let key = (t * OPS_PER_THREAD + i) as i32;
-                c.put(key, key);
+                c.put(key, key, 1);
                 // peek returns cloned value - may be None if evicted
                 let peeked = c.peek(&key);
                 if let Some(val) = peeked {
@@ -2741,7 +2741,7 @@ fn test_concurrent_lfu_peek() {
         handles.push(thread::spawn(move || {
             for i in 0..OPS_PER_THREAD {
                 let key = (t * OPS_PER_THREAD + i) as i32;
-                c.put(key, key);
+                c.put(key, key, 1);
                 // Value could be evicted by another thread
                 let peeked = c.peek(&key);
                 if let Some(val) = peeked {
@@ -2771,7 +2771,7 @@ fn test_concurrent_lfuda_peek() {
         handles.push(thread::spawn(move || {
             for i in 0..OPS_PER_THREAD {
                 let key = (t * OPS_PER_THREAD + i) as i32;
-                c.put(key, key);
+                c.put(key, key, 1);
                 // Value could be evicted by another thread
                 let peeked = c.peek(&key);
                 if let Some(val) = peeked {
@@ -2801,7 +2801,7 @@ fn test_concurrent_slru_peek() {
         handles.push(thread::spawn(move || {
             for i in 0..OPS_PER_THREAD {
                 let key = (t * OPS_PER_THREAD + i) as i32;
-                c.put(key, key);
+                c.put(key, key, 1);
                 // Value could be evicted by another thread, so it may be None
                 let peeked = c.peek(&key);
                 if let Some(val) = peeked {
@@ -2860,7 +2860,7 @@ fn test_concurrent_lru_pop() {
 
     // Pre-fill cache
     for i in 0..500 {
-        cache.put(i, i);
+        cache.put(i, i, 1);
     }
 
     let mut handles = vec![];
@@ -2874,7 +2874,7 @@ fn test_concurrent_lru_pop() {
                 // Popped might be Some or None depending on cache state
                 if let Some((k, _v)) = popped {
                     // Put something back
-                    c.put(k + 10000, k);
+                    c.put(k + 10000, k, 1);
                 }
             }
         }));
@@ -2895,7 +2895,7 @@ fn test_concurrent_lfu_pop() {
 
     // Pre-fill cache
     for i in 0..500 {
-        cache.put(i, i);
+        cache.put(i, i, 1);
     }
 
     let mut handles = vec![];
@@ -2906,7 +2906,7 @@ fn test_concurrent_lfu_pop() {
             for _ in 0..OPS_PER_THREAD {
                 let popped = c.pop();
                 if let Some((k, _v)) = popped {
-                    c.put(k + 10000, k);
+                    c.put(k + 10000, k, 1);
                 }
             }
         }));
@@ -2926,7 +2926,7 @@ fn test_concurrent_lfuda_pop() {
 
     // Pre-fill cache
     for i in 0..500 {
-        cache.put(i, i);
+        cache.put(i, i, 1);
     }
 
     let mut handles = vec![];
@@ -2937,7 +2937,7 @@ fn test_concurrent_lfuda_pop() {
             for _ in 0..OPS_PER_THREAD {
                 let popped = c.pop();
                 if let Some((k, _v)) = popped {
-                    c.put(k + 10000, k);
+                    c.put(k + 10000, k, 1);
                 }
             }
         }));
@@ -2957,7 +2957,7 @@ fn test_concurrent_slru_pop() {
 
     // Pre-fill cache
     for i in 0..500 {
-        cache.put(i, i);
+        cache.put(i, i, 1);
     }
 
     let mut handles = vec![];
@@ -2968,7 +2968,7 @@ fn test_concurrent_slru_pop() {
             for _ in 0..OPS_PER_THREAD {
                 let popped = c.pop();
                 if let Some((k, _v)) = popped {
-                    c.put(k + 10000, k);
+                    c.put(k + 10000, k, 1);
                 }
             }
         }));
@@ -3043,19 +3043,19 @@ fn test_concurrent_all_caches_capacity_and_segments() {
                 let key = (t * OPS_PER_THREAD + i) as i32;
 
                 // Perform operations while checking capacity/segments
-                lru_c.put(key, key);
+                lru_c.put(key, key, 1);
                 assert_eq!(lru_c.capacity(), 1000);
                 assert_eq!(lru_c.segment_count(), 4);
 
-                lfu_c.put(key, key);
+                lfu_c.put(key, key, 1);
                 assert_eq!(lfu_c.capacity(), 1000);
                 assert_eq!(lfu_c.segment_count(), 8);
 
-                lfuda_c.put(key, key);
+                lfuda_c.put(key, key, 1);
                 assert_eq!(lfuda_c.capacity(), 1000);
                 assert_eq!(lfuda_c.segment_count(), 4);
 
-                slru_c.put(key, key);
+                slru_c.put(key, key, 1);
                 assert_eq!(slru_c.capacity(), 1000);
                 assert_eq!(slru_c.segment_count(), 8);
 
@@ -3102,16 +3102,16 @@ fn test_concurrent_all_caches_algorithm_name() {
                 let key = (t * OPS_PER_THREAD + i) as i32;
 
                 // Do operations while checking algorithm names
-                lru_c.put(key, key);
+                lru_c.put(key, key, 1);
                 assert_eq!(lru_c.algorithm_name(), "ConcurrentLRU");
 
-                lfu_c.put(key, key);
+                lfu_c.put(key, key, 1);
                 assert_eq!(lfu_c.algorithm_name(), "ConcurrentLFU");
 
-                lfuda_c.put(key, key);
+                lfuda_c.put(key, key, 1);
                 assert_eq!(lfuda_c.algorithm_name(), "ConcurrentLFUDA");
 
-                slru_c.put(key, key);
+                slru_c.put(key, key, 1);
                 assert_eq!(slru_c.algorithm_name(), "ConcurrentSLRU");
 
                 gdsf_c.put(key, key, 1);
@@ -3152,17 +3152,17 @@ fn test_concurrent_all_caches_metrics() {
                 let key = (t * OPS_PER_THREAD + i) as i32;
 
                 // Perform operations and check metrics exist
-                lru_c.put(key, key);
+                lru_c.put(key, key, 1);
                 let _ = lru_c.get(&key);
                 let metrics = lru_c.metrics();
                 assert!(metrics.contains_key("cache_hits"), "LRU should track hits");
 
-                lfu_c.put(key, key);
+                lfu_c.put(key, key, 1);
                 let _ = lfu_c.get(&key);
                 let metrics = lfu_c.metrics();
                 assert!(metrics.contains_key("cache_hits"), "LFU should track hits");
 
-                lfuda_c.put(key, key);
+                lfuda_c.put(key, key, 1);
                 let _ = lfuda_c.get(&key);
                 let metrics = lfuda_c.metrics();
                 assert!(
@@ -3170,7 +3170,7 @@ fn test_concurrent_all_caches_metrics() {
                     "LFUDA should track hits"
                 );
 
-                slru_c.put(key, key);
+                slru_c.put(key, key, 1);
                 let _ = slru_c.get(&key);
                 let metrics = slru_c.metrics();
                 assert!(metrics.contains_key("cache_hits"), "SLRU should track hits");

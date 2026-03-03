@@ -277,7 +277,6 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use core::borrow::Borrow;
 use core::hash::{BuildHasher, Hash};
-use core::mem;
 use core::num::NonZeroUsize;
 
 #[cfg(feature = "hashbrown")]
@@ -376,10 +375,6 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
         &self.metrics
     }
 
-    fn estimate_object_size(&self, _key: &K, _value: &V) -> u64 {
-        mem::size_of::<K>() as u64 + mem::size_of::<V>() as u64 + 64
-    }
-
     #[inline]
     pub(crate) fn record_miss(&mut self, object_size: u64) {
         self.metrics.core.record_miss(object_size);
@@ -464,9 +459,9 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
             unsafe {
                 // SAFETY: node comes from our map
                 let entry = (*node).get_value();
-                let object_size = self.estimate_object_size(&entry.key, &entry.value);
+                let entry_size = entry.metadata.size;
                 let meta = &entry.metadata.algorithm;
-                self.metrics.core.record_hit(object_size);
+                self.metrics.core.record_hit(entry_size);
                 self.metrics
                     .record_item_access(meta.frequency, entry.metadata.size, meta.priority);
 
@@ -488,9 +483,9 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
             unsafe {
                 // SAFETY: node comes from our map
                 let entry = (*node).get_value();
-                let object_size = self.estimate_object_size(&entry.key, &entry.value);
+                let entry_size = entry.metadata.size;
                 let meta = &entry.metadata.algorithm;
-                self.metrics.core.record_hit(object_size);
+                self.metrics.core.record_hit(entry_size);
                 self.metrics
                     .record_item_access(meta.frequency, entry.metadata.size, meta.priority);
 
@@ -510,8 +505,6 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
         if size == 0 {
             return None;
         }
-
-        let object_size = self.estimate_object_size(&key, &val);
 
         // Check if key exists - update existing entry
         if let Some(&node) = self.map.get(&key) {
@@ -559,7 +552,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
 
                 if let Some(new_node) = list.add(new_entry) {
                     self.map.insert(key, new_node);
-                    self.metrics.core.record_insertion(object_size);
+                    self.metrics.core.record_insertion(size);
                     return Some(old_value);
                 } else {
                     self.map.remove(&key);
@@ -693,7 +686,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
     ///
     /// This method does **not** increment the eviction counter in metrics.
     /// Eviction metrics are only recorded when the cache internally evicts
-    /// entries to make room during `put()`/`put_with_size()` operations.
+    /// entries to make room during `put()` operations.
     ///
     /// Returns `None` if the cache is empty.
     pub(crate) fn pop_eviction_candidate(&mut self) -> Option<(K, V)> {
@@ -873,6 +866,12 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfCache<K, V, S> {
     /// GDSF is inherently size-aware: the `size` parameter affects priority
     /// calculation (`priority = global_age + frequency / size`), favoring
     /// small, frequently-accessed items.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to insert
+    /// * `val` - The value to insert
+    /// * `size` - Optional size in bytes. Use `SIZE_UNIT` (1) for count-based caching.
     ///
     /// # Multi-eviction behavior
     ///

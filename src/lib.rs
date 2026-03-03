@@ -78,10 +78,10 @@
 //!     max_size: u64::MAX,
 //! };
 //! let mut cache = LruCache::init(config, None);
-//! cache.put("a", 1);
-//! cache.put("b", 2);
+//! cache.put("a", 1, 1);
+//! cache.put("b", 2, 1);
 //! cache.get(&"a");      // "a" becomes most recently used
-//! cache.put("c", 3);    // "b" evicted (least recently used)
+//! cache.put("c", 3, 1);    // "b" evicted (least recently used)
 //! assert!(cache.get(&"b").is_none());
 //! ```
 //!
@@ -102,7 +102,7 @@
 //! };
 //! let mut cache = SlruCache::init(config, None);
 //!
-//! cache.put("hot", 1);
+//! cache.put("hot", 1, 1);
 //! cache.get(&"hot");  // Promoted to protected segment!
 //! ```
 //!
@@ -121,13 +121,13 @@
 //!     max_size: u64::MAX,
 //! };
 //! let mut cache = LfuCache::init(config, None);
-//! cache.put("rare", 1);
-//! cache.put("popular", 2);
+//! cache.put("rare", 1, 1);
+//! cache.put("popular", 2, 1);
 //!
 //! // Access "popular" multiple times
 //! for _ in 0..10 { cache.get(&"popular"); }
 //!
-//! cache.put("new", 3);  // "rare" evicted (lowest frequency)
+//! cache.put("new", 3, 1);  // "rare" evicted (lowest frequency)
 //! assert!(cache.get(&"popular").is_some());
 //! ```
 //!
@@ -150,7 +150,7 @@
 //!
 //! // Old popular items will eventually age out if not accessed
 //! for i in 0..100 {
-//!     cache.put(i, i);
+//!     cache.put(i, i, 1);
 //! }
 //! ```
 //!
@@ -233,7 +233,7 @@
 //!
 //! // Track size explicitly
 //! let data = vec![0u8; 1024];
-//! cache.put_with_size("file.bin".to_string(), data, 1024);
+//! cache.put("file.bin".to_string(), data, 1024);
 //! ```
 //!
 //! ## Modules
@@ -328,6 +328,44 @@ pub mod metrics;
 /// Available when the `concurrent` feature is enabled.
 #[cfg(feature = "concurrent")]
 pub mod concurrent;
+
+/// Size value for entry-count mode where actual size doesn't matter.
+///
+/// Use this when you only want to limit the number of entries, not total size.
+/// Each entry will be counted as having size 1, making `current_size()` equal to `len()`.
+///
+/// # Example
+///
+/// ```rust
+/// use cache_rs::{LruCache, SIZE_UNIT};
+/// use cache_rs::config::LruCacheConfig;
+/// use core::num::NonZeroUsize;
+///
+/// let config = LruCacheConfig {
+///     capacity: NonZeroUsize::new(100).unwrap(),
+///     max_size: u64::MAX,  // No size limit
+/// };
+/// let mut cache = LruCache::init(config, None);
+///
+/// // Using SIZE_UNIT for count-based caching
+/// cache.put("key1", "value1", SIZE_UNIT);
+/// cache.put("key2", "value2", SIZE_UNIT);
+/// assert_eq!(cache.len(), 2);
+/// assert_eq!(cache.current_size(), 2);  // Each entry counts as 1
+/// ```
+///
+/// # When to Use
+///
+/// - **Entry-count mode**: When you only care about limiting the number of entries
+/// - **Fixed-size objects**: When all cached items are the same size
+/// - **Simple caching**: When size tracking isn't important for your use case
+///
+/// # When NOT to Use
+///
+/// - **Size-constrained caches**: When `max_size` is set to a real memory limit
+/// - **Variable-sized objects**: When objects have significantly different sizes
+/// - **Size-aware algorithms**: GDSF and LFUDA work better with actual sizes
+pub const SIZE_UNIT: u64 = 1;
 
 // Re-export cache types
 pub use gdsf::GdsfCache;
