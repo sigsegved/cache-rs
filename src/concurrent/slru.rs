@@ -350,51 +350,84 @@ where
 
     /// Removes and returns the eviction candidate from the cache.
     ///
-    /// Pops the eviction candidate (LRU from probationary segment) from
-    /// the first non-empty segment. Since SLRU entries do not carry
-    /// timestamps, cross-segment ordering is approximate.
+    /// Finds the segment with the globally oldest eviction candidate (lowest
+    /// `last_accessed` timestamp) and pops from that segment, ensuring the
+    /// returned entry is the true LRU candidate across all segments.
     ///
     /// # Concurrency Note
     ///
-    /// Unlike other concurrent caches, SLRU uses a simpler sequential scan
-    /// (returning the first non-empty segment's candidate) rather than a
-    /// two-phase best-candidate search. This avoids the TOCTOU race but
-    /// means the returned entry is only the local eviction candidate from
-    /// whichever segment happens to be checked first.
+    /// This method uses a two-phase approach: first scanning all segments to find
+    /// the best candidate, then re-locking the winning segment to pop. Between
+    /// these phases, another thread may modify the cache (TOCTOU race). This is
+    /// inherent to the segmented design and means the returned entry may not be
+    /// the globally optimal candidate at the instant of removal. The method
+    /// remains safe — it will either return a valid entry or `None`.
+    ///
+    /// # Performance
+    ///
+    /// This method locks each segment sequentially during the scan phase
+    /// (O(segments) lock acquisitions), making it more expensive than
+    /// single-segment operations like `get()` or `put()`.
     ///
     /// # Returns
     ///
     /// - `Some((key, value))` if the cache was not empty
     /// - `None` if the cache is empty
     pub fn pop(&self) -> Option<(K, V)> {
-        for segment in self.segments.iter() {
-            let mut guard = segment.lock();
-            if let Some(result) = guard.pop() {
-                return Some(result);
+        // Find the segment with the oldest LRU candidate (lowest timestamp)
+        let mut best_idx = None;
+        let mut best_ts = u64::MAX;
+
+        for (i, segment) in self.segments.iter().enumerate() {
+            let guard = segment.lock();
+            if let Some(ts) = guard.peek_lru_timestamp() {
+                if ts < best_ts {
+                    best_ts = ts;
+                    best_idx = Some(i);
+                }
             }
         }
-        None
+
+        if let Some(idx) = best_idx {
+            let mut guard = self.segments[idx].lock();
+            guard.pop()
+        } else {
+            None
+        }
     }
 
     /// Removes and returns the most recently used entry from the cache.
     ///
-    /// Internal method that pops the MRU entry (from protected segment first)
-    /// from the first non-empty segment. Since SLRU entries do not carry
-    /// timestamps, cross-segment ordering is approximate.
+    /// Internal method that finds the segment with the globally newest MRU
+    /// candidate (highest `last_accessed` timestamp) and pops from that segment.
     ///
     /// # Concurrency Note
     ///
-    /// Uses the same sequential scan approach as [`pop()`](Self::pop). See its
-    /// documentation for details on cross-segment ordering limitations.
+    /// Uses the same two-phase scan approach as [`pop()`](Self::pop). See its
+    /// documentation for details on the inherent TOCTOU race and performance
+    /// characteristics.
     #[allow(dead_code)]
     pub(crate) fn pop_r(&self) -> Option<(K, V)> {
-        for segment in self.segments.iter() {
-            let mut guard = segment.lock();
-            if let Some(result) = guard.pop_r() {
-                return Some(result);
+        // Find the segment with the newest MRU candidate (highest timestamp)
+        let mut best_idx = None;
+        let mut best_ts = 0u64;
+
+        for (i, segment) in self.segments.iter().enumerate() {
+            let guard = segment.lock();
+            if let Some(ts) = guard.peek_mru_timestamp() {
+                if ts > best_ts || best_idx.is_none() {
+                    best_ts = ts;
+                    best_idx = Some(i);
+                }
             }
         }
-        None
+
+        if let Some(idx) = best_idx {
+            let mut guard = self.segments[idx].lock();
+            guard.pop_r()
+        } else {
+            None
+        }
     }
 }
 

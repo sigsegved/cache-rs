@@ -340,7 +340,10 @@ pub use slru::SlruCache;
 pub use entry::{CacheEntry, CacheMetadata};
 
 // Re-export metadata types (also available directly from algorithm modules)
-pub use meta::{GdsfMeta, LfuMeta, LfudaMeta};
+pub use meta::{GdsfMeta, LfuMeta, LfudaMeta, SlruMeta};
+
+// Re-export SLRU Location enum for completeness
+pub use slru::Location as SlruLocation;
 
 #[cfg(feature = "concurrent")]
 pub use concurrent::{

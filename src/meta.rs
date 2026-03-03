@@ -11,6 +11,7 @@
 //! | LRU       | `()` (none)   | N/A |
 //! | LFU       | `LfuMeta`     | `cache_rs::lfu` |
 //! | LFUDA     | `LfudaMeta`   | `cache_rs::lfuda` |
+//! | SLRU      | `SlruMeta`    | `cache_rs::slru` |
 //! | GDSF      | `GdsfMeta`    | `cache_rs::gdsf` |
 //!
 //! # Migration Guide
@@ -27,3 +28,4 @@
 pub use crate::gdsf::GdsfMeta;
 pub use crate::lfu::LfuMeta;
 pub use crate::lfuda::LfudaMeta;
+pub use crate::slru::SlruMeta;

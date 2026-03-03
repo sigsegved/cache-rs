@@ -174,6 +174,7 @@
 extern crate alloc;
 
 use crate::config::SlruCacheConfig;
+use crate::entry::CacheEntry;
 use crate::list::{List, ListEntry};
 use crate::metrics::{CacheMetrics, SlruCacheMetrics};
 use alloc::boxed::Box;
@@ -194,13 +195,27 @@ use std::collections::hash_map::RandomState as DefaultHashBuilder;
 #[cfg(not(feature = "hashbrown"))]
 use std::collections::HashMap;
 
-/// Entry location within the SLRU cache
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Location {
-    /// Entry is in the probationary segment
+/// Entry location within the SLRU cache.
+///
+/// Tracks whether an entry is in the probationary or protected segment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Location {
+    /// Entry is in the probationary segment (default for new entries)
+    #[default]
     Probationary,
-    /// Entry is in the protected segment
+    /// Entry is in the protected segment (promoted on second access)
     Protected,
+}
+
+/// SLRU-specific metadata stored in each cache entry.
+///
+/// This uses the unified `CacheEntry<K, V, SlruMeta>` pattern, eliminating
+/// the need for a complex tuple in the HashMap. Size and timestamps are
+/// handled by `CacheMetadata`, this struct only holds SLRU-specific data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SlruMeta {
+    /// Which segment this entry is in
+    pub location: Location,
 }
 
 /// Internal SLRU segment containing the actual cache algorithm.
@@ -208,6 +223,10 @@ enum Location {
 /// This is shared between `SlruCache` (single-threaded) and
 /// `ConcurrentSlruCache` (multi-threaded). All algorithm logic is
 /// implemented here to avoid code duplication.
+///
+/// Uses `CacheEntry<K, V, SlruMeta>` for unified entry management with built-in
+/// size tracking and timestamps. The `SlruMeta` stores segment location, and
+/// all other metadata (size, last_accessed) is handled by `CacheMetadata`.
 ///
 /// # Safety
 ///
@@ -221,15 +240,14 @@ pub(crate) struct SlruInner<K, V, S = DefaultHashBuilder> {
     config: SlruCacheConfig,
 
     /// The probationary list holding newer or less frequently accessed items
-    probationary: List<(K, V)>,
+    probationary: List<CacheEntry<K, V, SlruMeta>>,
 
     /// The protected list holding frequently accessed items
-    protected: List<(K, V)>,
+    protected: List<CacheEntry<K, V, SlruMeta>>,
 
-    /// A hash map mapping keys to entries in either the probationary or protected list
-    /// The tuple stores (node pointer, segment location, entry size in bytes)
-    #[allow(clippy::type_complexity)]
-    map: HashMap<K, (*mut ListEntry<(K, V)>, Location, u64), S>,
+    /// Maps keys to their list nodes. All metadata (size, timestamp, location)
+    /// is stored in the CacheEntry itself, not in the map.
+    map: HashMap<K, *mut ListEntry<CacheEntry<K, V, SlruMeta>>, S>,
 
     /// Metrics for tracking cache performance and segment behavior
     metrics: SlruCacheMetrics,
@@ -340,8 +358,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruInner<K, V, S> {
     /// Returns a raw pointer to the entry in its new location.
     unsafe fn promote_to_protected(
         &mut self,
-        node: *mut ListEntry<(K, V)>,
-    ) -> *mut ListEntry<(K, V)> {
+        node: *mut ListEntry<CacheEntry<K, V, SlruMeta>>,
+    ) -> *mut ListEntry<CacheEntry<K, V, SlruMeta>> {
         // Remove from probationary list
         let boxed_entry = self
             .probationary
@@ -355,12 +373,11 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruInner<K, V, S> {
                 // Evict LRU from probationary
                 if let Some(old_entry) = self.probationary.remove_last() {
                     let old_ptr = Box::into_raw(old_entry);
-                    let (old_key, _) = (*old_ptr).get_value();
-                    // Get stored size and update current_size
-                    if let Some((_, _, evicted_size)) = self.map.remove(old_key) {
-                        self.current_size = self.current_size.saturating_sub(evicted_size);
-                        self.metrics.record_probationary_eviction(evicted_size);
-                    }
+                    let cache_entry = (*old_ptr).get_value();
+                    let evicted_size = cache_entry.metadata.size;
+                    self.map.remove(&cache_entry.key);
+                    self.current_size = self.current_size.saturating_sub(evicted_size);
+                    self.metrics.record_probationary_eviction(evicted_size);
                     let _ = Box::from_raw(old_ptr);
                 }
             }
@@ -370,13 +387,14 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruInner<K, V, S> {
         // Get the raw pointer from the box
         let entry_ptr = Box::into_raw(boxed_entry);
 
-        // Get the key from the entry for updating the map
-        let (key_ref, _) = (*entry_ptr).get_value();
+        // Update location and timestamp in the entry
+        let cache_entry = (*entry_ptr).get_value_mut();
+        cache_entry.metadata.algorithm.location = Location::Protected;
+        cache_entry.touch(); // Update last_accessed timestamp
 
-        // Update the map with new location and pointer (preserve size)
-        if let Some(map_entry) = self.map.get_mut(key_ref) {
-            map_entry.0 = entry_ptr;
-            map_entry.1 = Location::Protected;
+        // Update the map pointer
+        if let Some(node_ptr) = self.map.get_mut(&cache_entry.key) {
+            *node_ptr = entry_ptr;
         }
 
         // Add to protected list using the pointer from the Box
@@ -391,12 +409,14 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruInner<K, V, S> {
     unsafe fn demote_lru_protected(&mut self) {
         if let Some(lru_protected) = self.protected.remove_last() {
             let lru_ptr = Box::into_raw(lru_protected);
-            let (lru_key, _) = (*lru_ptr).get_value();
+            let cache_entry = (*lru_ptr).get_value_mut();
 
-            // Update the location and pointer in the map (preserve size)
-            if let Some(entry) = self.map.get_mut(lru_key) {
-                entry.0 = lru_ptr;
-                entry.1 = Location::Probationary;
+            // Update location in the entry
+            cache_entry.metadata.algorithm.location = Location::Probationary;
+
+            // Update the map pointer
+            if let Some(node_ptr) = self.map.get_mut(&cache_entry.key) {
+                *node_ptr = lru_ptr;
             }
 
             // Add to probationary list
@@ -413,38 +433,42 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruInner<K, V, S> {
         K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
-        let (node, location, size) = self.map.get(key).copied()?;
+        let node = self.map.get(key).copied()?;
 
-        match location {
-            Location::Probationary => unsafe {
-                // SAFETY: node comes from our map, so it's a valid pointer to an entry in our probationary list
-                self.metrics.record_probationary_hit(size);
+        unsafe {
+            // SAFETY: node comes from our map, so it's a valid pointer
+            let cache_entry = (*node).get_value();
+            let location = cache_entry.metadata.algorithm.location;
+            let size = cache_entry.metadata.size;
 
-                // Promote from probationary to protected
-                let entry_ptr = self.promote_to_protected(node);
+            match location {
+                Location::Probationary => {
+                    self.metrics.record_probationary_hit(size);
 
-                // Record promotion
-                self.metrics.record_promotion();
+                    // Promote from probationary to protected (updates timestamp and location)
+                    let entry_ptr = self.promote_to_protected(node);
 
-                // Update segment sizes
-                self.metrics.update_segment_sizes(
-                    self.probationary.len() as u64,
-                    self.protected.len() as u64,
-                );
+                    // Record promotion
+                    self.metrics.record_promotion();
 
-                // SAFETY: entry_ptr is the return value from promote_to_protected
-                let (_, v) = (*entry_ptr).get_value();
-                Some(v)
-            },
-            Location::Protected => unsafe {
-                // SAFETY: node comes from our map, so it's a valid pointer to an entry in our protected list
-                self.metrics.record_protected_hit(size);
+                    // Update segment sizes
+                    self.metrics.update_segment_sizes(
+                        self.probationary.len() as u64,
+                        self.protected.len() as u64,
+                    );
 
-                // Already protected, just move to MRU position
-                self.protected.move_to_front(node);
-                let (_, v) = (*node).get_value();
-                Some(v)
-            },
+                    // SAFETY: entry_ptr is the return value from promote_to_protected
+                    Some(&(*entry_ptr).get_value().value)
+                }
+                Location::Protected => {
+                    self.metrics.record_protected_hit(size);
+
+                    // Already protected, just move to MRU position and update timestamp
+                    self.protected.move_to_front(node);
+                    (*node).get_value_mut().touch();
+                    Some(&(*node).get_value().value)
+                }
+            }
         }
     }
 
@@ -454,40 +478,83 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruInner<K, V, S> {
         K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
-        let (node, location, size) = self.map.get(key).copied()?;
+        let node = self.map.get(key).copied()?;
 
-        match location {
-            Location::Probationary => unsafe {
-                // SAFETY: node comes from our map, so it's a valid pointer to an entry in our probationary list
-                self.metrics.record_probationary_hit(size);
+        unsafe {
+            // SAFETY: node comes from our map, so it's a valid pointer
+            let cache_entry = (*node).get_value();
+            let location = cache_entry.metadata.algorithm.location;
+            let size = cache_entry.metadata.size;
 
-                // Promote from probationary to protected
-                let entry_ptr = self.promote_to_protected(node);
+            match location {
+                Location::Probationary => {
+                    self.metrics.record_probationary_hit(size);
 
-                // Record promotion
-                self.metrics.record_promotion();
+                    // Promote from probationary to protected (updates timestamp and location)
+                    let entry_ptr = self.promote_to_protected(node);
 
-                // Update segment sizes
-                self.metrics.update_segment_sizes(
-                    self.probationary.len() as u64,
-                    self.protected.len() as u64,
-                );
+                    // Record promotion
+                    self.metrics.record_promotion();
 
-                // SAFETY: entry_ptr is the return value from promote_to_protected
-                let (_, v) = (*entry_ptr).get_value_mut();
-                Some(v)
-            },
-            Location::Protected => unsafe {
-                // SAFETY: node comes from our map, so it's a valid pointer to an entry in our protected list
-                self.metrics.record_protected_hit(size);
+                    // Update segment sizes
+                    self.metrics.update_segment_sizes(
+                        self.probationary.len() as u64,
+                        self.protected.len() as u64,
+                    );
 
-                // Already protected, just move to MRU position
-                self.protected.move_to_front(node);
-                // SAFETY: node is still valid after move_to_front operation
-                let (_, v) = (*node).get_value_mut();
-                Some(v)
-            },
+                    // SAFETY: entry_ptr is the return value from promote_to_protected
+                    Some(&mut (*entry_ptr).get_value_mut().value)
+                }
+                Location::Protected => {
+                    self.metrics.record_protected_hit(size);
+
+                    // Already protected, just move to MRU position and update timestamp
+                    self.protected.move_to_front(node);
+                    (*node).get_value_mut().touch();
+                    Some(&mut (*node).get_value_mut().value)
+                }
+            }
         }
+    }
+
+    /// Peeks at the eviction candidate's `last_accessed` timestamp without removing it.
+    ///
+    /// For SLRU, the eviction candidate is the LRU entry from the probationary segment.
+    /// If probationary is empty, falls back to the protected segment's LRU entry.
+    ///
+    /// Returns `None` if both segments are empty. Lower timestamps indicate older entries
+    /// (better eviction candidates).
+    #[allow(dead_code)]
+    pub(crate) fn peek_lru_timestamp(&self) -> Option<u64> {
+        // Check probationary first (normal eviction target)
+        if let Some(entry) = self.probationary.peek_last() {
+            return Some(entry.metadata.last_accessed);
+        }
+        // Fall back to protected
+        if let Some(entry) = self.protected.peek_last() {
+            return Some(entry.metadata.last_accessed);
+        }
+        None
+    }
+
+    /// Peeks at the MRU entry's `last_accessed` timestamp without removing it.
+    ///
+    /// For SLRU, the MRU entry is the most recently accessed entry from the protected segment.
+    /// If protected is empty, falls back to the probationary segment's MRU entry.
+    ///
+    /// Returns `None` if both segments are empty. Higher timestamps indicate newer entries
+    /// (better candidates for `pop_r()`).
+    #[allow(dead_code)]
+    pub(crate) fn peek_mru_timestamp(&self) -> Option<u64> {
+        // Check protected first (MRU candidates are usually here)
+        if let Some(entry) = self.protected.peek_first() {
+            return Some(entry.metadata.last_accessed);
+        }
+        // Fall back to probationary
+        if let Some(entry) = self.probationary.peek_first() {
+            return Some(entry.metadata.last_accessed);
+        }
+        None
     }
 
     /// Records a cache miss for metrics tracking
@@ -513,36 +580,51 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruInner<K, V, S> {
         V: Clone,
     {
         // If key is already in the cache, update it in place
-        if let Some(&(node, location, old_size)) = self.map.get(&key) {
-            match location {
-                Location::Probationary => unsafe {
-                    // SAFETY: node comes from our map
-                    self.probationary.move_to_front(node);
-                    let old_entry = self.probationary.update(node, (key.clone(), value), true);
-                    // Update size tracking: subtract old size, add new size
-                    self.current_size = self.current_size.saturating_sub(old_size);
-                    self.current_size += size;
-                    // Update the size in the map
-                    if let Some(map_entry) = self.map.get_mut(&key) {
-                        map_entry.2 = size;
+        if let Some(&node) = self.map.get(&key) {
+            unsafe {
+                // SAFETY: node comes from our map
+                let cache_entry = (*node).get_value();
+                let location = cache_entry.metadata.algorithm.location;
+                let old_size = cache_entry.metadata.size;
+
+                match location {
+                    Location::Probationary => {
+                        self.probationary.move_to_front(node);
+                        // Create new CacheEntry with updated value
+                        let new_entry = CacheEntry::with_algorithm_metadata(
+                            key.clone(),
+                            value,
+                            size,
+                            SlruMeta {
+                                location: Location::Probationary,
+                            },
+                        );
+                        let old_entry = self.probationary.update(node, new_entry, true);
+                        // Update size tracking
+                        self.current_size = self.current_size.saturating_sub(old_size);
+                        self.current_size += size;
+                        self.metrics.core.record_insertion(size);
+                        return old_entry.0.map(|e| (e.key, e.value));
                     }
-                    self.metrics.core.record_insertion(size);
-                    return old_entry.0;
-                },
-                Location::Protected => unsafe {
-                    // SAFETY: node comes from our map
-                    self.protected.move_to_front(node);
-                    let old_entry = self.protected.update(node, (key.clone(), value), true);
-                    // Update size tracking: subtract old size, add new size
-                    self.current_size = self.current_size.saturating_sub(old_size);
-                    self.current_size += size;
-                    // Update the size in the map
-                    if let Some(map_entry) = self.map.get_mut(&key) {
-                        map_entry.2 = size;
+                    Location::Protected => {
+                        self.protected.move_to_front(node);
+                        // Create new CacheEntry with updated value
+                        let new_entry = CacheEntry::with_algorithm_metadata(
+                            key.clone(),
+                            value,
+                            size,
+                            SlruMeta {
+                                location: Location::Protected,
+                            },
+                        );
+                        let old_entry = self.protected.update(node, new_entry, true);
+                        // Update size tracking
+                        self.current_size = self.current_size.saturating_sub(old_size);
+                        self.current_size += size;
+                        self.metrics.core.record_insertion(size);
+                        return old_entry.0.map(|e| (e.key, e.value));
                     }
-                    self.metrics.core.record_insertion(size);
-                    return old_entry.0;
-                },
+                }
             }
         }
 
@@ -562,8 +644,16 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruInner<K, V, S> {
         }
 
         // Add the new key-value pair to the probationary segment
-        let node = self.probationary.add_unchecked((key.clone(), value));
-        self.map.insert(key, (node, Location::Probationary, size));
+        let cache_entry = CacheEntry::with_algorithm_metadata(
+            key.clone(),
+            value,
+            size,
+            SlruMeta {
+                location: Location::Probationary,
+            },
+        );
+        let node = self.probationary.add_unchecked(cache_entry);
+        self.map.insert(key, node);
         self.current_size += size;
 
         // Record insertion and update segment sizes
@@ -580,31 +670,36 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruInner<K, V, S> {
         K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
-        let (node, location, removed_size) = self.map.remove(key)?;
+        let node = self.map.remove(key)?;
 
-        match location {
-            Location::Probationary => unsafe {
-                // SAFETY: node comes from our map; take_value moves the value out
-                // and Box::from_raw frees memory (MaybeUninit won't double-drop).
-                let boxed_entry = self.probationary.remove(node)?;
-                let entry_ptr = Box::into_raw(boxed_entry);
-                let (_, value) = (*entry_ptr).take_value();
-                self.current_size = self.current_size.saturating_sub(removed_size);
-                self.metrics.record_probationary_removal(removed_size);
-                let _ = Box::from_raw(entry_ptr);
-                Some(value)
-            },
-            Location::Protected => unsafe {
-                // SAFETY: node comes from our map; take_value moves the value out
-                // and Box::from_raw frees memory (MaybeUninit won't double-drop).
-                let boxed_entry = self.protected.remove(node)?;
-                let entry_ptr = Box::into_raw(boxed_entry);
-                let (_, value) = (*entry_ptr).take_value();
-                self.current_size = self.current_size.saturating_sub(removed_size);
-                self.metrics.record_protected_removal(removed_size);
-                let _ = Box::from_raw(entry_ptr);
-                Some(value)
-            },
+        unsafe {
+            // SAFETY: node comes from our map
+            let cache_entry = (*node).get_value();
+            let location = cache_entry.metadata.algorithm.location;
+            let removed_size = cache_entry.metadata.size;
+
+            match location {
+                Location::Probationary => {
+                    // SAFETY: take_value moves the value out and Box::from_raw frees memory
+                    let boxed_entry = self.probationary.remove(node)?;
+                    let entry_ptr = Box::into_raw(boxed_entry);
+                    let cache_entry = (*entry_ptr).take_value();
+                    self.current_size = self.current_size.saturating_sub(removed_size);
+                    self.metrics.record_probationary_removal(removed_size);
+                    let _ = Box::from_raw(entry_ptr);
+                    Some(cache_entry.value)
+                }
+                Location::Protected => {
+                    // SAFETY: take_value moves the value out and Box::from_raw frees memory
+                    let boxed_entry = self.protected.remove(node)?;
+                    let entry_ptr = Box::into_raw(boxed_entry);
+                    let cache_entry = (*entry_ptr).take_value();
+                    self.current_size = self.current_size.saturating_sub(removed_size);
+                    self.metrics.record_protected_removal(removed_size);
+                    let _ = Box::from_raw(entry_ptr);
+                    Some(cache_entry.value)
+                }
+            }
         }
     }
 
@@ -638,11 +733,11 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruInner<K, V, S> {
         K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
-        let (node, _, _) = self.map.get(key)?;
+        let node = self.map.get(key)?;
         unsafe {
             // SAFETY: node comes from our map, so it's a valid pointer
-            let (_, value) = (*(*node)).get_value();
-            Some(value)
+            let cache_entry = (**node).get_value();
+            Some(&cache_entry.value)
         }
     }
 
@@ -659,32 +754,32 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruInner<K, V, S> {
         // Try probationary first (normal eviction target)
         if let Some(old_entry) = self.probationary.remove_last() {
             unsafe {
-                // SAFETY: take_value reads the (K,V) out of MaybeUninit by value.
+                // SAFETY: take_value reads the CacheEntry out of MaybeUninit by value.
                 // Box::from_raw frees memory (MaybeUninit won't double-drop).
                 let entry_ptr = Box::into_raw(old_entry);
-                let (key, value) = (*entry_ptr).take_value();
-                let evicted_size = self.map.get(&key).map(|(_, _, sz)| *sz).unwrap_or(0);
-                self.map.remove(&key);
+                let cache_entry = (*entry_ptr).take_value();
+                let evicted_size = cache_entry.metadata.size;
+                self.map.remove(&cache_entry.key);
                 self.current_size = self.current_size.saturating_sub(evicted_size);
                 self.metrics.record_probationary_removal(evicted_size);
                 let _ = Box::from_raw(entry_ptr);
-                return Some((key, value));
+                return Some((cache_entry.key, cache_entry.value));
             }
         }
 
         // Fall back to protected if probationary is empty
         if let Some(old_entry) = self.protected.remove_last() {
             unsafe {
-                // SAFETY: take_value reads the (K,V) out of MaybeUninit by value.
+                // SAFETY: take_value reads the CacheEntry out of MaybeUninit by value.
                 // Box::from_raw frees memory (MaybeUninit won't double-drop).
                 let entry_ptr = Box::into_raw(old_entry);
-                let (key, value) = (*entry_ptr).take_value();
-                let evicted_size = self.map.get(&key).map(|(_, _, sz)| *sz).unwrap_or(0);
-                self.map.remove(&key);
+                let cache_entry = (*entry_ptr).take_value();
+                let evicted_size = cache_entry.metadata.size;
+                self.map.remove(&cache_entry.key);
                 self.current_size = self.current_size.saturating_sub(evicted_size);
                 self.metrics.record_protected_removal(evicted_size);
                 let _ = Box::from_raw(entry_ptr);
-                return Some((key, value));
+                return Some((cache_entry.key, cache_entry.value));
             }
         }
 
@@ -701,32 +796,32 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruInner<K, V, S> {
         // Try protected first (highest priority entries)
         if let Some(entry) = self.protected.remove_first() {
             unsafe {
-                // SAFETY: take_value reads the (K,V) out of MaybeUninit by value.
+                // SAFETY: take_value reads the CacheEntry out of MaybeUninit by value.
                 // Box::from_raw frees memory (MaybeUninit won't double-drop).
                 let entry_ptr = Box::into_raw(entry);
-                let (key, value) = (*entry_ptr).take_value();
-                let evicted_size = self.map.get(&key).map(|(_, _, sz)| *sz).unwrap_or(0);
-                self.map.remove(&key);
+                let cache_entry = (*entry_ptr).take_value();
+                let evicted_size = cache_entry.metadata.size;
+                self.map.remove(&cache_entry.key);
                 self.current_size = self.current_size.saturating_sub(evicted_size);
                 self.metrics.record_protected_removal(evicted_size);
                 let _ = Box::from_raw(entry_ptr);
-                return Some((key, value));
+                return Some((cache_entry.key, cache_entry.value));
             }
         }
 
         // Fall back to probationary if protected is empty
         if let Some(entry) = self.probationary.remove_first() {
             unsafe {
-                // SAFETY: take_value reads the (K,V) out of MaybeUninit by value.
+                // SAFETY: take_value reads the CacheEntry out of MaybeUninit by value.
                 // Box::from_raw frees memory (MaybeUninit won't double-drop).
                 let entry_ptr = Box::into_raw(entry);
-                let (key, value) = (*entry_ptr).take_value();
-                let evicted_size = self.map.get(&key).map(|(_, _, sz)| *sz).unwrap_or(0);
-                self.map.remove(&key);
+                let cache_entry = (*entry_ptr).take_value();
+                let evicted_size = cache_entry.metadata.size;
+                self.map.remove(&cache_entry.key);
                 self.current_size = self.current_size.saturating_sub(evicted_size);
                 self.metrics.record_probationary_removal(evicted_size);
                 let _ = Box::from_raw(entry_ptr);
-                return Some((key, value));
+                return Some((cache_entry.key, cache_entry.value));
             }
         }
 
@@ -1034,10 +1129,7 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruCache<K, V, S> {
     /// assert_eq!(cache.len(), 2);
     /// ```
     #[inline]
-    pub fn pop(&mut self) -> Option<(K, V)>
-    where
-        V: Clone,
-    {
+    pub fn pop(&mut self) -> Option<(K, V)> {
         self.segment.pop()
     }
 
@@ -1050,10 +1142,7 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruCache<K, V, S> {
     /// Returns `None` if the cache is empty.
     #[inline]
     #[allow(dead_code)]
-    pub(crate) fn pop_r(&mut self) -> Option<(K, V)>
-    where
-        V: Clone,
-    {
+    pub(crate) fn pop_r(&mut self) -> Option<(K, V)> {
         self.segment.pop_r()
     }
 }
@@ -1527,5 +1616,169 @@ mod tests {
              SLRU must evict items to respect max_size limit.",
             cache.current_size()
         );
+    }
+
+    #[test]
+    fn test_slru_contains_non_promoting() {
+        // Create cache: 4 total (2 probationary, 2 protected)
+        let mut cache = make_cache(4, 2);
+        cache.put("a", 1);
+        cache.put("b", 2);
+
+        // contains() should return true for existing keys
+        assert!(cache.contains(&"a"));
+        assert!(cache.contains(&"b"));
+        assert!(!cache.contains(&"c"));
+
+        // contains() should NOT promote entries
+        // Both should still be in probationary
+        // Adding "c" and "d" should fill probationary
+        cache.put("c", 3);
+        cache.put("d", 4);
+
+        // At this point all 4 items are in probationary (none accessed twice)
+        assert_eq!(cache.len(), 4);
+        assert!(cache.contains(&"a"));
+        assert!(cache.contains(&"d"));
+    }
+
+    #[test]
+    fn test_slru_pop_returns_lru() {
+        // Create cache: 4 total (2 probationary, 2 protected)
+        let mut cache = make_cache(4, 2);
+        cache.put("a", 1);
+        cache.put("b", 2);
+        cache.put("c", 3);
+
+        // All in probationary, "a" is LRU
+        // pop() should return items from probationary first
+        let popped = cache.pop();
+        assert!(popped.is_some());
+        assert_eq!(cache.len(), 2);
+
+        // Continue popping
+        let popped = cache.pop();
+        assert!(popped.is_some());
+        assert_eq!(cache.len(), 1);
+
+        let popped = cache.pop();
+        assert!(popped.is_some());
+        assert_eq!(cache.len(), 0);
+
+        // Empty cache returns None
+        assert_eq!(cache.pop(), None);
+    }
+
+    #[test]
+    fn test_slru_pop_r_returns_mru() {
+        // Create cache: 4 total (2 probationary, 2 protected)
+        let mut cache = make_cache(4, 2);
+        cache.put("a", 1);
+        cache.put("b", 2);
+        cache.put("c", 3);
+
+        // pop_r() should return from protected first, then probationary
+        // All are in probationary, so MRU from probationary is "c"
+        let popped = cache.pop_r();
+        assert!(popped.is_some());
+        assert_eq!(cache.len(), 2);
+
+        // Continue popping MRU
+        let popped = cache.pop_r();
+        assert!(popped.is_some());
+        assert_eq!(cache.len(), 1);
+
+        let popped = cache.pop_r();
+        assert!(popped.is_some());
+        assert_eq!(cache.len(), 0);
+
+        // Empty cache returns None
+        assert_eq!(cache.pop_r(), None);
+    }
+
+    #[test]
+    fn test_slru_pop_with_protected_entries() {
+        // Create cache: 4 total (2 probationary, 2 protected)
+        let mut cache = make_cache(4, 2);
+        cache.put("a", 1);
+        cache.put("b", 2);
+
+        // Access "a" and "b" to promote them to protected
+        cache.get(&"a");
+        cache.get(&"b");
+
+        // Add more items to probationary
+        cache.put("c", 3);
+        cache.put("d", 4);
+
+        // "a" and "b" are protected, "c" and "d" are probationary
+        // pop() should return from probationary first
+        let (key, _) = cache.pop().unwrap();
+        assert!(key == "c" || key == "d"); // LRU from probationary
+
+        // pop_r() should return from protected first (MRU)
+        let (key, _) = cache.pop_r().unwrap();
+        assert!(key == "a" || key == "b"); // MRU from protected
+    }
+
+    #[test]
+    fn test_slru_pop_single_element() {
+        let mut cache = make_cache(4, 2);
+        cache.put("a", 1);
+
+        let popped = cache.pop();
+        assert_eq!(popped, Some(("a", 1)));
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn test_slru_pop_r_single_element() {
+        let mut cache = make_cache(4, 2);
+        cache.put("a", 1);
+
+        let popped = cache.pop_r();
+        assert_eq!(popped, Some(("a", 1)));
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn test_slru_peek_non_promoting() {
+        // Create cache: 4 total (2 probationary, 2 protected)
+        let mut cache = make_cache(4, 2);
+        cache.put("a", 1);
+        cache.put("b", 2);
+
+        // peek() should return value without promoting
+        assert_eq!(cache.peek(&"a"), Some(&1));
+        assert_eq!(cache.peek(&"b"), Some(&2));
+        assert_eq!(cache.peek(&"c"), None);
+
+        // "a" and "b" should still be in probationary (not promoted)
+        // Now access "a" with get() to promote it
+        cache.get(&"a");
+
+        // Add "c" and "d" - if peek promoted, this would evict "a"
+        cache.put("c", 3);
+        cache.put("d", 4);
+
+        // "a" was promoted by get(), so it should still exist
+        assert!(cache.contains(&"a"));
+    }
+
+    #[test]
+    fn test_slru_pop_does_not_inflate_eviction_count() {
+        let mut cache = make_cache(4, 2);
+        cache.put("a", 1);
+        cache.put("b", 2);
+        cache.put("c", 3);
+
+        // Manual pop should NOT count as eviction
+        assert!(cache.pop().is_some());
+        assert!(cache.pop_r().is_some());
+        assert_eq!(cache.segment.metrics.core.evictions, 0);
+
+        // Manual remove should NOT count as eviction
+        cache.remove(&"a");
+        assert_eq!(cache.segment.metrics.core.evictions, 0);
     }
 }
