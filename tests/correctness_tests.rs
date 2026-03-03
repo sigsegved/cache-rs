@@ -1636,10 +1636,7 @@ fn test_lfuda_size_eviction_multiple_items() {
     // Should have evicted at least 2 items to make room
     assert!(cache.current_size() <= 100);
     assert!(cache.len() < 4);
-    assert!(
-        cache.get(&5).is_some(),
-        "Large item should be in cache"
-    );
+    assert!(cache.get(&5).is_some(), "Large item should be in cache");
 }
 
 #[test]
