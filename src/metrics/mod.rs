@@ -108,7 +108,19 @@ impl CoreCacheMetrics {
     /// * `evicted_size` - Size of the evicted object (in bytes)
     pub fn record_eviction(&mut self, evicted_size: u64) {
         self.evictions += 1;
-        self.cache_size_bytes -= evicted_size;
+        self.cache_size_bytes = self.cache_size_bytes.saturating_sub(evicted_size);
+    }
+
+    /// Records a user-initiated removal — when an item is explicitly removed via `remove()` or `pop()`.
+    ///
+    /// Unlike [`record_eviction()`](Self::record_eviction), this does **not** increment the eviction counter.
+    /// Use this for operations where the user explicitly removes an entry rather than the cache
+    /// evicting it to make room.
+    ///
+    /// # Arguments
+    /// * `removed_size` - Size of the removed object (in bytes)
+    pub fn record_removal(&mut self, removed_size: u64) {
+        self.cache_size_bytes = self.cache_size_bytes.saturating_sub(removed_size);
     }
 
     /// Records an insertion - when new data is written to the cache

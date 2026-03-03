@@ -65,6 +65,21 @@ impl<T> ListEntry<T> {
     pub unsafe fn get_value_mut(&mut self) -> &mut T {
         self.val.assume_init_mut()
     }
+
+    /// Takes ownership of the stored value by reading it out of the `MaybeUninit`.
+    ///
+    /// After calling this, the entry's value is logically uninitialized.
+    /// The caller owns the returned value and is responsible for dropping it.
+    /// The `ListEntry` can then be deallocated (e.g., via `Box::from_raw`)
+    /// without double-freeing, since `MaybeUninit` does not run `Drop` on its contents.
+    ///
+    /// # Safety
+    ///
+    /// - The value must be initialized (this must not be a sigil/sentinel node).
+    /// - The value must not be read or taken again after this call.
+    pub unsafe fn take_value(&mut self) -> T {
+        self.val.assume_init_read()
+    }
 }
 
 /// A doubly linked list implementation with fixed capacity.
@@ -452,6 +467,46 @@ impl<T> List<T> {
         }
     }
 
+    /// Returns a reference to the last (tail) value without removing it.
+    ///
+    /// Returns `None` if the list is empty.
+    #[allow(dead_code)]
+    pub fn peek_last(&self) -> Option<&T> {
+        if self.is_empty() {
+            return None;
+        }
+        // SAFETY: tail is valid, and we know the list is non-empty so tail.prev
+        // points to a real entry (not the head sentinel).
+        unsafe {
+            let prev = (*self.tail).prev;
+            if prev == self.head {
+                None
+            } else {
+                Some((*prev).get_value())
+            }
+        }
+    }
+
+    /// Returns a reference to the first (head) value without removing it.
+    ///
+    /// Returns `None` if the list is empty.
+    #[allow(dead_code)]
+    pub fn peek_first(&self) -> Option<&T> {
+        if self.is_empty() {
+            return None;
+        }
+        // SAFETY: head is valid, and we know the list is non-empty so head.next
+        // points to a real entry (not the tail sentinel).
+        unsafe {
+            let next = (*self.head).next;
+            if next == self.tail {
+                None
+            } else {
+                Some((*next).get_value())
+            }
+        }
+    }
+
     /// Gets an immutable reference to the value stored in the entry.
     ///
     /// # Safety
@@ -484,9 +539,30 @@ impl<T> List<T> {
         }
     }
 
-    /// Clears the list, removing all entries.
+    /// Clears the list, removing all entries and properly dropping their values.
+    ///
+    /// This traverses the physical linked list from head to tail rather than relying
+    /// on `self.len`, ensuring all nodes are freed even if `len` is out of sync
+    /// (e.g., after internal `attach_last` calls that don't increment `len`).
     pub fn clear(&mut self) {
-        while self.remove_first().is_some() {}
+        // SAFETY: head is a valid sentinel pointer initialized in `construct`.
+        // We walk the physical list to avoid depending on `self.len` being accurate.
+        unsafe {
+            let mut current = (*self.head).next;
+            while !current.is_null() && current != self.tail {
+                let next = (*current).next;
+                // SAFETY: All non-sigil entries have initialized values. We must
+                // explicitly take the value to drop it, because MaybeUninit does
+                // not run Drop on its contents when the MaybeUninit itself is dropped.
+                let mut entry = Box::from_raw(current);
+                entry.take_value();
+                current = next;
+            }
+            // Re-link head directly to tail (empty list)
+            (*self.head).next = self.tail;
+            (*self.tail).prev = self.head;
+        }
+        self.len = 0;
     }
 }
 

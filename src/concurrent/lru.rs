@@ -396,20 +396,6 @@ where
         segment.remove(key)
     }
 
-    /// Checks if the cache contains a key.
-    ///
-    /// Note: This **does** update the entry's recency (moves to MRU position).
-    /// If you need a pure existence check without side effects, this isn't it.
-    pub fn contains_key<Q>(&self, key: &Q) -> bool
-    where
-        K: Borrow<Q>,
-        Q: ?Sized + Hash + Eq,
-    {
-        let idx = self.segment_index(key);
-        let mut segment = self.segments[idx].lock();
-        segment.get(key).is_some()
-    }
-
     /// Removes all entries from all segments.
     ///
     /// Acquires locks on each segment sequentially.
@@ -438,6 +424,131 @@ where
         // Record on the first segment (metrics are aggregated anyway)
         if let Some(segment) = self.segments.first() {
             segment.lock().record_miss(object_size);
+        }
+    }
+
+    /// Checks if the cache contains a key without promoting it.
+    ///
+    /// This is a pure existence check that does **not** update the entry's recency.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// if cache.contains(&"key".to_string()) {
+    ///     println!("Key exists!");
+    /// }
+    /// ```
+    pub fn contains<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Hash + Eq,
+    {
+        let idx = self.segment_index(key);
+        let segment = self.segments[idx].lock();
+        segment.contains(key)
+    }
+
+    /// Returns a clone of the value without updating the LRU order.
+    ///
+    /// Unlike [`get()`](Self::get), this does NOT move the entry to the front
+    /// or update any access metadata. Returns a cloned value because the
+    /// internal lock cannot be held across the return boundary.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let value = cache.peek(&"key".to_string());
+    /// ```
+    pub fn peek<Q>(&self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Hash + Eq,
+        V: Clone,
+    {
+        let idx = self.segment_index(key);
+        let segment = self.segments[idx].lock();
+        segment.peek(key).cloned()
+    }
+
+    /// Removes and returns the least recently used entry from the cache.
+    ///
+    /// Finds the segment with the globally oldest LRU candidate (lowest
+    /// `last_accessed` timestamp) and pops from that segment, ensuring
+    /// the returned entry is the true LRU candidate across all segments.
+    ///
+    /// # Concurrency Note
+    ///
+    /// This method uses a two-phase approach: first scanning all segments to find
+    /// the best candidate, then re-locking the winning segment to pop. Between
+    /// these phases, another thread may modify the cache (TOCTOU race). This is
+    /// inherent to the segmented design and means the returned entry may not be
+    /// the globally optimal candidate at the instant of removal. The method
+    /// remains safe — it will either return a valid entry or `None`.
+    ///
+    /// # Performance
+    ///
+    /// This method locks each segment sequentially during the scan phase
+    /// (O(segments) lock acquisitions), making it more expensive than
+    /// single-segment operations like `get()` or `put()`.
+    ///
+    /// # Returns
+    ///
+    /// - `Some((key, value))` if the cache was not empty
+    /// - `None` if the cache is empty
+    pub fn pop(&self) -> Option<(K, V)> {
+        // Find the segment with the oldest LRU candidate (lowest timestamp)
+        let mut best_idx = None;
+        let mut best_ts = u64::MAX;
+
+        for (i, segment) in self.segments.iter().enumerate() {
+            let guard = segment.lock();
+            if let Some(ts) = guard.peek_lru_timestamp() {
+                if ts < best_ts {
+                    best_ts = ts;
+                    best_idx = Some(i);
+                }
+            }
+        }
+
+        if let Some(idx) = best_idx {
+            let mut guard = self.segments[idx].lock();
+            guard.pop()
+        } else {
+            None
+        }
+    }
+
+    /// Removes and returns the most recently used entry from the cache.
+    ///
+    /// Internal method that finds the segment with the globally newest MRU
+    /// candidate (highest `last_accessed` timestamp) and pops from that segment.
+    ///
+    /// # Concurrency Note
+    ///
+    /// Uses the same two-phase scan approach as [`pop()`](Self::pop). See its
+    /// documentation for details on the inherent TOCTOU race and performance
+    /// characteristics.
+    #[allow(dead_code)]
+    pub(crate) fn pop_r(&self) -> Option<(K, V)> {
+        // Find the segment with the newest MRU candidate (highest timestamp)
+        let mut best_idx = None;
+        let mut best_ts = 0u64;
+
+        for (i, segment) in self.segments.iter().enumerate() {
+            let guard = segment.lock();
+            if let Some(ts) = guard.peek_mru_timestamp() {
+                if ts > best_ts || best_idx.is_none() {
+                    best_ts = ts;
+                    best_idx = Some(i);
+                }
+            }
+        }
+
+        if let Some(idx) = best_idx {
+            let mut guard = self.segments[idx].lock();
+            guard.pop_r()
+        } else {
+            None
         }
     }
 }
@@ -592,8 +703,8 @@ mod tests {
 
         cache.put("exists".to_string(), 1);
 
-        assert!(cache.contains_key(&"exists".to_string()));
-        assert!(!cache.contains_key(&"missing".to_string()));
+        assert!(cache.contains(&"exists".to_string()));
+        assert!(!cache.contains(&"missing".to_string()));
     }
 
     #[test]
@@ -704,7 +815,7 @@ mod tests {
         cache.put("d".to_string(), 4);
 
         assert!(cache.len() <= 48);
-        assert!(cache.contains_key(&"d".to_string()));
+        assert!(cache.contains(&"d".to_string()));
     }
 
     #[test]
@@ -735,8 +846,8 @@ mod tests {
         // Add a new item
         cache.put("d".to_string(), 4);
 
-        assert!(cache.contains_key(&"a".to_string()));
-        assert!(cache.contains_key(&"d".to_string()));
+        assert!(cache.contains(&"a".to_string()));
+        assert!(cache.contains(&"d".to_string()));
     }
 
     #[test]
@@ -774,7 +885,7 @@ mod tests {
         assert_eq!(cache.len(), 0);
         assert_eq!(cache.get(&"missing".to_string()), None);
         assert_eq!(cache.remove(&"missing".to_string()), None);
-        assert!(!cache.contains_key(&"missing".to_string()));
+        assert!(!cache.contains(&"missing".to_string()));
 
         let result = cache.get_with(&"missing".to_string(), |v: &i32| *v);
         assert_eq!(result, None);
@@ -802,7 +913,7 @@ mod tests {
         // Test with borrowed key
         let key_str = "test_key";
         assert_eq!(cache.get(key_str), Some(42));
-        assert!(cache.contains_key(key_str));
+        assert!(cache.contains(key_str));
         assert_eq!(cache.remove(key_str), Some(42));
     }
 
@@ -812,5 +923,145 @@ mod tests {
             ConcurrentLruCache::init(make_config(100, 16), None);
 
         assert_eq!(cache.algorithm_name(), "ConcurrentLRU");
+    }
+
+    #[test]
+    fn test_contains_non_promoting() {
+        let cache: ConcurrentLruCache<String, i32> =
+            ConcurrentLruCache::init(make_config(100, 16), None);
+
+        cache.put("a".to_string(), 1);
+        cache.put("b".to_string(), 2);
+
+        // contains() should check without promoting
+        assert!(cache.contains(&"a".to_string()));
+        assert!(cache.contains(&"b".to_string()));
+        assert!(!cache.contains(&"c".to_string()));
+    }
+
+    #[test]
+    fn test_pop_returns_entry() {
+        let cache: ConcurrentLruCache<String, i32> =
+            ConcurrentLruCache::init(make_config(100, 16), None);
+
+        cache.put("a".to_string(), 1);
+        cache.put("b".to_string(), 2);
+
+        let initial_len = cache.len();
+
+        // Pop should return Some entry
+        let result = cache.pop();
+        assert!(result.is_some());
+
+        let (key, _value) = result.unwrap();
+        assert!(key == "a" || key == "b"); // Could be either due to segmentation
+
+        // Length should decrease
+        assert_eq!(cache.len(), initial_len - 1);
+    }
+
+    #[test]
+    fn test_pop_empty_cache() {
+        let cache: ConcurrentLruCache<String, i32> =
+            ConcurrentLruCache::init(make_config(100, 16), None);
+
+        assert!(cache.pop().is_none());
+    }
+
+    #[test]
+    fn test_pop_r_returns_entry() {
+        let cache: ConcurrentLruCache<String, i32> =
+            ConcurrentLruCache::init(make_config(100, 16), None);
+
+        cache.put("a".to_string(), 1);
+        cache.put("b".to_string(), 2);
+
+        let initial_len = cache.len();
+
+        // Pop_r should return Some entry
+        let result = cache.pop_r();
+        assert!(result.is_some());
+
+        let (key, _value) = result.unwrap();
+        assert!(key == "a" || key == "b"); // Could be either due to segmentation
+
+        // Length should decrease
+        assert_eq!(cache.len(), initial_len - 1);
+    }
+
+    #[test]
+    fn test_pop_r_empty_cache() {
+        let cache: ConcurrentLruCache<String, i32> =
+            ConcurrentLruCache::init(make_config(100, 16), None);
+
+        assert!(cache.pop_r().is_none());
+    }
+
+    #[test]
+    fn test_pop_all_entries() {
+        let cache: ConcurrentLruCache<String, i32> =
+            ConcurrentLruCache::init(make_config(100, 16), None);
+
+        cache.put("a".to_string(), 1);
+        cache.put("b".to_string(), 2);
+        cache.put("c".to_string(), 3);
+
+        let mut count = 0;
+        while cache.pop().is_some() {
+            count += 1;
+        }
+
+        assert_eq!(count, 3);
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn test_pop_pop_r_comprehensive_interleaved() {
+        // Use segments: 1 for deterministic LRU ordering
+        let cache: ConcurrentLruCache<String, i32> =
+            ConcurrentLruCache::init(make_config(100, 1), None);
+
+        // Initial state: a(LRU) -> b -> c -> d -> e(MRU)
+        cache.put("a".to_string(), 1);
+        cache.put("b".to_string(), 2);
+        cache.put("c".to_string(), 3);
+        cache.put("d".to_string(), 4);
+        cache.put("e".to_string(), 5);
+
+        // pop LRU: removes "a"
+        assert_eq!(cache.pop(), Some(("a".to_string(), 1)));
+        assert_eq!(cache.len(), 4);
+
+        // Access "b" makes it MRU: c(LRU) -> d -> e -> b(MRU)
+        assert_eq!(cache.get(&"b".to_string()), Some(2));
+
+        // pop_r MRU: removes "b"
+        assert_eq!(cache.pop_r(), Some(("b".to_string(), 2)));
+        assert_eq!(cache.len(), 3);
+
+        // Put new entry "f": c(LRU) -> d -> e -> f(MRU)
+        cache.put("f".to_string(), 6);
+        assert_eq!(cache.len(), 4);
+
+        // pop LRU: removes "c"
+        assert_eq!(cache.pop(), Some(("c".to_string(), 3)));
+
+        // Remove "e" by key: d(LRU) -> f(MRU)
+        assert_eq!(cache.remove(&"e".to_string()), Some(5));
+        assert_eq!(cache.len(), 2);
+
+        // Access "d" makes it MRU: f(LRU) -> d(MRU)
+        assert_eq!(cache.get(&"d".to_string()), Some(4));
+
+        // pop_r returns "d" (MRU)
+        assert_eq!(cache.pop_r(), Some(("d".to_string(), 4)));
+
+        // pop returns "f" (only remaining)
+        assert_eq!(cache.pop(), Some(("f".to_string(), 6)));
+
+        // Cache is empty
+        assert!(cache.is_empty());
+        assert_eq!(cache.pop(), None);
+        assert_eq!(cache.pop_r(), None);
     }
 }

@@ -113,6 +113,30 @@ impl SlruCacheMetrics {
         self.protected_evictions += 1;
     }
 
+    /// Records a removal (explicit pop/remove) from the probationary segment.
+    ///
+    /// Unlike `record_probationary_eviction`, this does **not** increment the
+    /// eviction counter. Use this when the user explicitly removes an entry
+    /// via `pop()`, `pop_r()`, or `remove()`.
+    ///
+    /// # Arguments
+    /// * `removed_size` - Size of the removed object (in bytes)
+    pub fn record_probationary_removal(&mut self, removed_size: u64) {
+        self.core.record_removal(removed_size);
+    }
+
+    /// Records a removal (explicit pop/remove) from the protected segment.
+    ///
+    /// Unlike `record_protected_eviction`, this does **not** increment the
+    /// eviction counter. Use this when the user explicitly removes an entry
+    /// via `pop()`, `pop_r()`, or `remove()`.
+    ///
+    /// # Arguments
+    /// * `removed_size` - Size of the removed object (in bytes)
+    pub fn record_protected_removal(&mut self, removed_size: u64) {
+        self.core.record_removal(removed_size);
+    }
+
     /// Updates the segment sizes
     ///
     /// # Arguments

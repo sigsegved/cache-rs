@@ -14,31 +14,32 @@
 //!
 //! # Memory Layout
 //!
-//! Each entry has the following overhead:
+//! Each entry consists of:
 //! - `key: K` - User's key type
 //! - `value: V` - User's value type  
+//! - `metadata: CacheMetadata<M>` - Contains size, timestamps, and algorithm-specific data
+//!
+//! `CacheMetadata<M>` contains:
 //! - `size: u64` - 8 bytes (content size tracking)
 //! - `last_accessed: u64` - 8 bytes (timestamps for monitoring)
 //! - `create_time: u64` - 8 bytes (timestamps for TTL)
-//! - `metadata: Option<M>` - 0-24 bytes depending on algorithm
-//!
-//! Base overhead (all algorithms): ~24 bytes + key + value + optional metadata
+//! - `algorithm: M` - Algorithm-specific metadata (0-16 bytes depending on algorithm)
 //!
 //! # Usage Examples
 //!
 //! ```ignore
-//! use cache_rs::entry::CacheEntry;
+//! use cache_rs::entry::{CacheEntry, CacheMetadata};
 //!
 //! // Simple entry without algorithm-specific metadata (e.g., for LRU)
-//! let entry: CacheEntry<String, Vec<u8>, ()> = CacheEntry::new(
+//! let entry: CacheEntry<String, Vec<u8>> = CacheEntry::new(
 //!     "image.png".to_string(),
 //!     vec![0u8; 1024],
 //!     1024, // size in bytes
 //! );
 //!
 //! // Entry with frequency metadata (e.g., for LFU)
-//! use cache_rs::meta::LfuMeta;
-//! let entry = CacheEntry::with_metadata(
+//! use cache_rs::lfu::LfuMeta;
+//! let entry = CacheEntry::with_algorithm_metadata(
 //!     "key".to_string(),
 //!     "value".to_string(),
 //!     5, // size
@@ -56,21 +57,144 @@ extern crate alloc;
 
 use core::fmt;
 
-/// Unified cache entry holding key, value, timestamps, and algorithm-specific metadata.
+/// Metadata associated with a cache entry.
+///
+/// This struct holds common cache metadata (size, timestamps) plus algorithm-specific
+/// data via the `M` type parameter. Use `()` for algorithms that don't need extra
+/// per-entry metadata (e.g., LRU).
+///
+/// # Type Parameter
+///
+/// - `M`: Algorithm-specific metadata type (e.g., `LfuMeta`, `GdsfMeta`)
+///
+/// # Examples
+///
+/// ```
+/// use cache_rs::entry::CacheMetadata;
+///
+/// // Metadata without algorithm-specific data (for LRU)
+/// let meta: CacheMetadata<()> = CacheMetadata::new(1024);
+/// assert_eq!(meta.size, 1024);
+/// ```
+pub struct CacheMetadata<M = ()> {
+    /// Size of content this entry represents (user-provided).
+    /// For count-based caches, use 1.
+    /// For size-aware caches, use actual bytes (memory, disk, etc.)
+    pub size: u64,
+
+    /// Last access timestamp (nanos since epoch or monotonic clock).
+    pub last_accessed: u64,
+
+    /// Creation timestamp (nanos since epoch or monotonic clock).
+    pub create_time: u64,
+
+    /// Algorithm-specific metadata (frequency, priority, segment, etc.)
+    pub algorithm: M,
+}
+
+impl<M: Default> CacheMetadata<M> {
+    /// Creates new cache metadata with the specified size.
+    ///
+    /// The algorithm-specific metadata is initialized to its default value.
+    ///
+    /// # Arguments
+    ///
+    /// * `size` - Size of the content this entry represents
+    #[inline]
+    pub fn new(size: u64) -> Self {
+        let now = Self::now_nanos();
+        Self {
+            size,
+            last_accessed: now,
+            create_time: now,
+            algorithm: M::default(),
+        }
+    }
+}
+
+impl<M> CacheMetadata<M> {
+    /// Creates new cache metadata with the specified size and algorithm metadata.
+    ///
+    /// # Arguments
+    ///
+    /// * `size` - Size of the content this entry represents
+    /// * `algorithm` - Algorithm-specific metadata
+    #[inline]
+    pub fn with_algorithm(size: u64, algorithm: M) -> Self {
+        let now = Self::now_nanos();
+        Self {
+            size,
+            last_accessed: now,
+            create_time: now,
+            algorithm,
+        }
+    }
+
+    /// Updates the last_accessed timestamp to the current time.
+    #[inline]
+    pub fn touch(&mut self) {
+        self.last_accessed = Self::now_nanos();
+    }
+
+    /// Gets the age of this entry in nanoseconds.
+    #[inline]
+    pub fn age_nanos(&self) -> u64 {
+        Self::now_nanos().saturating_sub(self.create_time)
+    }
+
+    /// Gets the time since last access in nanoseconds.
+    #[inline]
+    pub fn idle_nanos(&self) -> u64 {
+        Self::now_nanos().saturating_sub(self.last_accessed)
+    }
+
+    /// Returns the current time in nanoseconds.
+    #[cfg(feature = "std")]
+    #[inline]
+    fn now_nanos() -> u64 {
+        extern crate std;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0)
+    }
+
+    /// Returns 0 in no_std environments where system time is not available.
+    #[cfg(not(feature = "std"))]
+    #[inline]
+    fn now_nanos() -> u64 {
+        0
+    }
+}
+
+impl<M: Clone> Clone for CacheMetadata<M> {
+    fn clone(&self) -> Self {
+        Self {
+            size: self.size,
+            last_accessed: self.last_accessed,
+            create_time: self.create_time,
+            algorithm: self.algorithm.clone(),
+        }
+    }
+}
+
+impl<M: fmt::Debug> fmt::Debug for CacheMetadata<M> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CacheMetadata")
+            .field("size", &self.size)
+            .field("last_accessed", &self.last_accessed)
+            .field("create_time", &self.create_time)
+            .field("algorithm", &self.algorithm)
+            .finish()
+    }
+}
+
+/// Unified cache entry holding key, value, and metadata.
 ///
 /// The `M` parameter allows each algorithm to store its own metadata
 /// without affecting the core entry structure. Use `()` for algorithms
 /// that don't need extra per-entry metadata (e.g., LRU).
-///
-/// # Design Decisions
-///
-/// - `size`: User-provided size of content this entry represents. Could be
-///   memory bytes, disk bytes, or any unit. Use 1 for count-based caches.
-/// - `last_accessed`: Atomic for lock-free monitoring and metrics. Can be
-///   updated during reads without requiring a write lock.
-/// - `create_time`: Atomic for consistency. Useful for TTL, debugging, metrics.
-/// - `metadata`: Optional algorithm-specific data. `None` for simple algorithms
-///   like LRU that don't need extra per-entry state.
 ///
 /// # Examples
 ///
@@ -78,10 +202,10 @@ use core::fmt;
 /// use cache_rs::entry::CacheEntry;
 ///
 /// // Create a simple entry for count-based caching
-/// let entry: CacheEntry<&str, i32, ()> = CacheEntry::new("key", 42, 1);
+/// let entry: CacheEntry<&str, i32> = CacheEntry::new("key", 42, 1);
 /// assert_eq!(entry.key, "key");
 /// assert_eq!(entry.value, 42);
-/// assert_eq!(entry.size, 1);
+/// assert_eq!(entry.metadata.size, 1);
 /// ```
 pub struct CacheEntry<K, V, M = ()> {
     /// The cached key
@@ -90,23 +214,11 @@ pub struct CacheEntry<K, V, M = ()> {
     /// The cached value (or reference/handle to external storage)
     pub value: V,
 
-    /// Size of content this entry represents (user-provided).
-    /// For count-based caches, use 1.
-    /// For size-aware caches, use actual bytes (memory, disk, etc.)
-    pub size: u64,
-
-    /// Last access timestamp (nanos since epoch or monotonic clock).
-    last_accessed: u64,
-
-    /// Creation timestamp (nanos since epoch or monotonic clock).
-    create_time: u64,
-
-    /// Algorithm-specific metadata (frequency, priority, segment, etc.).
-    /// `None` for algorithms that don't need per-entry metadata (e.g., LRU).
-    pub metadata: Option<M>,
+    /// Cache metadata including size, timestamps, and algorithm-specific data
+    pub metadata: CacheMetadata<M>,
 }
 
-impl<K, V, M> CacheEntry<K, V, M> {
+impl<K, V, M: Default> CacheEntry<K, V, M> {
     /// Creates a new cache entry without algorithm-specific metadata.
     ///
     /// Use this constructor for algorithms like LRU that don't need
@@ -124,25 +236,23 @@ impl<K, V, M> CacheEntry<K, V, M> {
     /// use cache_rs::entry::CacheEntry;
     ///
     /// // Count-based cache entry
-    /// let entry: CacheEntry<&str, String, ()> = CacheEntry::new("user:123", "Alice".to_string(), 1);
+    /// let entry: CacheEntry<&str, String> = CacheEntry::new("user:123", "Alice".to_string(), 1);
     ///
     /// // Size-aware cache entry
     /// let data = vec![0u8; 1024];
-    /// let entry: CacheEntry<&str, Vec<u8>, ()> = CacheEntry::new("file.bin", data, 1024);
+    /// let entry: CacheEntry<&str, Vec<u8>> = CacheEntry::new("file.bin", data, 1024);
     /// ```
     #[inline]
     pub fn new(key: K, value: V, size: u64) -> Self {
-        let now = Self::now_nanos();
         Self {
             key,
             value,
-            size,
-            last_accessed: now,
-            create_time: now,
-            metadata: None,
+            metadata: CacheMetadata::new(size),
         }
     }
+}
 
+impl<K, V, M> CacheEntry<K, V, M> {
     /// Creates a new cache entry with algorithm-specific metadata.
     ///
     /// Use this constructor for algorithms like LFU, LFUDA, SLRU, or GDSF
@@ -153,142 +263,53 @@ impl<K, V, M> CacheEntry<K, V, M> {
     /// * `key` - The cache key
     /// * `value` - The cached value
     /// * `size` - Size of the content this entry represents (use 1 for count-based caches)
-    /// * `metadata` - Algorithm-specific metadata
+    /// * `algorithm_meta` - Algorithm-specific metadata
     ///
     /// # Examples
     ///
     /// ```
     /// use cache_rs::entry::CacheEntry;
-    /// use cache_rs::meta::LfuMeta;
+    /// use cache_rs::lfu::LfuMeta;
     ///
-    /// let entry = CacheEntry::with_metadata(
+    /// let entry = CacheEntry::with_algorithm_metadata(
     ///     "key".to_string(),
     ///     vec![1, 2, 3],
     ///     3,
     ///     LfuMeta { frequency: 0 },
     /// );
-    /// assert!(entry.metadata.is_some());
+    /// assert_eq!(entry.metadata.algorithm.frequency, 0);
     /// ```
     #[inline]
-    pub fn with_metadata(key: K, value: V, size: u64, metadata: M) -> Self {
-        let now = Self::now_nanos();
+    pub fn with_algorithm_metadata(key: K, value: V, size: u64, algorithm_meta: M) -> Self {
         Self {
             key,
             value,
-            size,
-            last_accessed: now,
-            create_time: now,
-            metadata: Some(metadata),
+            metadata: CacheMetadata::with_algorithm(size, algorithm_meta),
         }
     }
 
     /// Updates the last_accessed timestamp to the current time.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use cache_rs::entry::CacheEntry;
-    ///
-    /// let mut entry: CacheEntry<&str, i32, ()> = CacheEntry::new("key", 42, 1);
-    /// let old_access_time = entry.last_accessed();
-    ///
-    /// // Simulate some time passing (in real code, time would actually pass)
-    /// entry.touch();
-    ///
-    /// // On systems with std, the access time would be updated
-    /// ```
     #[inline]
     pub fn touch(&mut self) {
-        self.last_accessed = Self::now_nanos();
-    }
-
-    /// Gets the last_accessed timestamp in nanoseconds.
-    ///
-    /// Returns nanoseconds since UNIX epoch when the `std` feature is enabled,
-    /// or 0 in `no_std` environments.
-    #[inline]
-    pub fn last_accessed(&self) -> u64 {
-        self.last_accessed
-    }
-
-    /// Gets the creation timestamp in nanoseconds.
-    ///
-    /// Returns nanoseconds since UNIX epoch when the `std` feature is enabled,
-    /// or 0 in `no_std` environments.
-    #[inline]
-    pub fn create_time(&self) -> u64 {
-        self.create_time
+        self.metadata.touch();
     }
 
     /// Gets the age of this entry in nanoseconds.
-    ///
-    /// Age is calculated as `now - create_time`. Returns 0 in `no_std`
-    /// environments where time is not available.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use cache_rs::entry::CacheEntry;
-    ///
-    /// let entry: CacheEntry<&str, i32, ()> = CacheEntry::new("key", 42, 1);
-    /// let age = entry.age_nanos();
-    /// // Age should be very small since we just created the entry
-    /// ```
     #[inline]
     pub fn age_nanos(&self) -> u64 {
-        Self::now_nanos().saturating_sub(self.create_time())
+        self.metadata.age_nanos()
     }
 
     /// Gets the time since last access in nanoseconds.
-    ///
-    /// Idle time is calculated as `now - last_accessed`. Returns 0 in `no_std`
-    /// environments where time is not available.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use cache_rs::entry::CacheEntry;
-    ///
-    /// let entry: CacheEntry<&str, i32, ()> = CacheEntry::new("key", 42, 1);
-    /// let idle = entry.idle_nanos();
-    /// // Idle time should be very small since we just created the entry
-    /// ```
     #[inline]
     pub fn idle_nanos(&self) -> u64 {
-        Self::now_nanos().saturating_sub(self.last_accessed())
+        self.metadata.idle_nanos()
     }
 
-    /// Returns a mutable reference to the metadata.
-    ///
-    /// Returns `None` if the entry was created without metadata.
+    /// Returns the size of the cached content.
     #[inline]
-    pub fn metadata_mut(&mut self) -> Option<&mut M> {
-        self.metadata.as_mut()
-    }
-
-    /// Returns the current time in nanoseconds.
-    ///
-    /// With the `std` feature enabled, returns nanoseconds since UNIX epoch.
-    /// In `no_std` environments, returns 0 (users can manually set timestamps).
-    #[cfg(feature = "std")]
-    #[inline]
-    fn now_nanos() -> u64 {
-        extern crate std;
-        use std::time::{SystemTime, UNIX_EPOCH};
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0)
-    }
-
-    /// Returns 0 in no_std environments where system time is not available.
-    ///
-    /// Users can manually track and set timestamps in no_std contexts by
-    /// directly accessing the atomic fields if needed.
-    #[cfg(not(feature = "std"))]
-    #[inline]
-    fn now_nanos() -> u64 {
-        0 // No clock in no_std; users can call touch() with custom time
+    pub fn size(&self) -> u64 {
+        self.metadata.size
     }
 }
 
@@ -297,9 +318,6 @@ impl<K: Clone, V: Clone, M: Clone> Clone for CacheEntry<K, V, M> {
         Self {
             key: self.key.clone(),
             value: self.value.clone(),
-            size: self.size,
-            last_accessed: self.last_accessed,
-            create_time: self.create_time,
             metadata: self.metadata.clone(),
         }
     }
@@ -310,9 +328,6 @@ impl<K: fmt::Debug, V: fmt::Debug, M: fmt::Debug> fmt::Debug for CacheEntry<K, V
         f.debug_struct("CacheEntry")
             .field("key", &self.key)
             .field("value", &self.value)
-            .field("size", &self.size)
-            .field("last_accessed", &self.last_accessed)
-            .field("create_time", &self.create_time)
             .field("metadata", &self.metadata)
             .finish()
     }
@@ -331,57 +346,57 @@ mod tests {
 
     #[test]
     fn test_new_entry() {
-        let entry: CacheEntry<&str, i32, ()> = CacheEntry::new("key", 42, 1);
+        let entry: CacheEntry<&str, i32> = CacheEntry::new("key", 42, 1);
         assert_eq!(entry.key, "key");
         assert_eq!(entry.value, 42);
-        assert_eq!(entry.size, 1);
-        assert!(entry.metadata.is_none());
+        assert_eq!(entry.metadata.size, 1);
     }
 
     #[test]
-    fn test_entry_with_metadata() {
-        #[derive(Debug, Clone, PartialEq)]
+    fn test_entry_with_algorithm_metadata() {
+        #[derive(Debug, Clone, PartialEq, Default)]
         struct TestMeta {
             frequency: u64,
         }
 
-        let entry = CacheEntry::with_metadata("key", "value", 5, TestMeta { frequency: 10 });
+        let entry =
+            CacheEntry::with_algorithm_metadata("key", "value", 5, TestMeta { frequency: 10 });
         assert_eq!(entry.key, "key");
         assert_eq!(entry.value, "value");
-        assert_eq!(entry.size, 5);
-        assert!(entry.metadata.is_some());
-        assert_eq!(entry.metadata.unwrap().frequency, 10);
+        assert_eq!(entry.metadata.size, 5);
+        assert_eq!(entry.metadata.algorithm.frequency, 10);
     }
 
     #[test]
     fn test_touch_updates_last_accessed() {
-        let mut entry: CacheEntry<&str, i32, ()> = CacheEntry::new("key", 42, 1);
-        let initial = entry.last_accessed();
+        let mut entry: CacheEntry<&str, i32> = CacheEntry::new("key", 42, 1);
+        let initial = entry.metadata.last_accessed;
         entry.touch();
-        let updated = entry.last_accessed();
+        let updated = entry.metadata.last_accessed;
         // In no_std mode both will be 0, in std mode updated >= initial
         assert!(updated >= initial);
     }
 
     #[test]
     fn test_clone_entry() {
-        #[derive(Debug, Clone, PartialEq)]
+        #[derive(Debug, Clone, PartialEq, Default)]
         struct TestMeta {
             value: u64,
         }
 
-        let entry = CacheEntry::with_metadata("key", vec![1, 2, 3], 3, TestMeta { value: 100 });
+        let entry =
+            CacheEntry::with_algorithm_metadata("key", vec![1, 2, 3], 3, TestMeta { value: 100 });
         let cloned = entry.clone();
 
         assert_eq!(cloned.key, entry.key);
         assert_eq!(cloned.value, entry.value);
-        assert_eq!(cloned.size, entry.size);
-        assert_eq!(cloned.metadata, entry.metadata);
+        assert_eq!(cloned.metadata.size, entry.metadata.size);
+        assert_eq!(cloned.metadata.algorithm, entry.metadata.algorithm);
     }
 
     #[test]
     fn test_age_and_idle() {
-        let mut entry: CacheEntry<&str, i32, ()> = CacheEntry::new("key", 42, 1);
+        let mut entry: CacheEntry<&str, i32> = CacheEntry::new("key", 42, 1);
 
         // In no_std mode, timestamps will be 0
         // In std mode, age/idle should be small (just created)
@@ -394,30 +409,14 @@ mod tests {
     }
 
     #[test]
-    fn test_metadata_mut() {
-        #[derive(Debug, Clone)]
-        struct TestMeta {
-            counter: u64,
-        }
-
-        let mut entry = CacheEntry::with_metadata("key", "value", 1, TestMeta { counter: 0 });
-
-        if let Some(meta) = entry.metadata_mut() {
-            meta.counter += 1;
-        }
-
-        assert_eq!(entry.metadata.as_ref().unwrap().counter, 1);
-    }
-
-    #[test]
-    fn test_entry_without_metadata_returns_none() {
-        let mut entry: CacheEntry<&str, i32, ()> = CacheEntry::new("key", 42, 1);
-        assert!(entry.metadata_mut().is_none());
+    fn test_metadata_size() {
+        let meta: CacheMetadata<()> = CacheMetadata::new(1024);
+        assert_eq!(meta.size, 1024);
     }
 
     #[test]
     fn test_debug_impl() {
-        let entry: CacheEntry<&str, i32, ()> = CacheEntry::new("key", 42, 1);
+        let entry: CacheEntry<&str, i32> = CacheEntry::new("key", 42, 1);
         let debug_str = format!("{:?}", entry);
         assert!(debug_str.contains("CacheEntry"));
         assert!(debug_str.contains("key"));

@@ -349,15 +349,130 @@ where
         segment.pop(key)
     }
 
-    /// Returns `true` if the cache contains the specified key.
-    pub fn contains_key<Q>(&self, key: &Q) -> bool
+    /// Checks if the cache contains a key without updating priority.
+    ///
+    /// This is a pure existence check that does **not** update the entry's
+    /// priority or frequency.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// if cache.contains(&"key".to_string()) {
+    ///     println!("Key exists!");
+    /// }
+    /// ```
+    pub fn contains<Q>(&self, key: &Q) -> bool
     where
-        K: Borrow<Q> + Clone,
+        K: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
         let idx = self.segment_index(key);
         let segment = self.segments[idx].lock();
-        segment.contains_key(key)
+        segment.contains(key)
+    }
+
+    /// Returns a clone of the value without updating priority or access metadata.
+    ///
+    /// Unlike [`get()`](Self::get), this does NOT recalculate the entry's GDSF
+    /// priority or change its position. Returns a cloned value because the
+    /// internal lock cannot be held across the return boundary.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let value = cache.peek(&"key".to_string());
+    /// ```
+    pub fn peek<Q>(&self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: ?Sized + Hash + Eq,
+        V: Clone,
+    {
+        let idx = self.segment_index(key);
+        let segment = self.segments[idx].lock();
+        segment.peek(key).cloned()
+    }
+
+    /// Removes and returns the lowest priority entry from the cache.
+    ///
+    /// Finds the segment with the globally lowest minimum priority and pops
+    /// the eviction candidate from that segment. GDSF's aging mechanism
+    /// is applied within the segment.
+    ///
+    /// # Concurrency Note
+    ///
+    /// This method uses a two-phase approach: first scanning all segments to find
+    /// the best candidate, then re-locking the winning segment to pop. Between
+    /// these phases, another thread may modify the cache (TOCTOU race). This is
+    /// inherent to the segmented design and means the returned entry may not be
+    /// the globally optimal candidate at the instant of removal. The method
+    /// remains safe — it will either return a valid entry or `None`.
+    ///
+    /// # Performance
+    ///
+    /// This method locks each segment sequentially during the scan phase
+    /// (O(segments) lock acquisitions), making it more expensive than
+    /// single-segment operations like `get()` or `put()`.
+    ///
+    /// # Returns
+    ///
+    /// - `Some((key, value))` if the cache was not empty
+    /// - `None` if the cache is empty
+    pub fn pop(&self) -> Option<(K, V)> {
+        // Find the segment with the lowest priority key
+        let mut best_idx = None;
+        let mut best_priority = u64::MAX;
+
+        for (i, segment) in self.segments.iter().enumerate() {
+            let guard = segment.lock();
+            if let Some(priority_key) = guard.peek_min_priority_key() {
+                if priority_key < best_priority {
+                    best_priority = priority_key;
+                    best_idx = Some(i);
+                }
+            }
+        }
+
+        if let Some(idx) = best_idx {
+            let mut guard = self.segments[idx].lock();
+            guard.pop_eviction_candidate()
+        } else {
+            None
+        }
+    }
+
+    /// Removes and returns the highest priority entry from the cache.
+    ///
+    /// Internal method that finds the segment with the globally highest maximum
+    /// priority and pops the highest priority entry from that segment.
+    ///
+    /// # Concurrency Note
+    ///
+    /// Uses the same two-phase scan approach as [`pop()`](Self::pop). See its
+    /// documentation for details on the inherent TOCTOU race and performance
+    /// characteristics.
+    #[allow(dead_code)]
+    pub(crate) fn pop_r(&self) -> Option<(K, V)> {
+        // Find the segment with the highest priority key
+        let mut best_idx = None;
+        let mut best_priority = 0u64;
+
+        for (i, segment) in self.segments.iter().enumerate() {
+            let guard = segment.lock();
+            if let Some(priority_key) = guard.peek_max_priority_key() {
+                if priority_key > best_priority || best_idx.is_none() {
+                    best_priority = priority_key;
+                    best_idx = Some(i);
+                }
+            }
+        }
+
+        if let Some(idx) = best_idx {
+            let mut guard = self.segments[idx].lock();
+            guard.pop_highest_priority()
+        } else {
+            None
+        }
     }
 
     /// Clears all entries from the cache.
@@ -554,8 +669,8 @@ mod tests {
 
         cache.put("exists".to_string(), 1, 100);
 
-        assert!(cache.contains_key(&"exists".to_string()));
-        assert!(!cache.contains_key(&"missing".to_string()));
+        assert!(cache.contains(&"exists".to_string()));
+        assert!(!cache.contains(&"missing".to_string()));
     }
 
     #[test]
@@ -639,7 +754,7 @@ mod tests {
         assert_eq!(cache.len(), 0);
         assert_eq!(cache.get(&"missing".to_string()), None);
         assert_eq!(cache.remove(&"missing".to_string()), None);
-        assert!(!cache.contains_key(&"missing".to_string()));
+        assert!(!cache.contains(&"missing".to_string()));
     }
 
     #[test]
@@ -652,7 +767,7 @@ mod tests {
         // Test with borrowed key
         let key_str = "test_key";
         assert_eq!(cache.get(key_str), Some(42));
-        assert!(cache.contains_key(key_str));
+        assert!(cache.contains(key_str));
         assert_eq!(cache.remove(key_str), Some(42));
     }
 
@@ -694,5 +809,159 @@ mod tests {
 
         // Frequently accessed small items should have good priority
         assert!(!cache.is_empty());
+    }
+
+    #[test]
+    fn test_contains_non_promoting() {
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::init(make_config(10000, 16), None);
+
+        cache.put("a".to_string(), 1, 100);
+        cache.put("b".to_string(), 2, 100);
+
+        // contains() should check without updating priority
+        assert!(cache.contains(&"a".to_string()));
+        assert!(cache.contains(&"b".to_string()));
+        assert!(!cache.contains(&"c".to_string()));
+    }
+
+    #[test]
+    fn test_pop_returns_entry() {
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::init(make_config(10000, 16), None);
+
+        cache.put("a".to_string(), 1, 100);
+        cache.put("b".to_string(), 2, 100);
+
+        let initial_len = cache.len();
+
+        // Pop should return Some entry
+        let result = cache.pop();
+        assert!(result.is_some());
+
+        let (key, _value) = result.unwrap();
+        assert!(key == "a" || key == "b"); // Could be either due to segmentation
+
+        // Length should decrease
+        assert_eq!(cache.len(), initial_len - 1);
+    }
+
+    #[test]
+    fn test_pop_empty_cache() {
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::init(make_config(10000, 16), None);
+
+        assert!(cache.pop().is_none());
+    }
+
+    #[test]
+    fn test_pop_r_returns_entry() {
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::init(make_config(10000, 16), None);
+
+        cache.put("a".to_string(), 1, 100);
+        cache.put("b".to_string(), 2, 100);
+
+        let initial_len = cache.len();
+
+        // Pop_r should return Some entry
+        let result = cache.pop_r();
+        assert!(result.is_some());
+
+        let (key, _value) = result.unwrap();
+        assert!(key == "a" || key == "b"); // Could be either due to segmentation
+
+        // Length should decrease
+        assert_eq!(cache.len(), initial_len - 1);
+    }
+
+    #[test]
+    fn test_pop_r_empty_cache() {
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::init(make_config(10000, 16), None);
+
+        assert!(cache.pop_r().is_none());
+    }
+
+    #[test]
+    fn test_pop_all_entries() {
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::init(make_config(10000, 16), None);
+
+        cache.put("a".to_string(), 1, 100);
+        cache.put("b".to_string(), 2, 100);
+        cache.put("c".to_string(), 3, 100);
+
+        let mut count = 0;
+        while cache.pop().is_some() {
+            count += 1;
+        }
+
+        assert_eq!(count, 3);
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn test_pop_pop_r_comprehensive_interleaved() {
+        // Use segments: 1 for deterministic ordering
+        let cache: ConcurrentGdsfCache<String, i32> =
+            ConcurrentGdsfCache::init(make_config(10000, 1), None);
+
+        // GDSF priority = (frequency / size) + global_age
+        // Insert entries with different sizes
+        cache.put("a".to_string(), 1, 100); // large
+        cache.put("b".to_string(), 2, 10); // small
+        cache.put("c".to_string(), 3, 50); // medium
+        cache.put("d".to_string(), 4, 10); // small
+        cache.put("e".to_string(), 5, 200); // very large
+
+        // Access some entries to differentiate priorities
+        cache.get(&"b".to_string()); // bump b frequency (small size = high priority)
+        cache.get(&"b".to_string());
+        cache.get(&"d".to_string()); // bump d frequency (small size = high priority)
+
+        // pop() removes lowest priority (likely "e" - large size, low frequency)
+        let popped = cache.pop();
+        assert!(popped.is_some());
+        assert_eq!(cache.len(), 4);
+
+        // pop_r() removes highest priority (likely "b" - small size, high freq)
+        let popped_r = cache.pop_r();
+        assert!(popped_r.is_some());
+        assert_eq!(cache.len(), 3);
+
+        // Put new entry
+        cache.put("f".to_string(), 6, 30);
+        assert_eq!(cache.len(), 4);
+
+        // Access "f" to increase its priority
+        cache.get(&"f".to_string());
+
+        // pop() removes lowest priority
+        let popped2 = cache.pop();
+        assert!(popped2.is_some());
+        assert_eq!(cache.len(), 3);
+
+        // Remove by key
+        let removed = cache.remove(&"a".to_string());
+        // "a" may have been popped already
+        if removed.is_some() {
+            assert_eq!(cache.len(), 2);
+        }
+
+        // Pop remaining with alternating pop/pop_r
+        while !cache.is_empty() {
+            let result = if cache.len() % 2 == 0 {
+                cache.pop()
+            } else {
+                cache.pop_r()
+            };
+            assert!(result.is_some());
+        }
+
+        // Cache is empty
+        assert!(cache.is_empty());
+        assert_eq!(cache.pop(), None);
+        assert_eq!(cache.pop_r(), None);
     }
 }

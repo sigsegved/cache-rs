@@ -69,10 +69,12 @@ All cache types support these core operations:
 | `is_empty()` | Whether cache is empty. |
 | `clear()` | Remove all entries. |
 | `cap()` | Maximum capacity (LRU/LFU/LFUDA/SLRU). |
+| `contains(&key)` | Check if key exists (no side effects). |
+| `peek(&key)` | Get value without updating access metadata. |
+| `pop()` | Remove and return the eviction candidate. |
 
 **Algorithm-specific methods:**
-- **GDSF**: Use `put(key, value, size)` (requires size for priority calculation) and `contains_key(&key)` to check existence.
-- **GDSF**: Use `pop(&key)` instead of `remove(&key)` to remove entries.
+- **GDSF**: Use `put(key, value, size)` (requires size for priority calculation).
 
 ### Example: Basic Usage
 

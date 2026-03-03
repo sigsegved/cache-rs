@@ -117,18 +117,116 @@ git --no-pager diff ...
 ```
 
 ### Required Validation Pipeline (ALL CHANGES MUST PASS):
+
+These commands mirror the CI pipeline in `.github/workflows/rust.yml`. Run them before committing:
+
+#### 1. Check Job (Fast Feedback)
+
 ```bash
-cargo fmt --all -- --check                             # Formatting
-cargo clippy --features "std,concurrent" -- -D warnings  # Linting (stable features)
-cargo test --features "std,concurrent"                 # All tests with features
-cargo doc --no-deps --document-private-items          # Documentation
+# Formatting (must pass)
+cargo fmt --all -- --check
+
+# Clippy - all three feature combinations (must pass)
+cargo clippy --all-targets -- -D warnings                            # default features
+cargo clippy --all-targets --features concurrent -- -D warnings      # concurrent
+cargo clippy --all-targets --features std,concurrent -- -D warnings  # std + concurrent
+
+# Compilation checks - all three feature combinations (must pass)
+cargo check --all-targets                              # default features
+cargo check --all-targets --features concurrent        # concurrent
+cargo check --all-targets --features std,concurrent    # std + concurrent
 ```
 
-**Note**: The `nightly` feature requires nightly Rust and should not be included in standard validation. The `--all-features` flag will fail on stable Rust due to the `nightly` feature.
+#### 2. Test Job (Core Test Suite)
+
+```bash
+# Tests run on: ubuntu, windows, macos with Rust 1.74.0 (MSRV) and stable
+# Default features
+cargo build --all-targets
+cargo test --verbose
+
+# Concurrent features
+cargo build --all-targets --features concurrent
+cargo test --verbose --features concurrent
+
+# Std + Concurrent features
+cargo build --all-targets --features std,concurrent
+cargo test --verbose --features std,concurrent
+```
+
+#### 3. No-std Job (Embedded Target)
+
+```bash
+# Requires thumbv6m-none-eabi target: rustup target add thumbv6m-none-eabi
+cargo build --target thumbv6m-none-eabi --no-default-features --features hashbrown
+```
+
+#### 4. Documentation Job
+
+```bash
+# Documentation must build without warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items --features concurrent
+```
+
+#### 5. Security Audit Job
+
+```bash
+# Install: cargo install cargo-audit --locked
+cargo audit
+```
+
+#### 6. Coverage Job (PRs to main only)
+
+```bash
+# Install: cargo install cargo-llvm-cov cargo-nextest --locked
+cargo llvm-cov --lcov --output-path lcov.info --features concurrent
+cargo nextest run --profile ci --features concurrent
+```
+
+#### 7. Nightly Tests (Optional, Allow Failures)
+
+```bash
+# Only on nightly toolchain - these are allowed to fail in CI
+cargo +nightly build --all-targets
+cargo +nightly test
+cargo +nightly clippy --all-targets --all-features -- -D warnings
+```
+
+---
+
+**Quick validation (covers most common cases):**
+```bash
+cargo fmt --all -- --check && \
+cargo clippy --all-targets --features std,concurrent -- -D warnings && \
+cargo test --features "std,concurrent"
+```
+
+**Full local validation (mirrors CI check + test + doc):**
+```bash
+# Format and lint
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+cargo clippy --all-targets --features concurrent -- -D warnings
+cargo clippy --all-targets --features std,concurrent -- -D warnings
+
+# Build and test
+cargo test --features "std,concurrent"
+
+# Documentation
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items --features concurrent
+```
+
+**Notes:**
+- MSRV (Minimum Supported Rust Version): **1.74.0**
+- The `nightly` feature requires nightly Rust and should not be included in standard validation
+- The `--all-features` flag will fail on stable Rust due to the `nightly` feature
+- CI runs tests across Linux, macOS, and Windows
 
 ### Testing Patterns
 - Comprehensive unit tests in each algorithm module
-- Integration tests in `tests/no_std_tests.rs`
+- Integration tests in `tests/correctness_tests.rs` and `tests/concurrent_correctness_tests.rs`
+- Stress tests in `tests/concurrent_stress_tests.rs`
+- No-std compatibility tests in `tests/no_std_tests.rs`
 - Benchmarking with `criterion` in `benches/`
 - Cross-platform CI on Linux/macOS/Windows with MSRV 1.74.0
 
@@ -311,7 +409,12 @@ Every module must have comprehensive documentation written from a **consumer's p
    - Code must be properly formatted using rustfmt
    - No formatting inconsistencies allowed
 
-2. **Clippy**: `cargo clippy --features "std,concurrent" -- -D warnings`
+2. **Clippy**: Run all three feature combinations (mirrors CI):
+   ```bash
+   cargo clippy --all-targets -- -D warnings
+   cargo clippy --all-targets --features concurrent -- -D warnings
+   cargo clippy --all-targets --features std,concurrent -- -D warnings
+   ```
    - No clippy warnings allowed
    - Use `#[allow(clippy::lint_name)]` sparingly and only with justification
    - Note: Do NOT use `--all-features` as the `nightly` feature requires nightly Rust
@@ -321,7 +424,7 @@ Every module must have comprehensive documentation written from a **consumer's p
    - New functionality must include appropriate tests
    - Tests should cover both happy path and error cases
 
-4. **Documentation**: `cargo doc --no-deps --document-private-items`
+4. **Documentation**: `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items --features concurrent`
    - Documentation must build without warnings
    - All public items must be documented
 
