@@ -1650,19 +1650,15 @@ mod tests {
         cache.put("b", 2);
         cache.put("c", 3);
 
-        // All in probationary, "a" is LRU
-        // pop() should return items from probationary first
-        let popped = cache.pop();
-        assert!(popped.is_some());
+        // All in probationary, order is: head=[c]→[b]→[a]=tail
+        // pop() returns from tail (LRU), so order is: a, b, c
+        assert_eq!(cache.pop(), Some(("a", 1)));
         assert_eq!(cache.len(), 2);
 
-        // Continue popping
-        let popped = cache.pop();
-        assert!(popped.is_some());
+        assert_eq!(cache.pop(), Some(("b", 2)));
         assert_eq!(cache.len(), 1);
 
-        let popped = cache.pop();
-        assert!(popped.is_some());
+        assert_eq!(cache.pop(), Some(("c", 3)));
         assert_eq!(cache.len(), 0);
 
         // Empty cache returns None
@@ -1677,19 +1673,15 @@ mod tests {
         cache.put("b", 2);
         cache.put("c", 3);
 
-        // pop_r() should return from protected first, then probationary
-        // All are in probationary, so MRU from probationary is "c"
-        let popped = cache.pop_r();
-        assert!(popped.is_some());
+        // All in probationary, order is: head=[c]→[b]→[a]=tail
+        // pop_r() returns from head (MRU), so order is: c, b, a
+        assert_eq!(cache.pop_r(), Some(("c", 3)));
         assert_eq!(cache.len(), 2);
 
-        // Continue popping MRU
-        let popped = cache.pop_r();
-        assert!(popped.is_some());
+        assert_eq!(cache.pop_r(), Some(("b", 2)));
         assert_eq!(cache.len(), 1);
 
-        let popped = cache.pop_r();
-        assert!(popped.is_some());
+        assert_eq!(cache.pop_r(), Some(("a", 1)));
         assert_eq!(cache.len(), 0);
 
         // Empty cache returns None
@@ -1704,21 +1696,23 @@ mod tests {
         cache.put("b", 2);
 
         // Access "a" and "b" to promote them to protected
+        // get("a") → protected: head=[a]=tail, probationary: [b]
+        // get("b") → protected: head=[b]→[a]=tail, probationary: empty
         cache.get(&"a");
         cache.get(&"b");
 
         // Add more items to probationary
+        // put("c") → probationary: [c]
+        // put("d") → probationary: head=[d]→[c]=tail
         cache.put("c", 3);
         cache.put("d", 4);
 
-        // "a" and "b" are protected, "c" and "d" are probationary
-        // pop() should return from probationary first
-        let (key, _) = cache.pop().unwrap();
-        assert!(key == "c" || key == "d"); // LRU from probationary
+        // State: protected=[b]→[a], probationary=[d]→[c]
+        // pop() returns from probationary LRU (tail) = "c"
+        assert_eq!(cache.pop(), Some(("c", 3)));
 
-        // pop_r() should return from protected first (MRU)
-        let (key, _) = cache.pop_r().unwrap();
-        assert!(key == "a" || key == "b"); // MRU from protected
+        // pop_r() returns from protected MRU (head) = "b"
+        assert_eq!(cache.pop_r(), Some(("b", 2)));
     }
 
     #[test]
