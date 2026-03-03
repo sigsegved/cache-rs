@@ -1461,6 +1461,253 @@ fn test_lfuda_capacity_one() {
     );
 }
 
+#[test]
+fn test_lfuda_cap_len_is_empty() {
+    let mut cache: LfudaCache<i32, i32> = make_lfuda(10);
+
+    // Test cap() returns the configured capacity
+    assert_eq!(cache.cap().get(), 10);
+
+    // Test is_empty() when empty
+    assert!(cache.is_empty());
+    assert_eq!(cache.len(), 0);
+
+    // Add some items
+    cache.put(1, 10);
+    cache.put(2, 20);
+
+    // Test len() and is_empty() with items
+    assert!(!cache.is_empty());
+    assert_eq!(cache.len(), 2);
+
+    // Clear and verify
+    cache.clear();
+    assert!(cache.is_empty());
+    assert_eq!(cache.len(), 0);
+}
+
+#[test]
+fn test_lfuda_current_size_max_size() {
+    let mut cache: LfudaCache<i32, i32> = make_lfuda_with_max_size(1000);
+
+    // Test max_size() returns configured limit
+    assert_eq!(cache.max_size(), 1000);
+
+    // Test current_size() starts at 0
+    assert_eq!(cache.current_size(), 0);
+
+    // Add items with explicit sizes
+    cache.put_with_size(1, 10, 100);
+    assert_eq!(cache.current_size(), 100);
+
+    cache.put_with_size(2, 20, 200);
+    assert_eq!(cache.current_size(), 300);
+
+    // Update existing key with different size
+    cache.put_with_size(1, 15, 150);
+    assert_eq!(cache.current_size(), 350);
+
+    // Remove item and verify size decreases
+    cache.remove(&2);
+    assert_eq!(cache.current_size(), 150);
+
+    // Clear and verify size resets
+    cache.clear();
+    assert_eq!(cache.current_size(), 0);
+}
+
+#[test]
+fn test_lfuda_global_age_tracking() {
+    let mut cache: LfudaCache<i32, i32> = make_lfuda(3);
+
+    // Initially global age should be 0
+    assert_eq!(cache.global_age(), 0);
+
+    // Fill cache
+    cache.put(1, 10);
+    cache.put(2, 20);
+    cache.put(3, 30);
+
+    // Global age should still be 0 (no evictions yet)
+    assert_eq!(cache.global_age(), 0);
+
+    // Trigger eviction - global age should increase
+    cache.put(4, 40);
+    let age_after_first_eviction = cache.global_age();
+    // LFUDA sets global age to evicted item's priority (freq + age_at_insertion)
+    // Evicted item had priority = 1 + 0 = 1
+    assert!(
+        age_after_first_eviction >= 1,
+        "Global age should increase after eviction"
+    );
+
+    // More evictions should continue increasing age
+    cache.put(5, 50);
+    let age_after_second = cache.global_age();
+    assert!(
+        age_after_second >= age_after_first_eviction,
+        "Global age should not decrease"
+    );
+}
+
+#[test]
+fn test_lfuda_record_miss() {
+    use cache_rs::metrics::CacheMetrics;
+
+    let mut cache: LfudaCache<i32, i32> = make_lfuda(10);
+
+    // Record some misses
+    cache.record_miss(100);
+    cache.record_miss(200);
+    cache.record_miss(50);
+
+    // Check that misses are tracked in metrics
+    let metrics = cache.metrics();
+    assert!(
+        metrics.contains_key("cache_misses"),
+        "Metrics should track cache_misses"
+    );
+    let misses = metrics.get("cache_misses").unwrap();
+    assert_eq!(*misses, 3.0, "Should have 3 recorded misses");
+}
+
+#[test]
+fn test_lfuda_get_mut_modifies_value() {
+    let mut cache: LfudaCache<&str, i32> = make_lfuda(10);
+
+    cache.put("a", 10);
+    cache.put("b", 20);
+
+    // Use get_mut to modify value
+    if let Some(val) = cache.get_mut(&"a") {
+        *val = 100;
+    }
+
+    // Verify value was modified
+    assert_eq!(cache.get(&"a"), Some(&100));
+
+    // get_mut on missing key returns None
+    assert!(cache.get_mut(&"missing").is_none());
+}
+
+#[test]
+fn test_lfuda_get_mut_affects_priority() {
+    let mut cache: LfudaCache<i32, i32> = make_lfuda(3);
+
+    cache.put(1, 10);
+    cache.put(2, 20);
+    cache.put(3, 30);
+
+    // Access key 1 via get_mut to increase its priority
+    for _ in 0..5 {
+        if let Some(val) = cache.get_mut(&1) {
+            *val += 1;
+        }
+    }
+
+    // Key 1 should have value 10 + 5 = 15
+    assert_eq!(cache.get(&1), Some(&15));
+
+    // Trigger eviction - key 2 or 3 should be evicted, not key 1
+    cache.put(4, 40);
+
+    assert!(
+        cache.get(&1).is_some(),
+        "Key 1 should not be evicted (high priority from get_mut accesses)"
+    );
+}
+
+#[test]
+fn test_lfuda_size_eviction_multiple_items() {
+    let mut cache: LfudaCache<i32, String> = make_lfuda_with_max_size(100);
+
+    // Add several small items
+    cache.put_with_size(1, "a".to_string(), 25);
+    cache.put_with_size(2, "b".to_string(), 25);
+    cache.put_with_size(3, "c".to_string(), 25);
+    cache.put_with_size(4, "d".to_string(), 25);
+
+    assert_eq!(cache.current_size(), 100);
+    assert_eq!(cache.len(), 4);
+
+    // Adding a large item should evict multiple small items
+    cache.put_with_size(5, "large".to_string(), 60);
+
+    // Should have evicted at least 2 items to make room
+    assert!(cache.current_size() <= 100);
+    assert!(cache.len() < 4);
+    assert!(
+        cache.get(&5).is_some(),
+        "Large item should be in cache"
+    );
+}
+
+#[test]
+fn test_lfuda_pop_updates_global_age() {
+    let mut cache: LfudaCache<i32, i32> = make_lfuda(5);
+
+    // Fill cache
+    for i in 1..=5 {
+        cache.put(i, i * 10);
+    }
+
+    // Access some items to create priority differences
+    cache.get(&3);
+    cache.get(&3);
+    cache.get(&4);
+
+    let age_before = cache.global_age();
+
+    // Pop should remove lowest priority and update global age
+    let popped = cache.pop();
+    assert!(popped.is_some());
+
+    let age_after = cache.global_age();
+    assert!(
+        age_after >= age_before,
+        "Global age should not decrease after pop"
+    );
+}
+
+#[test]
+fn test_lfuda_put_returns_evicted() {
+    let mut cache: LfudaCache<i32, i32> = make_lfuda(3);
+
+    // Fill cache
+    cache.put(1, 10);
+    cache.put(2, 20);
+    cache.put(3, 30);
+
+    // Next put should return evicted item
+    let evicted = cache.put(4, 40);
+    assert!(evicted.is_some(), "Should return evicted item");
+
+    let (key, value) = evicted.unwrap();
+    // One of the original keys should have been evicted
+    assert!(key >= 1 && key <= 3);
+    assert!(value == 10 || value == 20 || value == 30);
+}
+
+#[test]
+fn test_lfuda_update_existing_key() {
+    let mut cache: LfudaCache<i32, i32> = make_lfuda(10);
+
+    cache.put(1, 10);
+    cache.put(2, 20);
+
+    // Update existing key
+    let old = cache.put(1, 100);
+
+    // Should return old value wrapped in tuple
+    assert_eq!(old, Some((1, 10)));
+
+    // Value should be updated
+    assert_eq!(cache.get(&1), Some(&100));
+
+    // Length should not change
+    assert_eq!(cache.len(), 2);
+}
+
 // ============================================================================
 // CORNER CASES: GDSF
 // ============================================================================
