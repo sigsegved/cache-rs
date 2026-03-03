@@ -616,7 +616,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
     ///
     /// This method does **not** increment the eviction counter in metrics.
     /// Eviction metrics are only recorded when the cache internally evicts
-    /// entries to make room during `put()`/`put()` operations.
+    /// entries to make room during `put()` operations.
     ///
     /// Returns `None` if the cache is empty.
     pub(crate) fn pop(&mut self) -> Option<(K, V)> {
