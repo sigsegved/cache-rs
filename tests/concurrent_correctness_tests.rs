@@ -2600,7 +2600,7 @@ fn test_concurrent_lru_get_mut_with() {
                 // Use get_mut_with to mutate value in-place - may be None if evicted
                 let old_val = c.get_mut_with(&key, |v| {
                     let old = *v;
-                    *v = *v + 100;
+                    *v += 100;
                     old
                 });
                 // Value may have been evicted by another thread
@@ -2871,9 +2871,8 @@ fn test_concurrent_lru_pop() {
                 // Mix of pop and put operations
                 let popped = c.pop();
                 // Popped might be Some or None depending on cache state
-                if popped.is_some() {
+                if let Some((k, _v)) = popped {
                     // Put something back
-                    let (k, _v) = popped.unwrap();
                     c.put(k + 10000, k);
                 }
             }
@@ -2905,8 +2904,7 @@ fn test_concurrent_lfu_pop() {
         handles.push(thread::spawn(move || {
             for _ in 0..OPS_PER_THREAD {
                 let popped = c.pop();
-                if popped.is_some() {
-                    let (k, _v) = popped.unwrap();
+                if let Some((k, _v)) = popped {
                     c.put(k + 10000, k);
                 }
             }
@@ -2937,8 +2935,7 @@ fn test_concurrent_lfuda_pop() {
         handles.push(thread::spawn(move || {
             for _ in 0..OPS_PER_THREAD {
                 let popped = c.pop();
-                if popped.is_some() {
-                    let (k, _v) = popped.unwrap();
+                if let Some((k, _v)) = popped {
                     c.put(k + 10000, k);
                 }
             }
@@ -2969,8 +2966,7 @@ fn test_concurrent_slru_pop() {
         handles.push(thread::spawn(move || {
             for _ in 0..OPS_PER_THREAD {
                 let popped = c.pop();
-                if popped.is_some() {
-                    let (k, _v) = popped.unwrap();
+                if let Some((k, _v)) = popped {
                     c.put(k + 10000, k);
                 }
             }
@@ -3001,8 +2997,7 @@ fn test_concurrent_gdsf_pop() {
         handles.push(thread::spawn(move || {
             for _ in 0..OPS_PER_THREAD {
                 let popped = c.pop();
-                if popped.is_some() {
-                    let (k, _v) = popped.unwrap();
+                if let Some((k, _v)) = popped {
                     c.put(k + 10000, k, 1);
                 }
             }

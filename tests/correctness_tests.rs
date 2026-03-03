@@ -2455,12 +2455,8 @@ fn test_lfuda_global_age_increases_on_eviction() {
     // Trigger eviction to increase global age
     cache.put("c", 3);
     // Global age should have increased (set to evicted item's priority)
-    // The exact value depends on implementation, but it should be >= 0
-    let age_after = cache.global_age();
-    assert!(
-        age_after >= 0,
-        "LFUDA global_age should be non-negative after eviction"
-    );
+    // The exact value depends on implementation - we just verify the method works
+    let _age_after = cache.global_age();
 }
 
 #[test]

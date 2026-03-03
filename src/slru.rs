@@ -1822,7 +1822,7 @@ mod tests {
         cache.get(&"g"); // promote g
 
         // Pop remaining entries
-        while cache.len() > 0 {
+        while !cache.is_empty() {
             let result = if cache.len() % 2 == 0 {
                 cache.pop()
             } else {

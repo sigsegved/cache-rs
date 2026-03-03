@@ -117,11 +117,35 @@ git --no-pager diff ...
 ```
 
 ### Required Validation Pipeline (ALL CHANGES MUST PASS):
+
+These commands mirror the CI pipeline. Run them before committing:
+
 ```bash
-cargo fmt --all -- --check                             # Formatting
-cargo clippy --features "std,concurrent" -- -D warnings  # Linting (stable features)
-cargo test --features "std,concurrent"                 # All tests with features
-cargo doc --no-deps --document-private-items          # Documentation
+# Formatting (must pass)
+cargo fmt --all -- --check
+
+# Clippy - all three feature combinations (must pass)
+cargo clippy --all-targets -- -D warnings                        # default features
+cargo clippy --all-targets --features concurrent -- -D warnings  # concurrent
+cargo clippy --all-targets --features std,concurrent -- -D warnings  # std + concurrent
+
+# Compilation checks (must pass)
+cargo check --all-targets
+cargo check --all-targets --features concurrent
+cargo check --all-targets --features std,concurrent
+
+# Tests - run at minimum with std,concurrent (must pass)
+cargo test --features "std,concurrent"
+
+# Documentation (must pass)
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items --features concurrent
+```
+
+**Quick validation (covers most cases):**
+```bash
+cargo fmt --all -- --check && \
+cargo clippy --all-targets --features std,concurrent -- -D warnings && \
+cargo test --features "std,concurrent"
 ```
 
 **Note**: The `nightly` feature requires nightly Rust and should not be included in standard validation. The `--all-features` flag will fail on stable Rust due to the `nightly` feature.
@@ -311,7 +335,12 @@ Every module must have comprehensive documentation written from a **consumer's p
    - Code must be properly formatted using rustfmt
    - No formatting inconsistencies allowed
 
-2. **Clippy**: `cargo clippy --features "std,concurrent" -- -D warnings`
+2. **Clippy**: Run all three feature combinations (mirrors CI):
+   ```bash
+   cargo clippy --all-targets -- -D warnings
+   cargo clippy --all-targets --features concurrent -- -D warnings
+   cargo clippy --all-targets --features std,concurrent -- -D warnings
+   ```
    - No clippy warnings allowed
    - Use `#[allow(clippy::lint_name)]` sparingly and only with justification
    - Note: Do NOT use `--all-features` as the `nightly` feature requires nightly Rust
@@ -321,7 +350,7 @@ Every module must have comprehensive documentation written from a **consumer's p
    - New functionality must include appropriate tests
    - Tests should cover both happy path and error cases
 
-4. **Documentation**: `cargo doc --no-deps --document-private-items`
+4. **Documentation**: `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items --features concurrent`
    - Documentation must build without warnings
    - All public items must be documented
 

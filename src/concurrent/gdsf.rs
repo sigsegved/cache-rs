@@ -950,7 +950,7 @@ mod tests {
         }
 
         // Pop remaining with alternating pop/pop_r
-        while cache.len() > 0 {
+        while !cache.is_empty() {
             let result = if cache.len() % 2 == 0 {
                 cache.pop()
             } else {
