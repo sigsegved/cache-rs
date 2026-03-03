@@ -93,7 +93,7 @@
 //!
 //! // Phase 1: Establish initial popularity
 //! for i in 0..1000 {
-//!     cache.put(format!("old-{}", i, None), i);
+//!     cache.put(format!("old-{}", i), i, None);
 //!     for _ in 0..10 {
 //!         cache.get(&format!("old-{}", i));
 //!     }
