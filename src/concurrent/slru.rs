@@ -721,23 +721,19 @@ mod tests {
 
     #[test]
     fn test_pop_returns_entry() {
+        // Use segments: 1 for deterministic LRU ordering
         let cache: ConcurrentSlruCache<String, i32> =
-            ConcurrentSlruCache::init(make_config(100, 50, 16), None);
+            ConcurrentSlruCache::init(make_config(100, 50, 1), None);
 
         cache.put("a".to_string(), 1);
         cache.put("b".to_string(), 2);
+        cache.put("c".to_string(), 3);
 
-        let initial_len = cache.len();
-
-        // Pop should return Some entry
-        let result = cache.pop();
-        assert!(result.is_some());
-
-        let (key, _value) = result.unwrap();
-        assert!(key == "a" || key == "b"); // Could be either due to segmentation
-
-        // Length should decrease
-        assert_eq!(cache.len(), initial_len - 1);
+        // Pop returns LRU entry (oldest = "a")
+        assert_eq!(cache.pop(), Some(("a".to_string(), 1)));
+        assert_eq!(cache.pop(), Some(("b".to_string(), 2)));
+        assert_eq!(cache.pop(), Some(("c".to_string(), 3)));
+        assert_eq!(cache.pop(), None);
     }
 
     #[test]
@@ -750,23 +746,19 @@ mod tests {
 
     #[test]
     fn test_pop_r_returns_entry() {
+        // Use segments: 1 for deterministic MRU ordering
         let cache: ConcurrentSlruCache<String, i32> =
-            ConcurrentSlruCache::init(make_config(100, 50, 16), None);
+            ConcurrentSlruCache::init(make_config(100, 50, 1), None);
 
         cache.put("a".to_string(), 1);
         cache.put("b".to_string(), 2);
+        cache.put("c".to_string(), 3);
 
-        let initial_len = cache.len();
-
-        // Pop_r should return Some entry
-        let result = cache.pop_r();
-        assert!(result.is_some());
-
-        let (key, _value) = result.unwrap();
-        assert!(key == "a" || key == "b"); // Could be either due to segmentation
-
-        // Length should decrease
-        assert_eq!(cache.len(), initial_len - 1);
+        // Pop_r returns MRU entry (newest = "c")
+        assert_eq!(cache.pop_r(), Some(("c".to_string(), 3)));
+        assert_eq!(cache.pop_r(), Some(("b".to_string(), 2)));
+        assert_eq!(cache.pop_r(), Some(("a".to_string(), 1)));
+        assert_eq!(cache.pop_r(), None);
     }
 
     #[test]
@@ -779,19 +771,18 @@ mod tests {
 
     #[test]
     fn test_pop_all_entries() {
+        // Use segments: 1 for deterministic ordering
         let cache: ConcurrentSlruCache<String, i32> =
-            ConcurrentSlruCache::init(make_config(100, 50, 16), None);
+            ConcurrentSlruCache::init(make_config(100, 50, 1), None);
 
         cache.put("a".to_string(), 1);
         cache.put("b".to_string(), 2);
         cache.put("c".to_string(), 3);
 
-        let mut count = 0;
-        while cache.pop().is_some() {
-            count += 1;
-        }
-
-        assert_eq!(count, 3);
+        // Pop all in LRU order
+        assert_eq!(cache.pop(), Some(("a".to_string(), 1)));
+        assert_eq!(cache.pop(), Some(("b".to_string(), 2)));
+        assert_eq!(cache.pop(), Some(("c".to_string(), 3)));
         assert!(cache.is_empty());
     }
 }
