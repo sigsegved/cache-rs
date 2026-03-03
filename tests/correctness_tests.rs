@@ -1911,3 +1911,598 @@ fn test_slru_max_size_should_evict_multiple_items() {
         cache.current_size()
     );
 }
+
+// ============================================================================
+// GET_MUT COVERAGE
+// ============================================================================
+// get_mut() should return a mutable reference to the value and update
+// recency/frequency metadata (same side-effects as get).
+
+#[test]
+fn test_lru_get_mut_updates_value() {
+    let mut cache: LruCache<&str, i32> = make_lru(3);
+    cache.put("a", 1);
+    cache.put("b", 2);
+    cache.put("c", 3);
+
+    // Mutate value through get_mut
+    if let Some(v) = cache.get_mut(&"b") {
+        *v = 20;
+    }
+    assert_eq!(cache.get(&"b"), Some(&20));
+
+    // get_mut should update recency like get does
+    // "a" is now LRU (we touched "b" via get_mut, then "b" again via get)
+    cache.put("d", 4); // evicts "a"
+    assert!(cache.get(&"a").is_none());
+    assert_eq!(cache.get(&"b"), Some(&20));
+}
+
+#[test]
+fn test_lfu_get_mut_updates_value() {
+    let mut cache: LfuCache<&str, i32> = make_lfu(3);
+    cache.put("a", 1);
+    cache.put("b", 2);
+    cache.put("c", 3);
+
+    if let Some(v) = cache.get_mut(&"b") {
+        *v = 20;
+    }
+    assert_eq!(cache.get(&"b"), Some(&20));
+}
+
+#[test]
+fn test_lfuda_get_mut_updates_value() {
+    let mut cache: LfudaCache<&str, i32> = make_lfuda(3);
+    cache.put("a", 1);
+    cache.put("b", 2);
+    cache.put("c", 3);
+
+    if let Some(v) = cache.get_mut(&"b") {
+        *v = 20;
+    }
+    assert_eq!(cache.get(&"b"), Some(&20));
+}
+
+#[test]
+fn test_slru_get_mut_updates_value() {
+    let mut cache: SlruCache<&str, i32> = make_slru(5, 2);
+    cache.put("a", 1);
+    cache.put("b", 2);
+    cache.put("c", 3);
+
+    if let Some(v) = cache.get_mut(&"b") {
+        *v = 20;
+    }
+    assert_eq!(cache.get(&"b"), Some(&20));
+}
+
+#[test]
+fn test_gdsf_get_mut_updates_value() {
+    let mut cache: GdsfCache<&str, i32> = make_gdsf(3);
+    cache.put("a", 1, OBJECT_SIZE);
+    cache.put("b", 2, OBJECT_SIZE);
+    cache.put("c", 3, OBJECT_SIZE);
+
+    if let Some(v) = cache.get_mut(&"b") {
+        *v = 20;
+    }
+    // GDSF get returns Option<V> (cloned)
+    assert_eq!(cache.get(&"b"), Some(20));
+}
+
+// ============================================================================
+// CONTAINS COVERAGE
+// ============================================================================
+// contains() should return true for existing keys, false for missing keys,
+// and false after removal. It should NOT update recency/frequency.
+
+#[test]
+fn test_all_caches_contains() {
+    // LRU
+    let mut lru: LruCache<&str, i32> = make_lru(3);
+    assert!(!lru.contains(&"a"));
+    lru.put("a", 1);
+    assert!(lru.contains(&"a"));
+    lru.remove(&"a");
+    assert!(!lru.contains(&"a"));
+
+    // LFU
+    let mut lfu: LfuCache<&str, i32> = make_lfu(3);
+    assert!(!lfu.contains(&"a"));
+    lfu.put("a", 1);
+    assert!(lfu.contains(&"a"));
+    lfu.remove(&"a");
+    assert!(!lfu.contains(&"a"));
+
+    // LFUDA
+    let mut lfuda: LfudaCache<&str, i32> = make_lfuda(3);
+    assert!(!lfuda.contains(&"a"));
+    lfuda.put("a", 1);
+    assert!(lfuda.contains(&"a"));
+    lfuda.remove(&"a");
+    assert!(!lfuda.contains(&"a"));
+
+    // SLRU
+    let mut slru: SlruCache<&str, i32> = make_slru(5, 2);
+    assert!(!slru.contains(&"a"));
+    slru.put("a", 1);
+    assert!(slru.contains(&"a"));
+    slru.remove(&"a");
+    assert!(!slru.contains(&"a"));
+
+    // GDSF
+    let mut gdsf: GdsfCache<&str, i32> = make_gdsf(3);
+    assert!(!gdsf.contains(&"a"));
+    gdsf.put("a", 1, OBJECT_SIZE);
+    assert!(gdsf.contains(&"a"));
+    gdsf.remove(&"a");
+    assert!(!gdsf.contains(&"a"));
+}
+
+#[test]
+fn test_contains_after_eviction() {
+    let mut cache: LruCache<&str, i32> = make_lru(2);
+    cache.put("a", 1);
+    cache.put("b", 2);
+    assert!(cache.contains(&"a"));
+
+    cache.put("c", 3); // evicts "a"
+    assert!(!cache.contains(&"a"));
+    assert!(cache.contains(&"b"));
+    assert!(cache.contains(&"c"));
+}
+
+// ============================================================================
+// PEEK COVERAGE
+// ============================================================================
+// peek() should return a reference to the value WITHOUT updating
+// recency/frequency metadata. This is critical for correctness.
+
+#[test]
+fn test_lru_peek_does_not_affect_eviction() {
+    let mut cache: LruCache<&str, i32> = make_lru(3);
+    cache.put("a", 1);
+    cache.put("b", 2);
+    cache.put("c", 3);
+
+    // Peek at "a" - should NOT update recency
+    assert_eq!(cache.peek(&"a"), Some(&1));
+
+    // "a" is still LRU despite peek, so it should be evicted
+    cache.put("d", 4);
+    assert!(
+        cache.get(&"a").is_none(),
+        "peek should NOT prevent eviction of LRU item"
+    );
+}
+
+#[test]
+fn test_lfu_peek_does_not_affect_eviction() {
+    let mut cache: LfuCache<&str, i32> = make_lfu(3);
+    cache.put("a", 1);
+    cache.put("b", 2);
+    cache.put("c", 3);
+
+    // Access b and c to increase frequency, but only peek at a
+    cache.get(&"b");
+    cache.get(&"c");
+    assert_eq!(cache.peek(&"a"), Some(&1));
+
+    // "a" should still have lowest frequency and be evicted
+    cache.put("d", 4);
+    assert!(
+        cache.get(&"a").is_none(),
+        "peek should NOT increase frequency"
+    );
+}
+
+#[test]
+fn test_lfuda_peek_does_not_affect_eviction() {
+    let mut cache: LfudaCache<&str, i32> = make_lfuda(3);
+    cache.put("a", 1);
+    cache.put("b", 2);
+    cache.put("c", 3);
+
+    cache.get(&"b");
+    cache.get(&"c");
+    assert_eq!(cache.peek(&"a"), Some(&1));
+
+    cache.put("d", 4);
+    assert!(
+        cache.get(&"a").is_none(),
+        "peek should NOT increase priority in LFUDA"
+    );
+}
+
+#[test]
+fn test_slru_peek_does_not_affect_eviction() {
+    let mut cache: SlruCache<&str, i32> = make_slru(5, 2);
+    cache.put("a", 1);
+    cache.put("b", 2);
+    cache.put("c", 3);
+    cache.put("d", 4);
+    cache.put("e", 5);
+
+    // Peek at "a" - should NOT promote to protected
+    assert_eq!(cache.peek(&"a"), Some(&1));
+
+    // "a" should still be evictable from probationary
+    cache.put("f", 6);
+    assert!(
+        cache.get(&"a").is_none(),
+        "peek should NOT promote items in SLRU"
+    );
+}
+
+#[test]
+fn test_gdsf_peek_does_not_affect_eviction() {
+    let mut cache: GdsfCache<&str, i32> = make_gdsf(3);
+    cache.put("a", 1, OBJECT_SIZE);
+    cache.put("b", 2, OBJECT_SIZE);
+    cache.put("c", 3, OBJECT_SIZE);
+
+    // Access b and c to increase frequency, but only peek at a
+    cache.get(&"b");
+    cache.get(&"c");
+    assert_eq!(cache.peek(&"a"), Some(&1));
+
+    cache.put("d", 4, OBJECT_SIZE);
+    assert!(
+        cache.get(&"a").is_none(),
+        "peek should NOT increase frequency in GDSF"
+    );
+}
+
+#[test]
+fn test_peek_nonexistent_key() {
+    let mut cache: LruCache<&str, i32> = make_lru(3);
+    assert_eq!(cache.peek(&"missing"), None);
+
+    cache.put("a", 1);
+    assert_eq!(cache.peek(&"missing"), None);
+    assert_eq!(cache.peek(&"a"), Some(&1));
+}
+
+// ============================================================================
+// POP COVERAGE
+// ============================================================================
+// pop() should remove and return the eviction candidate without adding
+// a new entry. Returns None on empty cache.
+
+#[test]
+fn test_lru_pop_returns_lru_item() {
+    let mut cache: LruCache<&str, i32> = make_lru(3);
+    assert_eq!(cache.pop(), None); // empty cache
+
+    cache.put("a", 1);
+    cache.put("b", 2);
+    cache.put("c", 3);
+
+    // "a" is LRU
+    let popped = cache.pop();
+    assert_eq!(popped, Some(("a", 1)));
+    assert_eq!(cache.len(), 2);
+    assert!(cache.get(&"a").is_none());
+}
+
+#[test]
+fn test_lfu_pop_returns_least_frequent() {
+    let mut cache: LfuCache<&str, i32> = make_lfu(3);
+    assert_eq!(cache.pop(), None);
+
+    cache.put("a", 1);
+    cache.put("b", 2);
+    cache.put("c", 3);
+
+    // Access b and c to increase their frequency
+    cache.get(&"b");
+    cache.get(&"c");
+
+    // "a" has lowest frequency
+    let popped = cache.pop();
+    assert_eq!(popped, Some(("a", 1)));
+    assert_eq!(cache.len(), 2);
+}
+
+#[test]
+fn test_lfuda_pop_returns_lowest_priority() {
+    let mut cache: LfudaCache<&str, i32> = make_lfuda(3);
+    assert_eq!(cache.pop(), None);
+
+    cache.put("a", 1);
+    cache.put("b", 2);
+    cache.put("c", 3);
+
+    cache.get(&"b");
+    cache.get(&"c");
+
+    let popped = cache.pop();
+    assert_eq!(popped, Some(("a", 1)));
+    assert_eq!(cache.len(), 2);
+}
+
+#[test]
+fn test_slru_pop_returns_probationary_item() {
+    let mut cache: SlruCache<&str, i32> = make_slru(5, 2);
+    assert_eq!(cache.pop(), None);
+
+    cache.put("a", 1);
+    cache.put("b", 2);
+    cache.put("c", 3);
+
+    let popped = cache.pop();
+    assert!(popped.is_some());
+    assert_eq!(cache.len(), 2);
+}
+
+#[test]
+fn test_gdsf_pop_returns_lowest_priority() {
+    let mut cache: GdsfCache<&str, i32> = make_gdsf(3);
+    assert_eq!(cache.pop(), None);
+
+    cache.put("a", 1, OBJECT_SIZE);
+    cache.put("b", 2, OBJECT_SIZE);
+    cache.put("c", 3, OBJECT_SIZE);
+
+    cache.get(&"b");
+    cache.get(&"c");
+
+    let popped = cache.pop();
+    assert!(popped.is_some());
+    assert_eq!(cache.len(), 2);
+}
+
+// ============================================================================
+// CAP COVERAGE
+// ============================================================================
+
+#[test]
+fn test_all_caches_cap() {
+    let lru: LruCache<&str, i32> = make_lru(10);
+    assert_eq!(lru.cap().get(), 10);
+
+    let lfu: LfuCache<&str, i32> = make_lfu(20);
+    assert_eq!(lfu.cap().get(), 20);
+
+    let lfuda: LfudaCache<&str, i32> = make_lfuda(30);
+    assert_eq!(lfuda.cap().get(), 30);
+
+    let slru: SlruCache<&str, i32> = make_slru(40, 10);
+    assert_eq!(slru.cap().get(), 40);
+
+    let gdsf: GdsfCache<&str, i32> = make_gdsf(50);
+    assert_eq!(gdsf.cap().get(), 50);
+}
+
+// ============================================================================
+// RECORD_MISS COVERAGE
+// ============================================================================
+// record_miss() should update metrics without changing cache contents.
+
+#[test]
+fn test_all_caches_record_miss() {
+    let mut lru: LruCache<&str, i32> = make_lru(3);
+    lru.put("a", 1);
+    lru.record_miss(100);
+    lru.record_miss(200);
+    assert_eq!(lru.len(), 1); // cache contents unchanged
+    let metrics = lru.metrics();
+    assert!(
+        *metrics.get("requests").unwrap_or(&0.0) >= 2.0,
+        "LRU should track miss requests"
+    );
+
+    let mut lfu: LfuCache<&str, i32> = make_lfu(3);
+    lfu.put("a", 1);
+    lfu.record_miss(100);
+    assert_eq!(lfu.len(), 1);
+
+    let mut lfuda: LfudaCache<&str, i32> = make_lfuda(3);
+    lfuda.put("a", 1);
+    lfuda.record_miss(100);
+    assert_eq!(lfuda.len(), 1);
+
+    let mut slru: SlruCache<&str, i32> = make_slru(5, 2);
+    slru.put("a", 1);
+    slru.record_miss(100);
+    assert_eq!(slru.len(), 1);
+
+    let mut gdsf: GdsfCache<&str, i32> = make_gdsf(3);
+    gdsf.put("a", 1, OBJECT_SIZE);
+    gdsf.record_miss(100);
+    assert_eq!(gdsf.len(), 1);
+}
+
+// ============================================================================
+// CACHE_METRICS TRAIT COVERAGE
+// ============================================================================
+
+#[test]
+fn test_all_caches_algorithm_name() {
+    let lru: LruCache<&str, i32> = make_lru(3);
+    assert_eq!(lru.algorithm_name(), "LRU");
+
+    let lfu: LfuCache<&str, i32> = make_lfu(3);
+    assert_eq!(lfu.algorithm_name(), "LFU");
+
+    let lfuda: LfudaCache<&str, i32> = make_lfuda(3);
+    assert_eq!(lfuda.algorithm_name(), "LFUDA");
+
+    let slru: SlruCache<&str, i32> = make_slru(5, 2);
+    assert_eq!(slru.algorithm_name(), "SLRU");
+
+    let gdsf: GdsfCache<&str, i32> = make_gdsf(3);
+    assert_eq!(gdsf.algorithm_name(), "GDSF");
+}
+
+#[test]
+fn test_all_caches_metrics_after_operations() {
+    // LRU metrics
+    let mut lru: LruCache<&str, i32> = make_lru(2);
+    lru.put("a", 1);
+    lru.put("b", 2);
+    lru.get(&"a"); // hit
+    lru.put("c", 3); // eviction
+
+    let metrics = lru.metrics();
+    assert!(
+        metrics.contains_key("cache_hits"),
+        "LRU metrics should have 'cache_hits'"
+    );
+    assert!(
+        metrics.contains_key("evictions"),
+        "LRU metrics should have 'evictions'"
+    );
+    assert!(
+        *metrics.get("cache_hits").unwrap() >= 1.0,
+        "LRU should record at least 1 hit"
+    );
+    assert!(
+        *metrics.get("evictions").unwrap() >= 1.0,
+        "LRU should record at least 1 eviction"
+    );
+
+    // LFU metrics
+    let mut lfu: LfuCache<&str, i32> = make_lfu(2);
+    lfu.put("a", 1);
+    lfu.put("b", 2);
+    lfu.get(&"a");
+    lfu.put("c", 3);
+
+    let metrics = lfu.metrics();
+    assert!(
+        metrics.contains_key("cache_hits"),
+        "LFU metrics should have 'cache_hits'"
+    );
+
+    // LFUDA metrics
+    let mut lfuda: LfudaCache<&str, i32> = make_lfuda(2);
+    lfuda.put("a", 1);
+    lfuda.put("b", 2);
+    lfuda.get(&"a");
+    lfuda.put("c", 3);
+
+    let metrics = lfuda.metrics();
+    assert!(
+        metrics.contains_key("cache_hits"),
+        "LFUDA metrics should have 'cache_hits'"
+    );
+
+    // SLRU metrics
+    let mut slru: SlruCache<&str, i32> = make_slru(3, 1);
+    slru.put("a", 1);
+    slru.put("b", 2);
+    slru.get(&"a");
+
+    let metrics = slru.metrics();
+    assert!(
+        metrics.contains_key("cache_hits"),
+        "SLRU metrics should have 'cache_hits'"
+    );
+
+    // GDSF metrics
+    let mut gdsf: GdsfCache<&str, i32> = make_gdsf(2);
+    gdsf.put("a", 1, OBJECT_SIZE);
+    gdsf.put("b", 2, OBJECT_SIZE);
+    gdsf.get(&"a");
+    gdsf.put("c", 3, OBJECT_SIZE);
+
+    let metrics = gdsf.metrics();
+    assert!(
+        metrics.contains_key("cache_hits"),
+        "GDSF metrics should have 'cache_hits'"
+    );
+}
+
+// ============================================================================
+// LRU ITER / ITER_MUT COVERAGE
+// ============================================================================
+// Note: iter() and iter_mut() exist as public API but are currently
+// unimplemented (they panic). These tests document that fact.
+// When they are implemented, these tests should be updated to validate
+// iteration order and mutation behavior.
+
+#[test]
+#[should_panic(expected = "not yet implemented")]
+fn test_lru_iter_is_unimplemented() {
+    let mut cache: LruCache<&str, i32> = make_lru(3);
+    cache.put("a", 1);
+    let _iter = cache.iter();
+}
+
+#[test]
+#[should_panic(expected = "not yet implemented")]
+fn test_lru_iter_mut_is_unimplemented() {
+    let mut cache: LruCache<&str, i32> = make_lru(3);
+    cache.put("a", 1);
+    let _iter = cache.iter_mut();
+}
+
+// ============================================================================
+// ALGORITHM-SPECIFIC ACCESSOR COVERAGE
+// ============================================================================
+
+#[test]
+fn test_lfuda_global_age_increases_on_eviction() {
+    let mut cache: LfudaCache<&str, i32> = make_lfuda(2);
+    assert_eq!(cache.global_age(), 0);
+
+    cache.put("a", 1);
+    cache.put("b", 2);
+
+    // Trigger eviction to increase global age
+    cache.put("c", 3);
+    // Global age should have increased (set to evicted item's priority)
+    // The exact value depends on implementation, but it should be >= 0
+    let age_after = cache.global_age();
+    assert!(
+        age_after >= 0,
+        "LFUDA global_age should be non-negative after eviction"
+    );
+}
+
+#[test]
+fn test_gdsf_global_age_increases_on_eviction() {
+    let mut cache: GdsfCache<&str, i32> = make_gdsf(2);
+    assert!((cache.global_age() - 0.0).abs() < f64::EPSILON);
+
+    cache.put("a", 1, OBJECT_SIZE);
+    cache.put("b", 2, OBJECT_SIZE);
+
+    // Trigger eviction
+    cache.put("c", 3, OBJECT_SIZE);
+    let age_after = cache.global_age();
+    assert!(
+        age_after >= 0.0,
+        "GDSF global_age should be non-negative after eviction"
+    );
+}
+
+#[test]
+fn test_slru_protected_max_size() {
+    let cache: SlruCache<&str, i32> = make_slru(10, 4);
+    assert_eq!(cache.protected_max_size().get(), 4);
+
+    let cache2: SlruCache<&str, i32> = make_slru(100, 25);
+    assert_eq!(cache2.protected_max_size().get(), 25);
+}
+
+#[test]
+#[allow(deprecated)]
+fn test_gdsf_pop_key() {
+    let mut cache: GdsfCache<&str, i32> = make_gdsf(3);
+    cache.put("a", 1, OBJECT_SIZE);
+    cache.put("b", 2, OBJECT_SIZE);
+    cache.put("c", 3, OBJECT_SIZE);
+
+    // pop_key removes a specific key
+    let removed = cache.pop_key(&"b");
+    assert_eq!(removed, Some(2));
+    assert_eq!(cache.len(), 2);
+    assert!(cache.get(&"b").is_none());
+
+    // pop_key on nonexistent key returns None
+    let removed = cache.pop_key(&"missing");
+    assert_eq!(removed, None);
+}

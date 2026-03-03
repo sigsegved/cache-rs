@@ -1973,3 +1973,371 @@ fn test_concurrent_lru_record_miss() {
         "Should have recorded misses"
     );
 }
+
+// ============================================================================
+// GET_WITH COVERAGE
+// ============================================================================
+// get_with() allows applying a function to the value under the lock,
+// returning a transformed result.
+
+#[test]
+fn test_concurrent_lru_get_with() {
+    let cache: ConcurrentLruCache<&str, i32> = ConcurrentLruCache::init(lru_config(10, 4), None);
+    cache.put("a", 42);
+
+    // Use get_with to transform value
+    let doubled = cache.get_with(&"a", |v| v * 2);
+    assert_eq!(doubled, Some(84));
+
+    // get_with on missing key returns None
+    let result = cache.get_with(&"missing", |v| v * 2);
+    assert_eq!(result, None);
+}
+
+#[test]
+fn test_concurrent_lfu_get_with() {
+    let cache: ConcurrentLfuCache<&str, i32> = ConcurrentLfuCache::init(lfu_config(10, 4), None);
+    cache.put("a", 42);
+
+    let doubled = cache.get_with(&"a", |v| v * 2);
+    assert_eq!(doubled, Some(84));
+
+    let result = cache.get_with(&"missing", |v| v * 2);
+    assert_eq!(result, None);
+}
+
+#[test]
+fn test_concurrent_lfuda_get_with() {
+    let cache: ConcurrentLfudaCache<&str, i32> =
+        ConcurrentLfudaCache::init(lfuda_config(10, 4), None);
+    cache.put("a", 42);
+
+    let doubled = cache.get_with(&"a", |v| v * 2);
+    assert_eq!(doubled, Some(84));
+
+    let result = cache.get_with(&"missing", |v| v * 2);
+    assert_eq!(result, None);
+}
+
+#[test]
+fn test_concurrent_slru_get_with() {
+    let cache: ConcurrentSlruCache<&str, i32> =
+        ConcurrentSlruCache::init(slru_config(10, 4, 4), None);
+    cache.put("a", 42);
+
+    let doubled = cache.get_with(&"a", |v| v * 2);
+    assert_eq!(doubled, Some(84));
+
+    let result = cache.get_with(&"missing", |v| v * 2);
+    assert_eq!(result, None);
+}
+
+#[test]
+fn test_concurrent_gdsf_get_with() {
+    let cache: ConcurrentGdsfCache<&str, i32> = ConcurrentGdsfCache::init(gdsf_config(10, 4), None);
+    cache.put("a", 42, 1);
+
+    let doubled = cache.get_with(&"a", |v| v * 2);
+    assert_eq!(doubled, Some(84));
+
+    let result = cache.get_with(&"missing", |v| v * 2);
+    assert_eq!(result, None);
+}
+
+// ============================================================================
+// GET_MUT_WITH COVERAGE (ConcurrentLruCache only)
+// ============================================================================
+
+#[test]
+fn test_concurrent_lru_get_mut_with() {
+    let cache: ConcurrentLruCache<&str, i32> = ConcurrentLruCache::init(lru_config(10, 4), None);
+    cache.put("a", 42);
+
+    // Use get_mut_with to mutate value in-place and return result
+    let old_val = cache.get_mut_with(&"a", |v| {
+        let old = *v;
+        *v = 100;
+        old
+    });
+    assert_eq!(old_val, Some(42));
+
+    // Verify mutation persisted
+    assert_eq!(cache.get(&"a"), Some(100));
+
+    // get_mut_with on missing key returns None
+    let result = cache.get_mut_with(&"missing", |v| *v);
+    assert_eq!(result, None);
+}
+
+// ============================================================================
+// CONTAINS COVERAGE (concurrent)
+// ============================================================================
+
+#[test]
+fn test_concurrent_all_caches_contains() {
+    // LRU
+    let lru: ConcurrentLruCache<&str, i32> = ConcurrentLruCache::init(lru_config(10, 4), None);
+    assert!(!lru.contains(&"a"));
+    lru.put("a", 1);
+    assert!(lru.contains(&"a"));
+    lru.remove(&"a");
+    assert!(!lru.contains(&"a"));
+
+    // LFU
+    let lfu: ConcurrentLfuCache<&str, i32> = ConcurrentLfuCache::init(lfu_config(10, 4), None);
+    assert!(!lfu.contains(&"a"));
+    lfu.put("a", 1);
+    assert!(lfu.contains(&"a"));
+    lfu.remove(&"a");
+    assert!(!lfu.contains(&"a"));
+
+    // LFUDA
+    let lfuda: ConcurrentLfudaCache<&str, i32> =
+        ConcurrentLfudaCache::init(lfuda_config(10, 4), None);
+    assert!(!lfuda.contains(&"a"));
+    lfuda.put("a", 1);
+    assert!(lfuda.contains(&"a"));
+    lfuda.remove(&"a");
+    assert!(!lfuda.contains(&"a"));
+
+    // SLRU
+    let slru: ConcurrentSlruCache<&str, i32> =
+        ConcurrentSlruCache::init(slru_config(10, 4, 4), None);
+    assert!(!slru.contains(&"a"));
+    slru.put("a", 1);
+    assert!(slru.contains(&"a"));
+    slru.remove(&"a");
+    assert!(!slru.contains(&"a"));
+
+    // GDSF
+    let gdsf: ConcurrentGdsfCache<&str, i32> = ConcurrentGdsfCache::init(gdsf_config(10, 4), None);
+    assert!(!gdsf.contains(&"a"));
+    gdsf.put("a", 1, 1);
+    assert!(gdsf.contains(&"a"));
+    gdsf.remove(&"a");
+    assert!(!gdsf.contains(&"a"));
+}
+
+// ============================================================================
+// PEEK COVERAGE (concurrent)
+// ============================================================================
+
+#[test]
+fn test_concurrent_lru_peek() {
+    let cache: ConcurrentLruCache<&str, i32> = ConcurrentLruCache::init(lru_config(10, 4), None);
+    cache.put("a", 1);
+
+    // peek returns cloned value
+    assert_eq!(cache.peek(&"a"), Some(1));
+    // peek on missing key
+    assert_eq!(cache.peek(&"missing"), None);
+}
+
+#[test]
+fn test_concurrent_lfu_peek() {
+    let cache: ConcurrentLfuCache<&str, i32> = ConcurrentLfuCache::init(lfu_config(10, 4), None);
+    cache.put("a", 1);
+    assert_eq!(cache.peek(&"a"), Some(1));
+    assert_eq!(cache.peek(&"missing"), None);
+}
+
+#[test]
+fn test_concurrent_lfuda_peek() {
+    let cache: ConcurrentLfudaCache<&str, i32> =
+        ConcurrentLfudaCache::init(lfuda_config(10, 4), None);
+    cache.put("a", 1);
+    assert_eq!(cache.peek(&"a"), Some(1));
+    assert_eq!(cache.peek(&"missing"), None);
+}
+
+#[test]
+fn test_concurrent_slru_peek() {
+    let cache: ConcurrentSlruCache<&str, i32> =
+        ConcurrentSlruCache::init(slru_config(10, 4, 4), None);
+    cache.put("a", 1);
+    assert_eq!(cache.peek(&"a"), Some(1));
+    assert_eq!(cache.peek(&"missing"), None);
+}
+
+#[test]
+fn test_concurrent_gdsf_peek() {
+    let cache: ConcurrentGdsfCache<&str, i32> = ConcurrentGdsfCache::init(gdsf_config(10, 4), None);
+    cache.put("a", 1, 1);
+    assert_eq!(cache.peek(&"a"), Some(1));
+    assert_eq!(cache.peek(&"missing"), None);
+}
+
+// ============================================================================
+// POP COVERAGE (concurrent)
+// ============================================================================
+
+#[test]
+fn test_concurrent_lru_pop() {
+    let cache: ConcurrentLruCache<i32, i32> = ConcurrentLruCache::init(lru_config(10, 4), None);
+    assert_eq!(cache.pop(), None); // empty
+
+    cache.put(1, 10);
+    cache.put(2, 20);
+    cache.put(3, 30);
+
+    let popped = cache.pop();
+    assert!(popped.is_some());
+    assert_eq!(cache.len(), 2);
+}
+
+#[test]
+fn test_concurrent_lfu_pop() {
+    let cache: ConcurrentLfuCache<i32, i32> = ConcurrentLfuCache::init(lfu_config(10, 4), None);
+    assert_eq!(cache.pop(), None);
+
+    cache.put(1, 10);
+    cache.put(2, 20);
+
+    let popped = cache.pop();
+    assert!(popped.is_some());
+    assert_eq!(cache.len(), 1);
+}
+
+#[test]
+fn test_concurrent_lfuda_pop() {
+    let cache: ConcurrentLfudaCache<i32, i32> =
+        ConcurrentLfudaCache::init(lfuda_config(10, 4), None);
+    assert_eq!(cache.pop(), None);
+
+    cache.put(1, 10);
+    cache.put(2, 20);
+
+    let popped = cache.pop();
+    assert!(popped.is_some());
+    assert_eq!(cache.len(), 1);
+}
+
+#[test]
+fn test_concurrent_slru_pop() {
+    let cache: ConcurrentSlruCache<i32, i32> =
+        ConcurrentSlruCache::init(slru_config(10, 4, 4), None);
+    assert_eq!(cache.pop(), None);
+
+    cache.put(1, 10);
+    cache.put(2, 20);
+
+    let popped = cache.pop();
+    assert!(popped.is_some());
+    assert_eq!(cache.len(), 1);
+}
+
+#[test]
+fn test_concurrent_gdsf_pop() {
+    let cache: ConcurrentGdsfCache<i32, i32> = ConcurrentGdsfCache::init(gdsf_config(10, 4), None);
+    assert_eq!(cache.pop(), None);
+
+    cache.put(1, 10, 1);
+    cache.put(2, 20, 1);
+
+    let popped = cache.pop();
+    assert!(popped.is_some());
+    assert_eq!(cache.len(), 1);
+}
+
+// ============================================================================
+// CAPACITY / SEGMENT_COUNT COVERAGE (concurrent)
+// ============================================================================
+
+#[test]
+fn test_concurrent_all_caches_capacity_and_segments() {
+    let lru: ConcurrentLruCache<i32, i32> = ConcurrentLruCache::init(lru_config(100, 4), None);
+    assert_eq!(lru.capacity(), 100);
+    assert_eq!(lru.segment_count(), 4);
+
+    let lfu: ConcurrentLfuCache<i32, i32> = ConcurrentLfuCache::init(lfu_config(200, 8), None);
+    assert_eq!(lfu.capacity(), 200);
+    assert_eq!(lfu.segment_count(), 8);
+
+    let lfuda: ConcurrentLfudaCache<i32, i32> =
+        ConcurrentLfudaCache::init(lfuda_config(300, 4), None);
+    assert_eq!(lfuda.capacity(), 300);
+    assert_eq!(lfuda.segment_count(), 4);
+
+    let slru: ConcurrentSlruCache<i32, i32> =
+        ConcurrentSlruCache::init(slru_config(400, 100, 8), None);
+    assert_eq!(slru.capacity(), 400);
+    assert_eq!(slru.segment_count(), 8);
+
+    let gdsf: ConcurrentGdsfCache<i32, i32> = ConcurrentGdsfCache::init(gdsf_config(500, 4), None);
+    assert_eq!(gdsf.capacity(), 500);
+    assert_eq!(gdsf.segment_count(), 4);
+}
+
+// ============================================================================
+// CACHE_METRICS TRAIT COVERAGE (concurrent)
+// ============================================================================
+
+#[test]
+fn test_concurrent_all_caches_algorithm_name() {
+    let lru: ConcurrentLruCache<i32, i32> = ConcurrentLruCache::init(lru_config(10, 4), None);
+    assert_eq!(lru.algorithm_name(), "ConcurrentLRU");
+
+    let lfu: ConcurrentLfuCache<i32, i32> = ConcurrentLfuCache::init(lfu_config(10, 4), None);
+    assert_eq!(lfu.algorithm_name(), "ConcurrentLFU");
+
+    let lfuda: ConcurrentLfudaCache<i32, i32> =
+        ConcurrentLfudaCache::init(lfuda_config(10, 4), None);
+    assert_eq!(lfuda.algorithm_name(), "ConcurrentLFUDA");
+
+    let slru: ConcurrentSlruCache<i32, i32> =
+        ConcurrentSlruCache::init(slru_config(10, 4, 4), None);
+    assert_eq!(slru.algorithm_name(), "ConcurrentSLRU");
+
+    let gdsf: ConcurrentGdsfCache<i32, i32> = ConcurrentGdsfCache::init(gdsf_config(10, 4), None);
+    assert_eq!(gdsf.algorithm_name(), "ConcurrentGDSF");
+}
+
+#[test]
+fn test_concurrent_all_caches_metrics() {
+    let lru: ConcurrentLruCache<i32, i32> = ConcurrentLruCache::init(lru_config(10, 4), None);
+    lru.put(1, 10);
+    lru.get(&1);
+    let metrics = lru.metrics();
+    assert!(
+        metrics.contains_key("cache_hits"),
+        "ConcurrentLRU metrics should have 'cache_hits'"
+    );
+
+    let lfu: ConcurrentLfuCache<i32, i32> = ConcurrentLfuCache::init(lfu_config(10, 4), None);
+    lfu.put(1, 10);
+    lfu.get(&1);
+    let metrics = lfu.metrics();
+    assert!(
+        metrics.contains_key("cache_hits"),
+        "ConcurrentLFU metrics should have 'cache_hits'"
+    );
+
+    let lfuda: ConcurrentLfudaCache<i32, i32> =
+        ConcurrentLfudaCache::init(lfuda_config(10, 4), None);
+    lfuda.put(1, 10);
+    lfuda.get(&1);
+    let metrics = lfuda.metrics();
+    assert!(
+        metrics.contains_key("cache_hits"),
+        "ConcurrentLFUDA metrics should have 'cache_hits'"
+    );
+
+    let slru: ConcurrentSlruCache<i32, i32> =
+        ConcurrentSlruCache::init(slru_config(10, 4, 4), None);
+    slru.put(1, 10);
+    slru.get(&1);
+    let metrics = slru.metrics();
+    assert!(
+        metrics.contains_key("cache_hits"),
+        "ConcurrentSLRU metrics should have 'cache_hits'"
+    );
+
+    let gdsf: ConcurrentGdsfCache<i32, i32> = ConcurrentGdsfCache::init(gdsf_config(10, 4), None);
+    gdsf.put(1, 10, 1);
+    gdsf.get(&1);
+    let metrics = gdsf.metrics();
+    assert!(
+        metrics.contains_key("cache_hits"),
+        "ConcurrentGDSF metrics should have 'cache_hits'"
+    );
+}
