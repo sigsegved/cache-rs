@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### ⚠️ BREAKING CHANGES
+
+#### **Unified `put` API**
+
+The `put` method signature has changed for all cache algorithms. The separate `put_with_size()` method has been removed in favor of a unified API:
+
+**Before (0.3.x):**
+```rust
+cache.put(key, value);                    // Entry-count mode
+cache.put_with_size(key, value, size);    // Size-based mode
+```
+
+**After:**
+```rust
+cache.put(key, value, None);              // Entry-count mode (size defaults to 1)
+cache.put(key, value, Some(1024));        // Size-based mode
+```
+
+#### **Migration Guide**
+
+| Old API | New API |
+|---------|---------|
+| `cache.put(key, value)` | `cache.put(key, value, None)` |
+| `cache.put_with_size(key, value, size)` | `cache.put(key, value, Some(size))` |
+
+This applies to all algorithms (LRU, LFU, LFUDA, SLRU, GDSF) and their concurrent variants.
+
+### Changed
+
+- **GDSF**: The `size` parameter is now `Option<u64>` instead of required `u64`, defaulting to `1` when `None`
+- **Internal**: Removed `estimate_object_size()` helper functions as they are no longer needed
+
+### Removed
+
+- `put_with_size()` method from all cache implementations
+- Separate `put_with_size_stats` tracking in cache-simulator (merged into `put_stats`)
+
 ## [0.3.1] - 2026-02-03
 
 ### Changed

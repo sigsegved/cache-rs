@@ -85,7 +85,7 @@
 //!     thread::spawn(move || {
 //!         for j in 0..1000 {
 //!             let key = format!("key-{}-{}", i, j);
-//!             cache.put(key.clone(), j);
+//!             cache.put(key.clone(), j, None);
 //!             // Access popular keys more frequently
 //!             if j % 10 == 0 {
 //!                 for _ in 0..5 {
@@ -235,20 +235,14 @@ where
         segment.get(key).map(f)
     }
 
-    /// Inserts a key-value pair into the cache.
+    /// Inserts a key-value pair into the cache with optional size tracking.
     ///
     /// If the cache is at capacity, the least frequently used entry is evicted.
-    pub fn put(&self, key: K, value: V) -> Option<(K, V)> {
+    /// If `size` is `None`, defaults to 1.
+    pub fn put(&self, key: K, value: V, size: Option<u64>) -> Option<(K, V)> {
         let idx = self.segment_index(&key);
         let mut segment = self.segments[idx].lock();
-        segment.put(key, value)
-    }
-
-    /// Inserts a key-value pair with explicit size tracking.
-    pub fn put_with_size(&self, key: K, value: V, size: u64) -> Option<(K, V)> {
-        let idx = self.segment_index(&key);
-        let mut segment = self.segments[idx].lock();
-        segment.put_with_size(key, value, size)
+        segment.put(key, value, size)
     }
 
     /// Removes a key from the cache, returning the value if it existed.
@@ -470,8 +464,8 @@ mod tests {
         let cache: ConcurrentLfuCache<String, i32> =
             ConcurrentLfuCache::init(make_config(100, 16), None);
 
-        cache.put("a".to_string(), 1);
-        cache.put("b".to_string(), 2);
+        cache.put("a".to_string(), 1, None);
+        cache.put("b".to_string(), 2, None);
 
         assert_eq!(cache.get(&"a".to_string()), Some(1));
         assert_eq!(cache.get(&"b".to_string()), Some(2));
@@ -491,7 +485,7 @@ mod tests {
             handles.push(thread::spawn(move || {
                 for i in 0..ops_per_thread {
                     let key = std::format!("key_{}_{}", t, i);
-                    cache.put(key.clone(), i);
+                    cache.put(key.clone(), i, None);
                     // Access multiple times to test frequency tracking
                     if i % 3 == 0 {
                         let _ = cache.get(&key);
@@ -535,11 +529,11 @@ mod tests {
         assert!(cache.is_empty());
         assert_eq!(cache.len(), 0);
 
-        cache.put("key1".to_string(), 1);
+        cache.put("key1".to_string(), 1, None);
         assert_eq!(cache.len(), 1);
         assert!(!cache.is_empty());
 
-        cache.put("key2".to_string(), 2);
+        cache.put("key2".to_string(), 2, None);
         assert_eq!(cache.len(), 2);
     }
 
@@ -548,8 +542,8 @@ mod tests {
         let cache: ConcurrentLfuCache<String, i32> =
             ConcurrentLfuCache::init(make_config(100, 16), None);
 
-        cache.put("key1".to_string(), 1);
-        cache.put("key2".to_string(), 2);
+        cache.put("key1".to_string(), 1, None);
+        cache.put("key2".to_string(), 2, None);
 
         assert_eq!(cache.remove(&"key1".to_string()), Some(1));
         assert_eq!(cache.len(), 1);
@@ -563,9 +557,9 @@ mod tests {
         let cache: ConcurrentLfuCache<String, i32> =
             ConcurrentLfuCache::init(make_config(100, 16), None);
 
-        cache.put("key1".to_string(), 1);
-        cache.put("key2".to_string(), 2);
-        cache.put("key3".to_string(), 3);
+        cache.put("key1".to_string(), 1, None);
+        cache.put("key2".to_string(), 2, None);
+        cache.put("key3".to_string(), 3, None);
 
         assert_eq!(cache.len(), 3);
 
@@ -581,7 +575,7 @@ mod tests {
         let cache: ConcurrentLfuCache<String, i32> =
             ConcurrentLfuCache::init(make_config(100, 16), None);
 
-        cache.put("exists".to_string(), 1);
+        cache.put("exists".to_string(), 1, None);
 
         assert!(cache.contains(&"exists".to_string()));
         assert!(!cache.contains(&"missing".to_string()));
@@ -592,7 +586,7 @@ mod tests {
         let cache: ConcurrentLfuCache<String, String> =
             ConcurrentLfuCache::init(make_config(100, 16), None);
 
-        cache.put("key".to_string(), "hello world".to_string());
+        cache.put("key".to_string(), "hello world".to_string(), None);
 
         let len = cache.get_with(&"key".to_string(), |v: &String| v.len());
         assert_eq!(len, Some(11));
@@ -606,9 +600,9 @@ mod tests {
         let cache: ConcurrentLfuCache<String, i32> =
             ConcurrentLfuCache::init(make_config(48, 16), None);
 
-        cache.put("a".to_string(), 1);
-        cache.put("b".to_string(), 2);
-        cache.put("c".to_string(), 3);
+        cache.put("a".to_string(), 1, None);
+        cache.put("b".to_string(), 2, None);
+        cache.put("c".to_string(), 3, None);
 
         // Access "a" and "c" multiple times to increase frequency
         for _ in 0..5 {
@@ -617,7 +611,7 @@ mod tests {
         }
 
         // Add a new item
-        cache.put("d".to_string(), 4);
+        cache.put("d".to_string(), 4, None);
 
         assert!(cache.len() <= 48);
     }
@@ -629,7 +623,7 @@ mod tests {
 
         // Fill the cache
         for i in 0..10 {
-            cache.put(std::format!("key{}", i), i);
+            cache.put(std::format!("key{}", i), i, None);
         }
 
         // Cache should not exceed capacity
@@ -641,8 +635,8 @@ mod tests {
         let cache: ConcurrentLfuCache<String, i32> =
             ConcurrentLfuCache::init(make_config(100, 16), None);
 
-        cache.put("a".to_string(), 1);
-        cache.put("b".to_string(), 2);
+        cache.put("a".to_string(), 1, None);
+        cache.put("b".to_string(), 2, None);
 
         let metrics = cache.metrics();
         // Metrics aggregation across segments
@@ -674,7 +668,7 @@ mod tests {
         let cache: ConcurrentLfuCache<String, i32> =
             ConcurrentLfuCache::init(make_config(100, 16), None);
 
-        cache.put("test_key".to_string(), 42);
+        cache.put("test_key".to_string(), 42, None);
 
         // Test with borrowed key
         let key_str = "test_key";
@@ -688,7 +682,7 @@ mod tests {
         let cache: ConcurrentLfuCache<String, i32> =
             ConcurrentLfuCache::init(make_config(100, 16), None);
 
-        cache.put("key".to_string(), 1);
+        cache.put("key".to_string(), 1, None);
 
         // Access the key multiple times
         for _ in 0..10 {
@@ -704,8 +698,8 @@ mod tests {
         let cache: ConcurrentLfuCache<String, i32> =
             ConcurrentLfuCache::init(make_config(100, 16), None);
 
-        cache.put("a".to_string(), 1);
-        cache.put("b".to_string(), 2);
+        cache.put("a".to_string(), 1, None);
+        cache.put("b".to_string(), 2, None);
 
         // contains() should check without updating frequency
         assert!(cache.contains(&"a".to_string()));
@@ -718,8 +712,8 @@ mod tests {
         let cache: ConcurrentLfuCache<String, i32> =
             ConcurrentLfuCache::init(make_config(100, 16), None);
 
-        cache.put("a".to_string(), 1);
-        cache.put("b".to_string(), 2);
+        cache.put("a".to_string(), 1, None);
+        cache.put("b".to_string(), 2, None);
 
         let initial_len = cache.len();
 
@@ -747,8 +741,8 @@ mod tests {
         let cache: ConcurrentLfuCache<String, i32> =
             ConcurrentLfuCache::init(make_config(100, 16), None);
 
-        cache.put("a".to_string(), 1);
-        cache.put("b".to_string(), 2);
+        cache.put("a".to_string(), 1, None);
+        cache.put("b".to_string(), 2, None);
 
         let initial_len = cache.len();
 
@@ -776,9 +770,9 @@ mod tests {
         let cache: ConcurrentLfuCache<String, i32> =
             ConcurrentLfuCache::init(make_config(100, 16), None);
 
-        cache.put("a".to_string(), 1);
-        cache.put("b".to_string(), 2);
-        cache.put("c".to_string(), 3);
+        cache.put("a".to_string(), 1, None);
+        cache.put("b".to_string(), 2, None);
+        cache.put("c".to_string(), 3, None);
 
         let mut count = 0;
         while cache.pop().is_some() {
@@ -796,11 +790,11 @@ mod tests {
             ConcurrentLfuCache::init(make_config(100, 1), None);
 
         // Insert entries: all start with frequency 1
-        cache.put("a".to_string(), 1);
-        cache.put("b".to_string(), 2);
-        cache.put("c".to_string(), 3);
-        cache.put("d".to_string(), 4);
-        cache.put("e".to_string(), 5);
+        cache.put("a".to_string(), 1, None);
+        cache.put("b".to_string(), 2, None);
+        cache.put("c".to_string(), 3, None);
+        cache.put("d".to_string(), 4, None);
+        cache.put("e".to_string(), 5, None);
 
         // Access some entries to differentiate frequencies
         // a: freq 3, b: freq 2, c: freq 1, d: freq 4, e: freq 1
@@ -820,7 +814,7 @@ mod tests {
         assert_eq!(cache.len(), 3);
 
         // Put new entry "f" with freq 1
-        cache.put("f".to_string(), 6);
+        cache.put("f".to_string(), 6, None);
         assert_eq!(cache.len(), 4);
 
         // pop() removes lowest freq (e with freq 1, older than f)

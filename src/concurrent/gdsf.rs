@@ -57,10 +57,10 @@
 //!
 //! ```rust,ignore
 //! // Standard caches
-//! lru_cache.put(key, value);
+//! lru_cache.put(key, value, None);
 //!
 //! // GDSF requires size
-//! gdsf_cache.put(key, value, 2048);  // size in bytes
+//! gdsf_cache.put(key, value, Some(2048));  // size in bytes
 //! ```
 //!
 //! # Performance Characteristics
@@ -161,7 +161,7 @@
 //!
 //! // Insert small frequently-accessed items
 //! for i in 0..100 {
-//!     cache.put(format!("small-{}", i), vec![0u8; 1024], 1024);
+//!     cache.put(format!("small-{}", i, None), vec![0u8; 1024], 1024);
 //!     // Access multiple times to increase frequency
 //!     for _ in 0..5 {
 //!         let _ = cache.get(&format!("small-{}", i));
@@ -169,7 +169,7 @@
 //! }
 //!
 //! // Insert large item - may evict multiple small items based on priority
-//! cache.put("large".to_string(), vec![0u8; 5 * 1024 * 1024], 5 * 1024 * 1024);
+//! cache.put("large".to_string(), vec![0u8; 5 * 1024 * 1024], Some(5 * 1024 * 1024));
 //!
 //! // GDSF may choose to keep small popular items over one large item
 //! ```
@@ -327,9 +327,11 @@ where
 
     /// Inserts a key-value pair with its size into the cache.
     ///
-    /// Unlike other caches, GDSF requires the size of the object for priority calculation.
+    /// Inserts a key-value pair into the cache with optional size tracking.
+    ///
+    /// GDSF uses size for priority calculation. If `size` is `None`, defaults to 1.
     /// Returns the old value if the key was already present.
-    pub fn put(&self, key: K, value: V, size: u64) -> Option<V>
+    pub fn put(&self, key: K, value: V, size: Option<u64>) -> Option<V>
     where
         K: Clone,
     {
@@ -559,8 +561,8 @@ mod tests {
         let cache: ConcurrentGdsfCache<String, i32> =
             ConcurrentGdsfCache::init(make_config(10000, 16), None);
 
-        cache.put("a".to_string(), 1, 100u64);
-        cache.put("b".to_string(), 2, 200u64);
+        cache.put("a".to_string(), 1, Some(100u64));
+        cache.put("b".to_string(), 2, Some(200u64));
 
         assert_eq!(cache.get(&"a".to_string()), Some(1));
         assert_eq!(cache.get(&"b".to_string()), Some(2));
@@ -581,7 +583,7 @@ mod tests {
                 for i in 0..ops_per_thread {
                     let key = std::format!("key_{}_{}", t, i);
                     let size = (10 + (i % 100)) as u64;
-                    cache.put(key.clone(), i, size);
+                    cache.put(key.clone(), i, Some(size));
                     let _ = cache.get(&key);
                 }
             }));
@@ -621,11 +623,11 @@ mod tests {
         assert!(cache.is_empty());
         assert_eq!(cache.len(), 0);
 
-        cache.put("key1".to_string(), 1, 100);
+        cache.put("key1".to_string(), 1, Some(100));
         assert_eq!(cache.len(), 1);
         assert!(!cache.is_empty());
 
-        cache.put("key2".to_string(), 2, 200);
+        cache.put("key2".to_string(), 2, Some(200));
         assert_eq!(cache.len(), 2);
     }
 
@@ -634,8 +636,8 @@ mod tests {
         let cache: ConcurrentGdsfCache<String, i32> =
             ConcurrentGdsfCache::init(make_config(10000, 16), None);
 
-        cache.put("key1".to_string(), 1, 100);
-        cache.put("key2".to_string(), 2, 200);
+        cache.put("key1".to_string(), 1, Some(100));
+        cache.put("key2".to_string(), 2, Some(200));
 
         assert_eq!(cache.remove(&"key1".to_string()), Some(1));
         assert_eq!(cache.len(), 1);
@@ -649,9 +651,9 @@ mod tests {
         let cache: ConcurrentGdsfCache<String, i32> =
             ConcurrentGdsfCache::init(make_config(10000, 16), None);
 
-        cache.put("key1".to_string(), 1, 100);
-        cache.put("key2".to_string(), 2, 200);
-        cache.put("key3".to_string(), 3, 300);
+        cache.put("key1".to_string(), 1, Some(100));
+        cache.put("key2".to_string(), 2, Some(200));
+        cache.put("key3".to_string(), 3, Some(300));
 
         assert_eq!(cache.len(), 3);
 
@@ -667,7 +669,7 @@ mod tests {
         let cache: ConcurrentGdsfCache<String, i32> =
             ConcurrentGdsfCache::init(make_config(10000, 16), None);
 
-        cache.put("exists".to_string(), 1, 100);
+        cache.put("exists".to_string(), 1, Some(100));
 
         assert!(cache.contains(&"exists".to_string()));
         assert!(!cache.contains(&"missing".to_string()));
@@ -678,7 +680,7 @@ mod tests {
         let cache: ConcurrentGdsfCache<String, String> =
             ConcurrentGdsfCache::init(make_config(10000, 16), None);
 
-        cache.put("key".to_string(), "hello world".to_string(), 100);
+        cache.put("key".to_string(), "hello world".to_string(), Some(100));
 
         let len = cache.get_with(&"key".to_string(), |v: &String| v.len());
         assert_eq!(len, Some(11));
@@ -693,9 +695,9 @@ mod tests {
             ConcurrentGdsfCache::init(make_config(1000, 16), None);
 
         // Add items with different sizes
-        cache.put("small".to_string(), 1, 100);
-        cache.put("medium".to_string(), 2, 500);
-        cache.put("large".to_string(), 3, 800);
+        cache.put("small".to_string(), 1, Some(100));
+        cache.put("medium".to_string(), 2, Some(500));
+        cache.put("large".to_string(), 3, Some(800));
 
         // Access small item multiple times
         for _ in 0..10 {
@@ -703,7 +705,7 @@ mod tests {
         }
 
         // Add more items to trigger eviction
-        cache.put("another".to_string(), 4, 200);
+        cache.put("another".to_string(), 4, Some(200));
 
         // Small item with high frequency should be retained
         assert!(!cache.is_empty());
@@ -717,7 +719,7 @@ mod tests {
         // Fill the cache with various sizes
         for i in 0..20 {
             let size = (100 + i * 50) as u64;
-            cache.put(std::format!("key{}", i), i, size);
+            cache.put(std::format!("key{}", i), i, Some(size));
         }
 
         // Cache size should be managed
@@ -729,8 +731,8 @@ mod tests {
         let cache: ConcurrentGdsfCache<String, i32> =
             ConcurrentGdsfCache::init(make_config(10000, 16), None);
 
-        cache.put("a".to_string(), 1, 100);
-        cache.put("b".to_string(), 2, 200);
+        cache.put("a".to_string(), 1, Some(100));
+        cache.put("b".to_string(), 2, Some(200));
 
         let metrics = cache.metrics();
         // Metrics aggregation across segments
@@ -762,7 +764,7 @@ mod tests {
         let cache: ConcurrentGdsfCache<String, i32> =
             ConcurrentGdsfCache::init(make_config(10000, 16), None);
 
-        cache.put("test_key".to_string(), 42, 100);
+        cache.put("test_key".to_string(), 42, Some(100));
 
         // Test with borrowed key
         let key_str = "test_key";
@@ -777,10 +779,10 @@ mod tests {
             ConcurrentGdsfCache::init(make_config(10000, 16), None);
 
         // Add items with various sizes
-        cache.put("tiny".to_string(), 1, 10);
-        cache.put("small".to_string(), 2, 100);
-        cache.put("medium".to_string(), 3, 500);
-        cache.put("large".to_string(), 4, 1000);
+        cache.put("tiny".to_string(), 1, Some(10));
+        cache.put("small".to_string(), 2, Some(100));
+        cache.put("medium".to_string(), 3, Some(500));
+        cache.put("large".to_string(), 4, Some(1000));
 
         // All items should be present
         assert_eq!(cache.len(), 4);
@@ -796,12 +798,12 @@ mod tests {
             ConcurrentGdsfCache::init(make_config(5000, 16), None);
 
         // Add large item
-        cache.put("large".to_string(), 1, 3000);
+        cache.put("large".to_string(), 1, Some(3000));
 
         // Add and frequently access small items
         for i in 0..10 {
             let key = std::format!("small{}", i);
-            cache.put(key.clone(), i, 100);
+            cache.put(key.clone(), i, Some(100));
             for _ in 0..5 {
                 let _ = cache.get(&key);
             }
@@ -816,8 +818,8 @@ mod tests {
         let cache: ConcurrentGdsfCache<String, i32> =
             ConcurrentGdsfCache::init(make_config(10000, 16), None);
 
-        cache.put("a".to_string(), 1, 100);
-        cache.put("b".to_string(), 2, 100);
+        cache.put("a".to_string(), 1, Some(100));
+        cache.put("b".to_string(), 2, Some(100));
 
         // contains() should check without updating priority
         assert!(cache.contains(&"a".to_string()));
@@ -830,8 +832,8 @@ mod tests {
         let cache: ConcurrentGdsfCache<String, i32> =
             ConcurrentGdsfCache::init(make_config(10000, 16), None);
 
-        cache.put("a".to_string(), 1, 100);
-        cache.put("b".to_string(), 2, 100);
+        cache.put("a".to_string(), 1, Some(100));
+        cache.put("b".to_string(), 2, Some(100));
 
         let initial_len = cache.len();
 
@@ -859,8 +861,8 @@ mod tests {
         let cache: ConcurrentGdsfCache<String, i32> =
             ConcurrentGdsfCache::init(make_config(10000, 16), None);
 
-        cache.put("a".to_string(), 1, 100);
-        cache.put("b".to_string(), 2, 100);
+        cache.put("a".to_string(), 1, Some(100));
+        cache.put("b".to_string(), 2, Some(100));
 
         let initial_len = cache.len();
 
@@ -888,9 +890,9 @@ mod tests {
         let cache: ConcurrentGdsfCache<String, i32> =
             ConcurrentGdsfCache::init(make_config(10000, 16), None);
 
-        cache.put("a".to_string(), 1, 100);
-        cache.put("b".to_string(), 2, 100);
-        cache.put("c".to_string(), 3, 100);
+        cache.put("a".to_string(), 1, Some(100));
+        cache.put("b".to_string(), 2, Some(100));
+        cache.put("c".to_string(), 3, Some(100));
 
         let mut count = 0;
         while cache.pop().is_some() {
@@ -909,11 +911,11 @@ mod tests {
 
         // GDSF priority = (frequency / size) + global_age
         // Insert entries with different sizes
-        cache.put("a".to_string(), 1, 100); // large
-        cache.put("b".to_string(), 2, 10); // small
-        cache.put("c".to_string(), 3, 50); // medium
-        cache.put("d".to_string(), 4, 10); // small
-        cache.put("e".to_string(), 5, 200); // very large
+        cache.put("a".to_string(), 1, Some(100)); // large
+        cache.put("b".to_string(), 2, Some(10)); // small
+        cache.put("c".to_string(), 3, Some(50)); // medium
+        cache.put("d".to_string(), 4, Some(10)); // small
+        cache.put("e".to_string(), 5, Some(200)); // very large
 
         // Access some entries to differentiate priorities
         cache.get(&"b".to_string()); // bump b frequency (small size = high priority)
@@ -931,7 +933,7 @@ mod tests {
         assert_eq!(cache.len(), 3);
 
         // Put new entry
-        cache.put("f".to_string(), 6, 30);
+        cache.put("f".to_string(), 6, Some(30));
         assert_eq!(cache.len(), 4);
 
         // Access "f" to increase its priority

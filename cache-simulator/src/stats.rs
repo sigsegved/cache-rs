@@ -186,18 +186,8 @@ impl SimulationStats {
                     .map(|p| p.p99_ns)
                     .unwrap_or(0);
 
-                // Determine which put type was used
-                let (put_avg, _put_count) = if stats.latency.put_stats.count > 0 {
-                    (
-                        stats.latency.put_stats.avg_ns(),
-                        stats.latency.put_stats.count,
-                    )
-                } else {
-                    (
-                        stats.latency.put_with_size_stats.avg_ns(),
-                        stats.latency.put_with_size_stats.count,
-                    )
-                };
+                // Get put stats (unified API)
+                let put_avg = stats.latency.put_stats.avg_ns();
 
                 println!(
                     "{:<6} {:<10} {:>7.2}% {:>9.2}% {:>12} {:>9.3}s {:>10.0} {:>9.0}ns {:>9.0}ns {:>9}ns",
@@ -366,27 +356,6 @@ impl SimulationStats {
                     put_p99_ns: stats
                         .latency
                         .put_stats
-                        .percentiles
-                        .as_ref()
-                        .map(|p| p.p99_ns)
-                        .unwrap_or(0),
-                    // Put with size stats
-                    put_size_ops: stats.latency.put_with_size_stats.count,
-                    put_size_duration_ns: stats.latency.put_with_size_stats.total_ns,
-                    put_size_ops_per_sec: stats.latency.put_with_size_stats.ops_per_sec(),
-                    put_size_avg_ns: stats.latency.put_with_size_stats.avg_ns(),
-                    put_size_min_ns: stats.latency.put_with_size_stats.min_ns,
-                    put_size_max_ns: stats.latency.put_with_size_stats.max_ns,
-                    put_size_p50_ns: stats
-                        .latency
-                        .put_with_size_stats
-                        .percentiles
-                        .as_ref()
-                        .map(|p| p.p50_ns)
-                        .unwrap_or(0),
-                    put_size_p99_ns: stats
-                        .latency
-                        .put_with_size_stats
                         .percentiles
                         .as_ref()
                         .map(|p| p.p99_ns)

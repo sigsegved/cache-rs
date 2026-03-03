@@ -150,16 +150,16 @@
 //! };
 //! let mut cache = LfudaCache::init(config, None);
 //!
-//! cache.put("a", 1);
-//! cache.put("b", 2);
-//! cache.put("c", 3);
+//! cache.put("a", 1, None);
+//! cache.put("b", 2, None);
+//! cache.put("c", 3, None);
 //!
 //! // Access "a" to increase its priority
 //! assert_eq!(cache.get(&"a"), Some(&1));
 //! assert_eq!(cache.get(&"a"), Some(&1));
 //!
 //! // Add new item - lowest priority item evicted
-//! cache.put("d", 4);
+//! cache.put("d", 4, None);
 //!
 //! // "a" survives due to higher priority (frequency + age)
 //! assert_eq!(cache.get(&"a"), Some(&1));
@@ -181,7 +181,7 @@
 //!
 //! // Populate cache with initial data
 //! for i in 0..100 {
-//!     cache.put(i, i * 10);
+//!     cache.put(i, i * 10, None);
 //! }
 //!
 //! // Access some items frequently
@@ -191,7 +191,7 @@
 //!
 //! // Later: new content arrives, old content ages out
 //! for i in 100..200 {
-//!     cache.put(i, i * 10);  // Each insert may evict old items
+//!     cache.put(i, i * 10, None);  // Each insert may evict old items
 //! }
 //!
 //! // Item 0 may eventually be evicted if not accessed recently,
@@ -268,7 +268,6 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use core::borrow::Borrow;
 use core::hash::{BuildHasher, Hash};
-use core::mem;
 use core::num::NonZeroUsize;
 
 #[cfg(feature = "hashbrown")]
@@ -393,11 +392,6 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
     #[inline]
     pub(crate) fn metrics(&self) -> &LfudaCacheMetrics {
         &self.metrics
-    }
-
-    /// Estimates the size of a key-value pair in bytes for metrics tracking
-    fn estimate_object_size(&self, _key: &K, _value: &V) -> u64 {
-        mem::size_of::<K>() as u64 + mem::size_of::<V>() as u64 + 64
     }
 
     /// Records a cache miss for metrics tracking
@@ -528,19 +522,17 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
     }
 
     /// Inserts a key-value pair into the segment.
-    pub(crate) fn put(&mut self, key: K, value: V) -> Option<(K, V)>
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to insert
+    /// * `value` - The value to insert  
+    /// * `size` - Optional size in bytes. If `None`, defaults to 1.
+    pub(crate) fn put(&mut self, key: K, value: V, size: Option<u64>) -> Option<(K, V)>
     where
         K: Clone,
     {
-        let object_size = self.estimate_object_size(&key, &value);
-        self.put_with_size(key, value, object_size)
-    }
-
-    /// Insert a key-value pair with explicit size tracking.
-    pub(crate) fn put_with_size(&mut self, key: K, value: V, size: u64) -> Option<(K, V)>
-    where
-        K: Clone,
-    {
+        let size = size.unwrap_or(1);
         // If key already exists, update it
         if let Some(&node) = self.map.get(&key) {
             unsafe {
@@ -717,7 +709,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaSegment<K, V, S> {
     ///
     /// This method does **not** increment the eviction counter in metrics.
     /// Eviction metrics are only recorded when the cache internally evicts
-    /// entries to make room during `put()`/`put_with_size()` operations.
+    /// entries to make room during `put()` operations.
     ///
     /// Returns `None` if the cache is empty.
     pub(crate) fn pop(&mut self) -> Option<(K, V)> {
@@ -894,17 +886,17 @@ impl<K, V, S> core::fmt::Debug for LfudaSegment<K, V, S> {
 /// let mut cache = LfudaCache::init(config, None);
 ///
 /// // Add some items
-/// cache.put("a", 1);
-/// cache.put("b", 2);
-/// cache.put("c", 3);
+/// cache.put("a", 1, None);
+/// cache.put("b", 2, None);
+/// cache.put("c", 3, None);
 ///
 /// // Access "a" multiple times to increase its frequency
 /// assert_eq!(cache.get(&"a"), Some(&1));
 /// assert_eq!(cache.get(&"a"), Some(&1));
 ///
 /// // Add more items to trigger aging
-/// cache.put("d", 4); // This will evict an item and increase global age
-/// cache.put("e", 5); // New items benefit from the increased age
+/// cache.put("d", 4, None); // This will evict an item and increase global age
+/// cache.put("e", 5, None); // New items benefit from the increased age
 /// ```
 #[derive(Debug)]
 pub struct LfudaCache<K, V, S = DefaultHashBuilder> {
@@ -995,6 +987,12 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
     /// New items are inserted with a frequency of 1 and age_at_insertion set to the
     /// current global_age.
     ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to insert
+    /// * `value` - The value to insert
+    /// * `size` - Optional size in bytes for size-aware caching. If `None`, defaults to 1.
+    ///
     /// # Multi-eviction behavior
     ///
     /// When using size-based caching (`max_size` is not `u64::MAX`), inserting
@@ -1002,30 +1000,11 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
     /// free enough space. In this case, only the **last** evicted entry is
     /// returned. For count-based caches, at most one entry is evicted.
     #[inline]
-    pub fn put(&mut self, key: K, value: V) -> Option<(K, V)>
+    pub fn put(&mut self, key: K, value: V, size: Option<u64>) -> Option<(K, V)>
     where
         K: Clone,
     {
-        self.segment.put(key, value)
-    }
-
-    /// Insert a key-value pair with explicit size tracking.
-    ///
-    /// The `size` parameter specifies how much of `max_size` this entry consumes.
-    /// Use `size=1` for count-based caches.
-    ///
-    /// # Multi-eviction behavior
-    ///
-    /// When the new entry's size would exceed `max_size`, multiple existing
-    /// entries may be evicted to free enough space. Only the **last** evicted
-    /// entry is returned. All evicted entries are counted in the `evictions`
-    /// metric.
-    #[inline]
-    pub fn put_with_size(&mut self, key: K, value: V, size: u64) -> Option<(K, V)>
-    where
-        K: Clone,
-    {
-        self.segment.put_with_size(key, value, size)
+        self.segment.put(key, value, size)
     }
 
     /// Removes a key from the cache, returning the value at the key if the key was previously in the cache.
@@ -1069,8 +1048,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
     ///     max_size: u64::MAX,
     /// };
     /// let mut cache = LfudaCache::init(config, None);
-    /// cache.put("a", 1);
-    /// cache.put("b", 2);
+    /// cache.put("a", 1, None);
+    /// cache.put("b", 2, None);
     ///
     /// // contains() does NOT update priority
     /// assert!(cache.contains(&"a"));
@@ -1102,7 +1081,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
     ///     max_size: u64::MAX,
     /// };
     /// let mut cache = LfudaCache::init(config, None);
-    /// cache.put("a", 1);
+    /// cache.put("a", 1, None);
     ///
     /// // peek does not change priority
     /// assert_eq!(cache.peek(&"a"), Some(&1));
@@ -1137,8 +1116,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
     ///     max_size: u64::MAX,
     /// };
     /// let mut cache = LfudaCache::init(config, None);
-    /// cache.put("a", 1);
-    /// cache.put("b", 2);
+    /// cache.put("a", 1, None);
+    /// cache.put("b", 2, None);
     /// cache.get(&"b");  // Increase frequency of "b"
     ///
     /// // Pop the eviction candidate (lowest priority item)
@@ -1200,7 +1179,7 @@ where
     ///     max_size: u64::MAX,
     /// };
     /// let mut cache: LfudaCache<&str, i32> = LfudaCache::init(config, None);
-    /// cache.put("key", 42);
+    /// cache.put("key", 42, None);
     ///
     /// // Cache with size limit
     /// let config = LfudaCacheConfig {
@@ -1244,9 +1223,9 @@ mod tests {
         let mut cache = make_cache(3);
 
         // Add items
-        assert_eq!(cache.put("a", 1), None);
-        assert_eq!(cache.put("b", 2), None);
-        assert_eq!(cache.put("c", 3), None);
+        assert_eq!(cache.put("a", 1, None), None);
+        assert_eq!(cache.put("b", 2, None), None);
+        assert_eq!(cache.put("c", 3, None), None);
 
         // Access "a" multiple times to increase its frequency
         assert_eq!(cache.get(&"a"), Some(&1));
@@ -1256,7 +1235,7 @@ mod tests {
         assert_eq!(cache.get(&"b"), Some(&2));
 
         // Add a new item, should evict "c" (lowest effective priority)
-        let evicted = cache.put("d", 4);
+        let evicted = cache.put("d", 4, None);
         assert!(evicted.is_some());
         let (evicted_key, evicted_val) = evicted.unwrap();
         assert_eq!(evicted_key, "c");
@@ -1274,8 +1253,8 @@ mod tests {
         let mut cache = make_cache(2);
 
         // Add items and access them
-        cache.put("a", 1);
-        cache.put("b", 2);
+        cache.put("a", 1, None);
+        cache.put("b", 2, None);
 
         // Access "a" many times
         for _ in 0..10 {
@@ -1286,14 +1265,14 @@ mod tests {
         assert_eq!(cache.global_age(), 0);
 
         // Fill cache and cause eviction
-        let evicted = cache.put("c", 3);
+        let evicted = cache.put("c", 3, None);
         assert!(evicted.is_some());
 
         // Global age should have increased after eviction
         assert!(cache.global_age() > 0);
 
         // New items should benefit from the increased global age
-        cache.put("d", 4);
+        cache.put("d", 4, None);
 
         // The new item should start with competitive priority due to aging
         assert!(cache.len() <= cache.cap().get());
@@ -1303,18 +1282,18 @@ mod tests {
     fn test_lfuda_priority_calculation() {
         let mut cache = make_cache(3);
 
-        cache.put("a", 1);
+        cache.put("a", 1, None);
         assert_eq!(cache.global_age(), 0);
 
         // Access "a" to increase its frequency
         cache.get(&"a");
 
         // Add more items
-        cache.put("b", 2);
-        cache.put("c", 3);
+        cache.put("b", 2, None);
+        cache.put("c", 3, None);
 
         // Force eviction to increase global age
-        let evicted = cache.put("d", 4);
+        let evicted = cache.put("d", 4, None);
         assert!(evicted.is_some());
 
         // Global age should now be greater than 0
@@ -1325,16 +1304,16 @@ mod tests {
     fn test_lfuda_update_existing() {
         let mut cache = make_cache(2);
 
-        cache.put("a", 1);
+        cache.put("a", 1, None);
         cache.get(&"a"); // Increase frequency
 
         // Update existing key
-        let old_value = cache.put("a", 10);
+        let old_value = cache.put("a", 10, None);
         assert_eq!(old_value.unwrap().1, 1);
 
         // Add another item
-        cache.put("b", 2);
-        cache.put("c", 3); // Should evict "b" because "a" has higher effective priority
+        cache.put("b", 2, None);
+        cache.put("c", 3, None); // Should evict "b" because "a" has higher effective priority
 
         assert_eq!(cache.get(&"a"), Some(&10));
         assert_eq!(cache.get(&"c"), Some(&3));
@@ -1345,9 +1324,9 @@ mod tests {
     fn test_lfuda_remove() {
         let mut cache = make_cache(3);
 
-        cache.put("a", 1);
-        cache.put("b", 2);
-        cache.put("c", 3);
+        cache.put("a", 1, None);
+        cache.put("b", 2, None);
+        cache.put("c", 3, None);
 
         // Remove item
         assert_eq!(cache.remove(&"b"), Some(2));
@@ -1363,13 +1342,13 @@ mod tests {
     fn test_lfuda_clear() {
         let mut cache = make_cache(3);
 
-        cache.put("a", 1);
-        cache.put("b", 2);
-        cache.put("c", 3);
+        cache.put("a", 1, None);
+        cache.put("b", 2, None);
+        cache.put("c", 3, None);
 
         // Force some aging
         cache.get(&"a");
-        cache.put("d", 4); // This should increase global_age
+        cache.put("d", 4, None); // This should increase global_age
 
         let age_before_clear = cache.global_age();
         assert!(age_before_clear > 0);
@@ -1380,7 +1359,7 @@ mod tests {
         assert_eq!(cache.global_age(), 0); // Should reset to 0
 
         // Should be able to add items after clear
-        cache.put("e", 5);
+        cache.put("e", 5, None);
         assert_eq!(cache.get(&"e"), Some(&5));
     }
 
@@ -1388,7 +1367,7 @@ mod tests {
     fn test_lfuda_get_mut() {
         let mut cache = make_cache(2);
 
-        cache.put("a", 1);
+        cache.put("a", 1, None);
 
         // Modify value using get_mut
         if let Some(value) = cache.get_mut(&"a") {
@@ -1415,6 +1394,7 @@ mod tests {
                 id: 1,
                 data: "a-data".to_string(),
             },
+            None,
         );
 
         cache.put(
@@ -1423,6 +1403,7 @@ mod tests {
                 id: 2,
                 data: "b-data".to_string(),
             },
+            None,
         );
 
         // Modify a value using get_mut
@@ -1442,27 +1423,27 @@ mod tests {
         let mut cache = make_cache(2);
 
         // Add and heavily access an old item
-        cache.put("old", 1);
+        cache.put("old", 1, None);
         for _ in 0..100 {
             cache.get(&"old");
         }
 
         // Fill cache
-        cache.put("temp", 2);
+        cache.put("temp", 2, None);
 
         // Force eviction to age the cache
-        let _evicted = cache.put("new1", 3);
+        let _evicted = cache.put("new1", 3, None);
         let age_after_first_eviction = cache.global_age();
 
         // Add more items to further age the cache
-        let _evicted = cache.put("new2", 4);
+        let _evicted = cache.put("new2", 4, None);
         let age_after_second_eviction = cache.global_age();
 
         // The global age should have increased
         assert!(age_after_second_eviction >= age_after_first_eviction);
 
         // Now add a brand new item - it should benefit from the aging
-        cache.put("newer", 5);
+        cache.put("newer", 5, None);
 
         // The newer item should be able to compete despite the old item's high frequency
         assert!(cache.len() <= cache.cap().get());
@@ -1474,9 +1455,9 @@ mod tests {
         let mut cache = make_cache(10);
 
         // Insert some items
-        cache.put("a", 1);
-        cache.put("b", 2);
-        cache.put("c", 3);
+        cache.put("a", 1, None);
+        cache.put("b", 2, None);
+        cache.put("c", 3, None);
 
         // Access items multiple times to trigger priority updates
         for _ in 0..3 {
@@ -1510,8 +1491,8 @@ mod tests {
         assert_eq!(segment.cap().get(), 3);
         assert_eq!(segment.global_age(), 0);
 
-        segment.put("a", 1);
-        segment.put("b", 2);
+        segment.put("a", 1, None);
+        segment.put("b", 2, None);
         assert_eq!(segment.len(), 2);
 
         // Access to increase frequency
@@ -1538,7 +1519,7 @@ mod tests {
                 for i in 0..ops_per_thread {
                     let key = std::format!("key_{}_{}", t, i);
                     let mut guard = cache.lock().unwrap();
-                    guard.put(key.clone(), i);
+                    guard.put(key.clone(), i, None);
                     let _ = guard.get(&key);
                 }
             }));
@@ -1560,9 +1541,9 @@ mod tests {
         assert_eq!(cache.current_size(), 0);
         assert_eq!(cache.max_size(), u64::MAX);
 
-        cache.put_with_size("a", 1, 100);
-        cache.put_with_size("b", 2, 200);
-        cache.put_with_size("c", 3, 150);
+        cache.put("a", 1, Some(100));
+        cache.put("b", 2, Some(200));
+        cache.put("c", 3, Some(150));
 
         assert_eq!(cache.current_size(), 450);
         assert_eq!(cache.len(), 3);
@@ -1602,8 +1583,8 @@ mod tests {
     #[test]
     fn test_lfuda_contains_non_promoting() {
         let mut cache = make_cache(2);
-        cache.put("a", 1);
-        cache.put("b", 2);
+        cache.put("a", 1, None);
+        cache.put("b", 2, None);
 
         // contains() should return true for existing keys
         assert!(cache.contains(&"a"));
@@ -1617,7 +1598,7 @@ mod tests {
         assert!(cache.contains(&"a"));
 
         // Adding "c" should evict "a" (lowest priority), not "b"
-        cache.put("c", 3);
+        cache.put("c", 3, None);
         assert!(!cache.contains(&"a")); // "a" was evicted
         assert!(cache.contains(&"b")); // "b" still exists
         assert!(cache.contains(&"c")); // "c" was just added
@@ -1626,9 +1607,9 @@ mod tests {
     #[test]
     fn test_lfuda_pop_returns_lowest_priority() {
         let mut cache = make_cache(3);
-        cache.put("a", 1);
-        cache.put("b", 2);
-        cache.put("c", 3);
+        cache.put("a", 1, None);
+        cache.put("b", 2, None);
+        cache.put("c", 3, None);
 
         // Access "b" and "c" to increase their priorities
         cache.get(&"b");
@@ -1654,9 +1635,9 @@ mod tests {
     #[test]
     fn test_lfuda_pop_r_returns_highest_priority() {
         let mut cache = make_cache(3);
-        cache.put("a", 1);
-        cache.put("b", 2);
-        cache.put("c", 3);
+        cache.put("a", 1, None);
+        cache.put("b", 2, None);
+        cache.put("c", 3, None);
 
         // Access items to build different priorities
         cache.get(&"b"); // "b" priority increases
@@ -1689,8 +1670,8 @@ mod tests {
     #[test]
     fn test_lfuda_pop_updates_global_age() {
         let mut cache = make_cache(2);
-        cache.put("a", 1);
-        cache.put("b", 2);
+        cache.put("a", 1, None);
+        cache.put("b", 2, None);
 
         let initial_age = cache.global_age();
 
@@ -1714,7 +1695,7 @@ mod tests {
     #[test]
     fn test_lfuda_pop_single_element() {
         let mut cache = make_cache(2);
-        cache.put("a", 1);
+        cache.put("a", 1, None);
 
         let popped = cache.pop();
         assert_eq!(popped, Some(("a", 1)));
@@ -1724,7 +1705,7 @@ mod tests {
     #[test]
     fn test_lfuda_pop_r_single_element() {
         let mut cache = make_cache(2);
-        cache.put("a", 1);
+        cache.put("a", 1, None);
 
         let popped = cache.pop_r();
         assert_eq!(popped, Some(("a", 1)));
@@ -1738,9 +1719,9 @@ mod tests {
         let mut cache = make_cache(5);
 
         // Insert items that will have different priorities
-        cache.put("a", 1);
-        cache.put("b", 2);
-        cache.put("c", 3);
+        cache.put("a", 1, None);
+        cache.put("b", 2, None);
+        cache.put("c", 3, None);
 
         // Access "a" to bump its frequency (changes priority)
         cache.get(&"a");
@@ -1755,8 +1736,8 @@ mod tests {
         assert_eq!(cache.get(&"a"), Some(&1));
 
         // Insert new items - should not hit stale empty lists
-        cache.put("d", 4);
-        cache.put("e", 5);
+        cache.put("d", 4, None);
+        cache.put("e", 5, None);
         assert_eq!(cache.len(), 3);
 
         // pop() should work correctly without needing to skip empty lists
@@ -1770,9 +1751,9 @@ mod tests {
         // Verify that removing items at non-minimum priorities also cleans up empty lists.
         let mut cache = make_cache(5);
 
-        cache.put("a", 1);
-        cache.put("b", 2);
-        cache.put("c", 3);
+        cache.put("a", 1, None);
+        cache.put("b", 2, None);
+        cache.put("c", 3, None);
 
         // Access "a" many times - it will have a higher priority
         for _ in 0..5 {
@@ -1799,8 +1780,8 @@ mod tests {
         let mut cache = make_cache(5);
 
         // Insert items at the same initial priority
-        cache.put("a", 1);
-        cache.put("b", 2);
+        cache.put("a", 1, None);
+        cache.put("b", 2, None);
 
         // Access "a" to move it to a new priority list.
         // If "a" was the only item at that priority, the old list should be removed.
@@ -1814,13 +1795,13 @@ mod tests {
         assert_eq!(cache.get(&"b"), Some(&2));
 
         // Insert more items and verify eviction works correctly
-        cache.put("c", 3);
-        cache.put("d", 4);
-        cache.put("e", 5);
+        cache.put("c", 3, None);
+        cache.put("d", 4, None);
+        cache.put("e", 5, None);
         assert_eq!(cache.len(), 5);
 
         // Force eviction - should work without issues from stale empty lists
-        cache.put("f", 6);
+        cache.put("f", 6, None);
         assert_eq!(cache.len(), 5);
 
         // pop should work correctly
@@ -1834,11 +1815,11 @@ mod tests {
         let mut cache = make_cache(5);
 
         // Insert entries: all start with frequency 1
-        cache.put("a", 1);
-        cache.put("b", 2);
-        cache.put("c", 3);
-        cache.put("d", 4);
-        cache.put("e", 5);
+        cache.put("a", 1, None);
+        cache.put("b", 2, None);
+        cache.put("c", 3, None);
+        cache.put("d", 4, None);
+        cache.put("e", 5, None);
 
         // Access some entries to differentiate priorities
         // LFUDA priority = frequency + global_age
@@ -1860,7 +1841,7 @@ mod tests {
         assert_eq!(cache.len(), 3);
 
         // Put new entry "f" with initial freq
-        cache.put("f", 6);
+        cache.put("f", 6, None);
         assert_eq!(cache.len(), 4);
 
         // pop() removes lowest priority

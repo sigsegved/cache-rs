@@ -231,10 +231,8 @@ pub struct LatencyStats {
     pub count: u64,
     /// Get operation stats
     pub get_stats: OpLatencyStats,
-    /// Put operation stats (regular put without size)
+    /// Put operation stats (all put operations, with or without size)
     pub put_stats: OpLatencyStats,
-    /// Put with size operation stats
-    pub put_with_size_stats: OpLatencyStats,
 }
 
 /// Latency percentiles
@@ -315,7 +313,7 @@ pub struct CsvResultRow {
     pub final_storage_bytes: usize,
     pub estimated_memory_bytes: usize,
     // Combined stats
-    /// Total operations (get + put + put_with_size)
+    /// Total operations (get + put)
     pub total_ops: u64,
     /// Total cache operation time in nanoseconds
     pub total_duration_ns: u64,
@@ -332,7 +330,7 @@ pub struct CsvResultRow {
     pub get_max_ns: u64,
     pub get_p50_ns: u64,
     pub get_p99_ns: u64,
-    // Put operation stats
+    // Put operation stats (all put operations, with or without size)
     pub put_ops: u64,
     pub put_duration_ns: u64,
     pub put_ops_per_sec: f64,
@@ -341,13 +339,4 @@ pub struct CsvResultRow {
     pub put_max_ns: u64,
     pub put_p50_ns: u64,
     pub put_p99_ns: u64,
-    // Put with size operation stats
-    pub put_size_ops: u64,
-    pub put_size_duration_ns: u64,
-    pub put_size_ops_per_sec: f64,
-    pub put_size_avg_ns: f64,
-    pub put_size_min_ns: u64,
-    pub put_size_max_ns: u64,
-    pub put_size_p50_ns: u64,
-    pub put_size_p99_ns: u64,
 }

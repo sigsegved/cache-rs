@@ -55,7 +55,7 @@ const DEFAULT_SEGMENT_COUNT: usize = 16;
 /// Wrapper enum for all cache implementations
 /// This allows us to handle both sequential and concurrent caches uniformly
 ///
-/// Variants ending in `Size` use `put_with_size` for size-based eviction.
+/// Variants ending in `Size` use `put(key, value, Some(size))` for size-based eviction.
 /// This avoids per-request `if` checks by encoding the mode in the variant.
 #[allow(dead_code)]
 enum CacheWrapper {
@@ -183,10 +183,8 @@ impl OpLatencyTracker {
 struct LatencyTracker {
     /// Get operation latencies
     get_tracker: OpLatencyTracker,
-    /// Put operation latencies (regular put)
+    /// Put operation latencies (all put operations, with or without size)
     put_tracker: OpLatencyTracker,
-    /// Put with size operation latencies
-    put_with_size_tracker: OpLatencyTracker,
 }
 
 impl LatencyTracker {
@@ -194,7 +192,6 @@ impl LatencyTracker {
         Self {
             get_tracker: OpLatencyTracker::new(),
             put_tracker: OpLatencyTracker::new(),
-            put_with_size_tracker: OpLatencyTracker::new(),
         }
     }
 
@@ -210,29 +207,19 @@ impl LatencyTracker {
         self.put_tracker.record(latency_ns);
     }
 
-    /// Record a put_with_size operation latency
-    #[inline]
-    fn record_put_with_size(&mut self, latency_ns: u64) {
-        self.put_with_size_tracker.record(latency_ns);
-    }
-
     /// Convert to LatencyStats (consumes internal state)
     fn finalize_stats(&mut self) -> crate::models::LatencyStats {
         use crate::models::LatencyStats;
 
         // Calculate combined stats
-        let total_ns = self.get_tracker.total_ns
-            + self.put_tracker.total_ns
-            + self.put_with_size_tracker.total_ns;
-        let total_count =
-            self.get_tracker.count + self.put_tracker.count + self.put_with_size_tracker.count;
+        let total_ns = self.get_tracker.total_ns + self.put_tracker.total_ns;
+        let total_count = self.get_tracker.count + self.put_tracker.count;
 
         LatencyStats {
             total_ns,
             count: total_count,
             get_stats: self.get_tracker.finalize_op_stats(),
             put_stats: self.put_tracker.finalize_op_stats(),
-            put_with_size_stats: self.put_with_size_tracker.finalize_op_stats(),
         }
     }
 }
@@ -301,25 +288,8 @@ impl CacheWrapper {
         }
     }
 
-    /// Returns true if this cache uses put_with_size (size-based eviction)
-    fn uses_size_based_put(&self) -> bool {
-        matches!(
-            self,
-            CacheWrapper::LruSeqSize(_)
-                | CacheWrapper::LfuSeqSize(_)
-                | CacheWrapper::LfudaSeqSize(_)
-                | CacheWrapper::SlruSeqSize(_)
-                | CacheWrapper::LruConcSize(_)
-                | CacheWrapper::LfuConcSize(_)
-                | CacheWrapper::LfudaConcSize(_)
-                | CacheWrapper::SlruConcSize(_)
-                | CacheWrapper::GdsfSeq(_)
-                | CacheWrapper::GdsfConc(_)
-        )
-    }
-
     /// Insert a value into the cache
-    /// Size-based variants use put_with_size, entry-count variants use put
+    /// Size-based variants use put with Some(size), entry-count variants use put with None
     fn put(&mut self, key: String, size: usize) {
         let safe_size = size.max(1) as u64;
         let value = size as u32;
@@ -327,61 +297,61 @@ impl CacheWrapper {
         match self {
             // Sequential - entry count mode (no size tracking)
             CacheWrapper::LruSeq(c) => {
-                c.put(key, value);
+                c.put(key, value, None);
             }
             CacheWrapper::LfuSeq(c) => {
-                c.put(key, value);
+                c.put(key, value, None);
             }
             CacheWrapper::LfudaSeq(c) => {
-                c.put(key, value);
+                c.put(key, value, None);
             }
             CacheWrapper::SlruSeq(c) => {
-                c.put(key, value);
+                c.put(key, value, None);
             }
             CacheWrapper::GdsfSeq(c) => {
-                c.put(key, value, safe_size);
+                c.put(key, value, Some(safe_size));
             } // GDSF always uses size
             // Sequential - size-based mode
             CacheWrapper::LruSeqSize(c) => {
-                c.put_with_size(key, value, safe_size);
+                c.put(key, value, Some(safe_size));
             }
             CacheWrapper::LfuSeqSize(c) => {
-                c.put_with_size(key, value, safe_size);
+                c.put(key, value, Some(safe_size));
             }
             CacheWrapper::LfudaSeqSize(c) => {
-                c.put_with_size(key, value, safe_size);
+                c.put(key, value, Some(safe_size));
             }
             CacheWrapper::SlruSeqSize(c) => {
-                c.put_with_size(key, value, safe_size);
+                c.put(key, value, Some(safe_size));
             }
             // Concurrent - entry count mode
             CacheWrapper::LruConc(c) => {
-                c.put(key, value);
+                c.put(key, value, None);
             }
             CacheWrapper::LfuConc(c) => {
-                c.put(key, value);
+                c.put(key, value, None);
             }
             CacheWrapper::LfudaConc(c) => {
-                c.put(key, value);
+                c.put(key, value, None);
             }
             CacheWrapper::SlruConc(c) => {
-                c.put(key, value);
+                c.put(key, value, None);
             }
             CacheWrapper::GdsfConc(c) => {
-                c.put(key, value, safe_size);
+                c.put(key, value, Some(safe_size));
             } // GDSF always uses size
             // Concurrent - size-based mode
             CacheWrapper::LruConcSize(c) => {
-                c.put_with_size(key, value, safe_size);
+                c.put(key, value, Some(safe_size));
             }
             CacheWrapper::LfuConcSize(c) => {
-                c.put_with_size(key, value, safe_size);
+                c.put(key, value, Some(safe_size));
             }
             CacheWrapper::LfudaConcSize(c) => {
-                c.put_with_size(key, value, safe_size);
+                c.put(key, value, Some(safe_size));
             }
             CacheWrapper::SlruConcSize(c) => {
-                c.put_with_size(key, value, safe_size);
+                c.put(key, value, Some(safe_size));
             }
             // External caches (Moka handles size via weigher at build time)
             CacheWrapper::Moka(c) => {
@@ -799,9 +769,6 @@ impl SimulationRunner {
                 // Track latency of cache operations (separate from I/O)
                 let mut latency_tracker = LatencyTracker::new();
 
-                // Check if this cache uses put_with_size
-                let uses_size_put = cache.uses_size_based_put();
-
                 // Stream through all requests
                 let mut request_iter = match log_reader.stream_requests() {
                     Ok(iter) => iter,
@@ -829,12 +796,8 @@ impl SimulationRunner {
                         cache.put(request.key.clone(), request.size);
                         let put_duration = put_start.elapsed().as_nanos() as u64;
 
-                        // Record to appropriate tracker based on put type
-                        if uses_size_put {
-                            latency_tracker.record_put_with_size(put_duration);
-                        } else {
-                            latency_tracker.record_put(put_duration);
-                        }
+                        // Record put latency (unified API)
+                        latency_tracker.record_put(put_duration);
 
                         stats.record_miss(key, request.size);
                         storage_tracker.add(request.size);
@@ -913,9 +876,8 @@ impl SimulationRunner {
                     get_pct.map(|p| p.p99_ns).unwrap_or(0)
                 );
 
-                // Print PUT stats (either put or put_with_size, whichever was used)
+                // Print PUT stats (unified API)
                 let put = &latency_stats.put_stats;
-                let put_size = &latency_stats.put_with_size_stats;
 
                 if put.count > 0 {
                     let put_pct = put.percentiles.as_ref();
@@ -929,21 +891,6 @@ impl SimulationRunner {
                         put.max_ns,
                         put_pct.map(|p| p.p50_ns).unwrap_or(0),
                         put_pct.map(|p| p.p99_ns).unwrap_or(0)
-                    );
-                }
-
-                if put_size.count > 0 {
-                    let put_size_pct = put_size.percentiles.as_ref();
-                    println!(
-                        "    PUT+SIZE: {} ops in {:.3}s = {:.0} ops/s | avg={:.0}ns min={} max={} p50={} p99={}",
-                        put_size.count,
-                        put_size.duration_secs(),
-                        put_size.ops_per_sec(),
-                        put_size.avg_ns(),
-                        put_size.min_ns,
-                        put_size.max_ns,
-                        put_size_pct.map(|p| p.p50_ns).unwrap_or(0),
-                        put_size_pct.map(|p| p.p99_ns).unwrap_or(0)
                     );
                 }
 

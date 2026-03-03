@@ -78,10 +78,10 @@
 //!     max_size: u64::MAX,
 //! };
 //! let mut cache = LruCache::init(config, None);
-//! cache.put("a", 1);
-//! cache.put("b", 2);
+//! cache.put("a", 1, None);
+//! cache.put("b", 2, None);
 //! cache.get(&"a");      // "a" becomes most recently used
-//! cache.put("c", 3);    // "b" evicted (least recently used)
+//! cache.put("c", 3, None);    // "b" evicted (least recently used)
 //! assert!(cache.get(&"b").is_none());
 //! ```
 //!
@@ -102,7 +102,7 @@
 //! };
 //! let mut cache = SlruCache::init(config, None);
 //!
-//! cache.put("hot", 1);
+//! cache.put("hot", 1, None);
 //! cache.get(&"hot");  // Promoted to protected segment!
 //! ```
 //!
@@ -121,13 +121,13 @@
 //!     max_size: u64::MAX,
 //! };
 //! let mut cache = LfuCache::init(config, None);
-//! cache.put("rare", 1);
-//! cache.put("popular", 2);
+//! cache.put("rare", 1, None);
+//! cache.put("popular", 2, None);
 //!
 //! // Access "popular" multiple times
 //! for _ in 0..10 { cache.get(&"popular"); }
 //!
-//! cache.put("new", 3);  // "rare" evicted (lowest frequency)
+//! cache.put("new", 3, None);  // "rare" evicted (lowest frequency)
 //! assert!(cache.get(&"popular").is_some());
 //! ```
 //!
@@ -150,7 +150,7 @@
 //!
 //! // Old popular items will eventually age out if not accessed
 //! for i in 0..100 {
-//!     cache.put(i, i);
+//!     cache.put(i, i, None);
 //! }
 //! ```
 //!
@@ -172,8 +172,8 @@
 //! let mut cache: GdsfCache<String, Vec<u8>> = GdsfCache::init(config, None);
 //!
 //! // Size-aware insertion
-//! cache.put("small.txt".to_string(), vec![0u8; 100], 100);
-//! cache.put("large.bin".to_string(), vec![0u8; 10000], 10000);
+//! cache.put("small.txt".to_string(), vec![0u8; 100], Some(100));
+//! cache.put("large.bin".to_string(), vec![0u8; 10000], Some(10000));
 //! // Small items get higher priority per byte
 //! ```
 //!
@@ -233,7 +233,7 @@
 //!
 //! // Track size explicitly
 //! let data = vec![0u8; 1024];
-//! cache.put_with_size("file.bin".to_string(), data, 1024);
+//! cache.put("file.bin".to_string(), data, Some(1024));
 //! ```
 //!
 //! ## Modules
