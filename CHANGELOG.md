@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] - 2026-03-04
 
 ### ⚠️ BREAKING CHANGES
 
@@ -13,17 +13,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 The `put` method signature has changed for all cache algorithms. The `size` parameter is now required (no longer `Option<u64>`):
 
-**Before (0.3.x):**
-```rust
-cache.put(key, value, None);              // Entry-count mode (size defaults to 1)
-cache.put(key, value, Some(1024));        // Size-based mode
-```
-
-**After:**
 ```rust
 cache.put(key, value, 1);              // Entry-count mode
 cache.put(key, value, 1024);           // Size-based mode
 ```
+
+#### **Changed `put` Return Type**
+
+The `put()` return type changed from `Option<(K, V)>` to `Option<Vec<(K, V)>>` to capture all evicted entries when size-based eviction displaces multiple items.
+
+**Before (0.3.x):**
+```rust
+let evicted: Option<(K, V)> = cache.put(key, value, Some(size));
+```
+
+**After:**
+```rust
+let evicted: Option<Vec<(K, V)>> = cache.put(key, value, size);
+```
+
+**Note:** `put()` now only returns evicted entries. Replacing an existing key returns `None` (use `get()` before `put()` if you need the previous value).
 
 #### **Migration Guide**
 
@@ -31,17 +40,22 @@ cache.put(key, value, 1024);           // Size-based mode
 |---------|---------|
 | `cache.put(key, value, None)` | `cache.put(key, value, 1)` |
 | `cache.put(key, value, Some(size))` | `cache.put(key, value, size)` |
+| `let evicted: Option<(K, V)> = put()` | `let evicted: Option<Vec<(K, V)>> = put()` |
 
 This applies to all algorithms (LRU, LFU, LFUDA, SLRU, GDSF) and their concurrent variants.
+
+### Added
+
+- **`contains()` method**: Check if a key exists without updating access metadata
+- **`peek()` method**: Read a value without updating access metadata (no promotion)
+- **`SIZE_UNIT` constant**: Use `cache_rs::SIZE_UNIT` (= 1) for entry-count mode caching
 
 ### Changed
 
 - **API**: The `size` parameter is now required `u64` instead of `Option<u64>`
+- **API**: `put()` returns `Option<Vec<(K, V)>>` instead of `Option<(K, V)>`
+- **Eviction semantics**: `put()` only returns evicted entries, not replaced values
 - **Documentation**: Updated all examples to use the new required size parameter
-
-### Added
-
-- **`SIZE_UNIT` constant**: Use `cache_rs::SIZE_UNIT` (= 1) for entry-count mode caching
 
 ### Removed
 

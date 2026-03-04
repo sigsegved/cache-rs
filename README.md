@@ -706,22 +706,9 @@ cache-rs provides a solid foundation for cache eviction, but several features co
 | Feature | Description | Status |
 |---------|-------------|--------|
 | **TTL Support** | Time-based expiration for cache entries | Not started |
-| **Eviction Callbacks** | Hooks to notify when entries are evicted (for cleanup, persistence, metrics) | Not started |
 | **Admission Policies** | Decide whether to cache an item at all (e.g., TinyLFU admission) | Not started |
-| **Enhanced Metrics** | Hit/miss counters, eviction counts, latency histograms | Basic |
-| **Async Support** | `async`-compatible concurrent caches | Not started |
-| **Weighted Entries** | Custom cost functions beyond simple size | Not started |
 
 ### How to Contribute
-
-```bash
-# Run the full validation suite before submitting
-cargo test --features "std,concurrent"
-cargo fmt --all -- --check
-cargo clippy --features "std,concurrent" -- -D warnings
-cargo doc --no-deps --document-private-items
-```
-
 See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
 
 ---
