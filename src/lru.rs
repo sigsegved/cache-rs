@@ -140,6 +140,8 @@ use crate::metrics::{CacheMetrics, LruCacheMetrics};
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
 use core::borrow::Borrow;
 use core::hash::{BuildHasher, Hash};
 use core::num::NonZeroUsize;
@@ -286,12 +288,13 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
     ///
     /// The `size` parameter specifies how much of `max_size` this entry consumes.
     /// Use `SIZE_UNIT` (1) for count-based caching.
-    pub(crate) fn put(&mut self, key: K, value: V, size: u64) -> Option<(K, V)>
+    ///
+    /// Returns all displaced entries (replaced or evicted), or `None` if no
+    /// entries were displaced.
+    pub(crate) fn put(&mut self, key: K, value: V, size: u64) -> Option<Vec<(K, V)>>
     where
         K: Clone + Hash + Eq,
     {
-        let mut evicted = None;
-
         if let Some(&node) = self.map.get(&key) {
             unsafe {
                 // SAFETY: node comes from our map
@@ -314,17 +317,19 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
                 self.current_size += size;
                 self.metrics.core.cache_size_bytes += size;
 
-                return Some((old_key, old_value));
+                return Some(vec![(old_key, old_value)]);
             }
         }
+
+        let mut evicted = Vec::new();
 
         // Evict while entry count limit OR size limit would be exceeded
         while self.map.len() >= self.cap().get()
             || (self.current_size + size > self.config.max_size && !self.map.is_empty())
         {
-            if let Some(entry) = self.pop() {
+            if let Some(entry) = self.evict() {
                 self.metrics.core.evictions += 1;
-                evicted = Some(entry);
+                evicted.push(entry);
             } else {
                 break;
             }
@@ -338,7 +343,11 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
             self.metrics.core.record_insertion(size);
         }
 
-        evicted
+        if evicted.is_empty() {
+            None
+        } else {
+            Some(evicted)
+        }
     }
 
     pub(crate) fn remove<Q>(&mut self, key: &Q) -> Option<V>
@@ -408,7 +417,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
     /// entries to make room during `put()` operations.
     ///
     /// Returns `None` if the cache is empty.
-    pub(crate) fn pop(&mut self) -> Option<(K, V)> {
+    fn evict(&mut self) -> Option<(K, V)> {
         let old_entry = self.list.remove_last()?;
         unsafe {
             // SAFETY: entry comes from list.remove_last(); take_value moves the
@@ -423,53 +432,6 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
             let _ = Box::from_raw(entry_ptr);
             Some((cache_entry.key, cache_entry.value))
         }
-    }
-
-    /// Removes and returns the most recently used entry (reverse of pop).
-    ///
-    /// This is the opposite of `pop()` - instead of returning the eviction candidate,
-    /// it returns the most recently accessed or inserted item.
-    ///
-    /// This method does **not** increment the eviction counter in metrics.
-    ///
-    /// Returns `None` if the cache is empty.
-    pub(crate) fn pop_r(&mut self) -> Option<(K, V)> {
-        let entry = self.list.remove_first()?;
-        unsafe {
-            // SAFETY: entry comes from list.remove_first(); take_value moves the
-            // CacheEntry out by value. Box::from_raw frees memory without
-            // double-drop since MaybeUninit does not run Drop on its contents.
-            let entry_ptr = Box::into_raw(entry);
-            let cache_entry = (*entry_ptr).take_value();
-            let evicted_size = cache_entry.metadata.size;
-            self.map.remove(&cache_entry.key);
-            self.current_size = self.current_size.saturating_sub(evicted_size);
-            self.metrics.core.record_removal(evicted_size);
-            let _ = Box::from_raw(entry_ptr);
-            Some((cache_entry.key, cache_entry.value))
-        }
-    }
-
-    /// Peeks at the eviction candidate's `last_accessed` timestamp without removing it.
-    ///
-    /// Returns `None` if the segment is empty. Lower timestamps indicate older entries
-    /// (better eviction candidates for LRU).
-    #[allow(dead_code)]
-    pub(crate) fn peek_lru_timestamp(&self) -> Option<u64> {
-        self.list
-            .peek_last()
-            .map(|entry| entry.metadata.last_accessed)
-    }
-
-    /// Peeks at the MRU entry's `last_accessed` timestamp without removing it.
-    ///
-    /// Returns `None` if the segment is empty. Higher timestamps indicate newer entries
-    /// (better candidates for `pop_r()`).
-    #[allow(dead_code)]
-    pub(crate) fn peek_mru_timestamp(&self) -> Option<u64> {
-        self.list
-            .peek_first()
-            .map(|entry| entry.metadata.last_accessed)
     }
 }
 
@@ -643,23 +605,14 @@ impl<K: Hash + Eq + Clone, V: Clone, S: BuildHasher> LruCache<K, V, S> {
     /// Inserts a key-value pair into the cache.
     ///
     /// If the key already exists, the value is updated and the entry moves
-    /// to the MRU position. The old key-value pair is returned.
+    /// to the MRU position. The old key-value pair is returned in the vec.
     ///
-    /// If the cache is at capacity, the least recently used entry is evicted
-    /// and returned.
+    /// If the cache is at capacity, evicted entries are returned.
     ///
     /// # Returns
     ///
-    /// - `Some((old_key, old_value))` if the key existed or an entry was evicted
-    /// - `None` if this was a new insertion with available capacity
-    ///
-    /// # Multi-eviction behavior
-    ///
-    /// When using size-based caching (`max_size` is not `u64::MAX`), inserting
-    /// a large entry may cause **multiple** smaller entries to be evicted to
-    /// free enough space. In this case, only the **last** evicted entry is
-    /// returned. For count-based caches (default `max_size = u64::MAX`), at
-    /// most one entry is evicted per insertion.
+    /// - `Some(vec)` containing all displaced entries (replaced or evicted)
+    /// - `None` if no entries were displaced (zero allocation)
     ///
     /// # Arguments
     ///
@@ -681,10 +634,10 @@ impl<K: Hash + Eq + Clone, V: Clone, S: BuildHasher> LruCache<K, V, S> {
     /// let mut cache = LruCache::init(config, None);
     ///
     /// // Count-based caching (use 1 for size)
-    /// assert_eq!(cache.put("a", 1, 1), None);           // New entry
-    /// assert_eq!(cache.put("b", 2, 1), None);           // New entry
-    /// assert_eq!(cache.put("a", 10, 1), Some(("a", 1))); // Update existing
-    /// assert_eq!(cache.put("c", 3, 1), Some(("b", 2)));  // Evicts "b"
+    /// assert_eq!(cache.put("a", 1, 1), None);                     // New entry
+    /// assert_eq!(cache.put("b", 2, 1), None);                     // New entry
+    /// assert_eq!(cache.put("a", 10, 1), Some(vec![("a", 1)]));    // Update existing
+    /// assert_eq!(cache.put("c", 3, 1), Some(vec![("b", 2)]));     // Evicts "b"
     /// ```
     ///
     /// Size-aware caching:
@@ -706,7 +659,7 @@ impl<K: Hash + Eq + Clone, V: Clone, S: BuildHasher> LruCache<K, V, S> {
     /// assert_eq!(cache.current_size(), 1000);
     /// ```
     #[inline]
-    pub fn put(&mut self, key: K, value: V, size: u64) -> Option<(K, V)> {
+    pub fn put(&mut self, key: K, value: V, size: u64) -> Option<Vec<(K, V)>> {
         self.segment.put(key, value, size)
     }
 
@@ -818,51 +771,6 @@ impl<K: Hash + Eq + Clone, V: Clone, S: BuildHasher> LruCache<K, V, S> {
         self.segment.peek(key)
     }
 
-    /// Removes and returns the eviction candidate (least recently used entry).
-    ///
-    /// For LRU, this is the entry that would be evicted next if the cache
-    /// were at capacity and a new entry were inserted.
-    ///
-    /// Returns `None` if the cache is empty.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use cache_rs::LruCache;
-    /// use cache_rs::config::LruCacheConfig;
-    /// use core::num::NonZeroUsize;
-    ///
-    /// let config = LruCacheConfig {
-    ///     capacity: NonZeroUsize::new(3).unwrap(),
-    ///     max_size: u64::MAX,
-    /// };
-    /// let mut cache = LruCache::init(config, None);
-    /// cache.put("a", 1, 1);
-    /// cache.put("b", 2, 1);
-    /// cache.put("c", 3, 1);
-    ///
-    /// // Pop the eviction candidate (LRU item)
-    /// assert_eq!(cache.pop(), Some(("a", 1)));
-    /// assert_eq!(cache.len(), 2);
-    /// ```
-    #[inline]
-    pub fn pop(&mut self) -> Option<(K, V)> {
-        self.segment.pop()
-    }
-
-    /// Removes and returns the most recently used entry (reverse of pop).
-    ///
-    /// This is an internal method for potential future `LruSet` implementation.
-    /// It removes the most recently accessed or inserted item instead of the
-    /// eviction candidate.
-    ///
-    /// Returns `None` if the cache is empty.
-    #[inline]
-    #[allow(dead_code)]
-    pub(crate) fn pop_r(&mut self) -> Option<(K, V)> {
-        self.segment.pop_r()
-    }
-
     /// Returns an iterator over the cache entries.
     ///
     /// # Panics
@@ -968,9 +876,9 @@ mod tests {
         assert_eq!(cache.get(&"apple"), Some(&1));
         assert_eq!(cache.get(&"banana"), Some(&2));
         assert_eq!(cache.get(&"cherry"), None);
-        assert_eq!(cache.put("apple", 3, 1).unwrap().1, 1);
+        assert_eq!(cache.put("apple", 3, 1).unwrap()[0].1, 1);
         assert_eq!(cache.get(&"apple"), Some(&3));
-        assert_eq!(cache.put("cherry", 4, 1).unwrap().1, 2);
+        assert_eq!(cache.put("cherry", 4, 1).unwrap()[0].1, 2);
         assert_eq!(cache.get(&"banana"), None);
         assert_eq!(cache.get(&"apple"), Some(&3));
         assert_eq!(cache.get(&"cherry"), Some(&4));
@@ -1077,7 +985,7 @@ mod tests {
         assert_eq!(cache.get(&key2).unwrap().val, fruit2.val);
         let evicted = cache.put(String::from("cherry"), fruit3.clone(), 1);
         let evicted_fruit = evicted.unwrap();
-        assert_eq!(evicted_fruit.1, fruit1);
+        assert_eq!(evicted_fruit[0].1, fruit1);
         let removed = cache.remove(&key1);
         assert_eq!(removed, None);
     }
@@ -1333,132 +1241,6 @@ mod tests {
     }
 
     #[test]
-    fn test_lru_pop_returns_lru() {
-        let mut cache = make_cache(3);
-        cache.put("a", 1, 1);
-        cache.put("b", 2, 1);
-        cache.put("c", 3, 1);
-
-        // pop() should return the LRU (oldest) item
-        assert_eq!(cache.pop(), Some(("a", 1)));
-        assert_eq!(cache.len(), 2);
-
-        // Next pop should return "b"
-        assert_eq!(cache.pop(), Some(("b", 2)));
-        assert_eq!(cache.len(), 1);
-
-        // Last item
-        assert_eq!(cache.pop(), Some(("c", 3)));
-        assert_eq!(cache.len(), 0);
-
-        // Empty cache returns None
-        assert_eq!(cache.pop(), None);
-    }
-
-    #[test]
-    fn test_lru_pop_r_returns_mru() {
-        let mut cache = make_cache(3);
-        cache.put("a", 1, 1);
-        cache.put("b", 2, 1);
-        cache.put("c", 3, 1);
-
-        // pop_r() should return the MRU (newest) item
-        assert_eq!(cache.pop_r(), Some(("c", 3)));
-        assert_eq!(cache.len(), 2);
-
-        // Next pop_r should return "b"
-        assert_eq!(cache.pop_r(), Some(("b", 2)));
-        assert_eq!(cache.len(), 1);
-
-        // Last item
-        assert_eq!(cache.pop_r(), Some(("a", 1)));
-        assert_eq!(cache.len(), 0);
-
-        // Empty cache returns None
-        assert_eq!(cache.pop_r(), None);
-    }
-
-    #[test]
-    fn test_lru_pop_after_access() {
-        let mut cache = make_cache(3);
-        cache.put("a", 1, 1);
-        cache.put("b", 2, 1);
-        cache.put("c", 3, 1);
-
-        // Access "a" to make it MRU
-        cache.get(&"a");
-
-        // Now order is: b (LRU) -> c -> a (MRU)
-        // pop() should return "b"
-        assert_eq!(cache.pop(), Some(("b", 2)));
-
-        // pop_r() should return "a" (MRU)
-        assert_eq!(cache.pop_r(), Some(("a", 1)));
-
-        // Only "c" remains
-        assert_eq!(cache.len(), 1);
-        assert!(cache.contains(&"c"));
-    }
-
-    #[test]
-    fn test_lru_pop_single_element() {
-        let mut cache = make_cache(2);
-        cache.put("a", 1, 1);
-
-        // Both pop() and pop_r() should return the same element
-        let popped = cache.pop();
-        assert_eq!(popped, Some(("a", 1)));
-        assert!(cache.is_empty());
-    }
-
-    #[test]
-    fn test_lru_pop_r_single_element() {
-        let mut cache = make_cache(2);
-        cache.put("a", 1, 1);
-
-        let popped = cache.pop_r();
-        assert_eq!(popped, Some(("a", 1)));
-        assert!(cache.is_empty());
-    }
-
-    #[test]
-    fn test_lru_pop_interleaved_with_put() {
-        let mut cache = make_cache(3);
-        cache.put("a", 1, 1);
-        cache.put("b", 2, 1);
-
-        // Pop LRU
-        assert_eq!(cache.pop(), Some(("a", 1)));
-
-        // Add new items
-        cache.put("c", 3, 1);
-        cache.put("d", 4, 1);
-
-        // Order is now: b (LRU) -> c -> d (MRU)
-        assert_eq!(cache.pop(), Some(("b", 2)));
-        assert_eq!(cache.pop_r(), Some(("d", 4)));
-        assert_eq!(cache.len(), 1);
-        assert!(cache.contains(&"c"));
-    }
-
-    #[test]
-    fn test_pop_does_not_inflate_eviction_count() {
-        let mut cache = make_cache(3);
-        cache.put("a", 1, 1);
-        cache.put("b", 2, 1);
-        cache.put("c", 3, 1);
-
-        // Manual pop should NOT count as eviction
-        assert_eq!(cache.pop(), Some(("a", 1)));
-        assert_eq!(cache.pop_r(), Some(("c", 3)));
-        assert_eq!(cache.segment.metrics().core.evictions, 0);
-
-        // Manual remove should NOT count as eviction
-        cache.remove(&"b");
-        assert_eq!(cache.segment.metrics().core.evictions, 0);
-    }
-
-    #[test]
     fn test_put_eviction_increments_eviction_count() {
         let mut cache = make_cache(2);
         cache.put("a", 1, 1);
@@ -1475,50 +1257,43 @@ mod tests {
     }
 
     #[test]
-    fn test_lru_pop_pop_r_comprehensive_interleaved() {
-        let mut cache = make_cache(5);
+    fn test_put_returns_none_when_no_eviction() {
+        let mut cache = make_cache(10);
+        assert!(cache.put("a", 1, 1).is_none());
+        assert!(cache.put("b", 2, 1).is_none());
+    }
 
-        // Initial state: a(LRU) -> b -> c -> d -> e(MRU)
+    #[test]
+    fn test_put_returns_single_eviction() {
+        let mut cache = make_cache(2);
         cache.put("a", 1, 1);
         cache.put("b", 2, 1);
-        cache.put("c", 3, 1);
-        cache.put("d", 4, 1);
-        cache.put("e", 5, 1);
+        let result = cache.put("c", 3, 1);
+        assert_eq!(result, Some(vec![("a", 1)]));
+    }
 
-        // pop LRU: removes "a", order: b(LRU) -> c -> d -> e(MRU)
-        assert_eq!(cache.pop(), Some(("a", 1)));
-        assert_eq!(cache.len(), 4);
+    #[test]
+    fn test_put_returns_replaced_entry() {
+        let mut cache = make_cache(10);
+        cache.put("a", 1, 1);
+        let result = cache.put("a", 2, 1);
+        assert_eq!(result, Some(vec![("a", 1)]));
+    }
 
-        // Access "b" makes it MRU: c(LRU) -> d -> e -> b(MRU)
-        assert_eq!(cache.get(&"b"), Some(&2));
-
-        // pop_r MRU: removes "b", order: c(LRU) -> d -> e(MRU)
-        assert_eq!(cache.pop_r(), Some(("b", 2)));
-        assert_eq!(cache.len(), 3);
-
-        // Put new entry "f": c(LRU) -> d -> e -> f(MRU)
-        cache.put("f", 6, 1);
-        assert_eq!(cache.len(), 4);
-
-        // pop LRU: removes "c", order: d(LRU) -> e -> f(MRU)
-        assert_eq!(cache.pop(), Some(("c", 3)));
-
-        // Remove "e" by key: d(LRU) -> f(MRU)
-        assert_eq!(cache.remove(&"e"), Some(5));
-        assert_eq!(cache.len(), 2);
-
-        // Access "d" makes it MRU: f(LRU) -> d(MRU)
-        assert_eq!(cache.get(&"d"), Some(&4));
-
-        // pop_r returns "d" (MRU)
-        assert_eq!(cache.pop_r(), Some(("d", 4)));
-
-        // pop returns "f" (only remaining)
-        assert_eq!(cache.pop(), Some(("f", 6)));
-
-        // Cache is empty
-        assert!(cache.is_empty());
-        assert_eq!(cache.pop(), None);
-        assert_eq!(cache.pop_r(), None);
+    #[test]
+    fn test_put_returns_multiple_evictions_size_based() {
+        let config = LruCacheConfig {
+            capacity: NonZeroUsize::new(10).unwrap(),
+            max_size: 100,
+        };
+        let mut cache = LruCache::init(config, None);
+        // Fill with small entries: 10 entries × 10 bytes = 100 bytes
+        for i in 0..10 {
+            cache.put(i, i, 10);
+        }
+        // Insert large entry that requires evicting multiple
+        let result = cache.put(99, 99, 50);
+        let evicted = result.unwrap();
+        assert_eq!(evicted.len(), 5);
     }
 }

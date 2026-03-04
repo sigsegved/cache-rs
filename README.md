@@ -70,7 +70,6 @@ All cache types support these core operations:
 | `cap()` | Maximum capacity (LRU/LFU/LFUDA/SLRU). |
 | `contains(&key)` | Check if key exists (no side effects). |
 | `peek(&key)` | Get value without updating access metadata. |
-| `pop()` | Remove and return the eviction candidate. |
 
 **Algorithm-specific methods:**
 - **GDSF**: Use `put(key, value, size)` (requires size for priority calculation).
@@ -551,14 +550,16 @@ impl TieredCache {
         // Write to disk
         fs::write(&path, content).unwrap();
         
-        // Update index (may evict old entry)
-        if let Some((_, evicted)) = self.index.put(
+        // Update index (may evict old entries)
+        if let Some(evicted_entries) = self.index.put(
             key.to_string(),
             DiskEntry { path: path.clone(), size: content.len() as u64 },
             content.len() as u64,
         ) {
-            // Clean up evicted file from disk
-            let _ = fs::remove_file(&evicted.path);
+            // Clean up evicted files from disk
+            for (_, evicted) in evicted_entries {
+                let _ = fs::remove_file(&evicted.path);
+            }
         }
     }
 

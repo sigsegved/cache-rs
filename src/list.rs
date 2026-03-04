@@ -186,6 +186,7 @@ impl<T> List<T> {
     ///
     /// This method is safe because it properly manages all raw pointer operations
     /// and ensures no memory leaks or dangling pointers.
+    #[allow(dead_code)]
     pub fn remove_first(&mut self) -> Option<Box<ListEntry<T>>> {
         if self.is_empty() {
             return None;

@@ -207,6 +207,8 @@ impl LfuMeta {
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
 use core::borrow::Borrow;
 use core::hash::{BuildHasher, Hash};
 use core::num::NonZeroUsize;
@@ -444,8 +446,11 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
     /// Insert a key-value pair with optional size tracking.
     ///
     /// The `size` parameter specifies how much of `max_size` this entry consumes.
-    /// Use `SIZE_UNIT` (1) for count-based caching for count-based caching.
-    pub(crate) fn put(&mut self, key: K, value: V, size: u64) -> Option<(K, V)>
+    /// Use `SIZE_UNIT` (1) for count-based caching.
+    ///
+    /// Returns all displaced entries (replaced or evicted), or `None` if no
+    /// entries were displaced.
+    pub(crate) fn put(&mut self, key: K, value: V, size: u64) -> Option<Vec<(K, V)>>
     where
         K: Clone,
     {
@@ -477,19 +482,19 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
                 self.metrics.core.record_insertion(size);
 
                 // Return old key-value pair
-                return old_entry.0.map(|e| (e.key, e.value));
+                return old_entry.0.map(|e| vec![(e.key, e.value)]);
             }
         }
 
-        let mut evicted = None;
+        let mut evicted = Vec::new();
 
         // Evict while entry count limit OR size limit would be exceeded
         while self.len() >= self.config.capacity.get()
             || (self.current_size + size > self.config.max_size && !self.map.is_empty())
         {
-            if let Some(entry) = self.pop() {
+            if let Some(entry) = self.evict() {
                 self.metrics.core.evictions += 1;
-                evicted = Some(entry);
+                evicted.push(entry);
             } else {
                 break;
             }
@@ -526,7 +531,11 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
         self.metrics.core.record_insertion(size);
         self.metrics.update_frequency_levels(&self.frequency_lists);
 
-        evicted
+        if evicted.is_empty() {
+            None
+        } else {
+            Some(evicted)
+        }
     }
 
     /// Removes a key from the segment, returning the value if the key was present.
@@ -618,7 +627,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
     /// entries to make room during `put()` operations.
     ///
     /// Returns `None` if the cache is empty.
-    pub(crate) fn pop(&mut self) -> Option<(K, V)> {
+    fn evict(&mut self) -> Option<(K, V)> {
         if self.is_empty() {
             return None;
         }
@@ -645,69 +654,6 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
 
             let _ = Box::from_raw(entry_ptr);
             Some((cache_entry.key, cache_entry.value))
-        }
-    }
-
-    /// Removes and returns the highest frequency entry (reverse of pop).
-    ///
-    /// This is the opposite of `pop()` - instead of returning the lowest frequency
-    /// item, it returns the highest frequency item.
-    ///
-    /// This method does **not** increment the eviction counter in metrics.
-    ///
-    /// Returns `None` if the cache is empty.
-    pub(crate) fn pop_r(&mut self) -> Option<(K, V)> {
-        if self.is_empty() {
-            return None;
-        }
-
-        // Get the highest frequency (last key in BTreeMap)
-        let max_frequency = *self.frequency_lists.keys().next_back()?;
-        let max_freq_list = self.frequency_lists.get_mut(&max_frequency)?;
-        let entry = max_freq_list.remove_first()?;
-        let is_list_empty = max_freq_list.is_empty();
-
-        unsafe {
-            // SAFETY: take_value moves the CacheEntry out by value.
-            // Box::from_raw frees memory (MaybeUninit won't double-drop).
-            let entry_ptr = Box::into_raw(entry);
-            let cache_entry = (*entry_ptr).take_value();
-            let evicted_size = cache_entry.metadata.size;
-            self.map.remove(&cache_entry.key);
-            self.current_size = self.current_size.saturating_sub(evicted_size);
-            self.metrics.core.record_removal(evicted_size);
-
-            // Remove empty frequency list
-            if is_list_empty {
-                self.frequency_lists.remove(&max_frequency);
-            }
-
-            let _ = Box::from_raw(entry_ptr);
-            Some((cache_entry.key, cache_entry.value))
-        }
-    }
-
-    /// Returns the minimum frequency in this segment, or `None` if empty.
-    ///
-    /// Used by the concurrent cache to compare eviction priorities across segments.
-    #[allow(dead_code)]
-    pub(crate) fn peek_min_frequency(&self) -> Option<usize> {
-        if self.is_empty() {
-            None
-        } else {
-            Some(self.min_frequency)
-        }
-    }
-
-    /// Returns the maximum frequency in this segment, or `None` if empty.
-    ///
-    /// Used by the concurrent cache to compare priorities across segments for `pop_r()`.
-    #[allow(dead_code)]
-    pub(crate) fn peek_max_frequency(&self) -> Option<usize> {
-        if self.is_empty() {
-            None
-        } else {
-            self.frequency_lists.keys().next_back().copied()
         }
     }
 }
@@ -834,28 +780,18 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
     ///
     /// New items are inserted with a frequency of 1.
     ///
-    /// # Multi-eviction behavior
-    ///
-    /// When using size-based caching (`max_size` is not `u64::MAX`), inserting
-    /// a large entry may cause **multiple** smaller entries to be evicted to
-    /// free enough space. In this case, only the **last** evicted entry is
-    /// returned. For count-based caches, at most one entry is evicted.
-    /// Inserts a key-value pair into the cache.
-    ///
     /// # Arguments
     ///
     /// * `key` - The key to insert
     /// * `value` - The value to cache
     /// * `size` - Size of this entry for capacity tracking. Use `SIZE_UNIT` (1) for count-based caching.
     ///
-    /// # Multi-eviction behavior
+    /// # Returns
     ///
-    /// When using size-based caching (`max_size` is not `u64::MAX`), inserting
-    /// a large entry may cause **multiple** smaller entries to be evicted to
-    /// free enough space. In this case, only the **last** evicted entry is
-    /// returned. For count-based caches, at most one entry is evicted.
+    /// - `Some(vec)` containing all displaced entries (replaced or evicted)
+    /// - `None` if no entries were displaced (zero allocation)
     #[inline]
-    pub fn put(&mut self, key: K, value: V, size: u64) -> Option<(K, V)>
+    pub fn put(&mut self, key: K, value: V, size: u64) -> Option<Vec<(K, V)>>
     where
         K: Clone,
     {
@@ -952,49 +888,6 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
         Q: ?Sized + Hash + Eq,
     {
         self.segment.peek(key)
-    }
-
-    /// Removes and returns the eviction candidate (lowest frequency entry).
-    ///
-    /// For LFU, this is the entry with the lowest frequency. In case of a tie,
-    /// returns the least recently used entry among those with the same frequency.
-    ///
-    /// Returns `None` if the cache is empty.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use cache_rs::LfuCache;
-    /// use cache_rs::config::LfuCacheConfig;
-    /// use core::num::NonZeroUsize;
-    ///
-    /// let config = LfuCacheConfig {
-    ///     capacity: NonZeroUsize::new(3).unwrap(),
-    ///     max_size: u64::MAX,
-    /// };
-    /// let mut cache = LfuCache::init(config, None);
-    /// cache.put("a", 1, 1);
-    /// cache.put("b", 2, 1);
-    /// cache.get(&"b");  // Increase frequency of "b"
-    ///
-    /// // Pop the eviction candidate (lowest frequency item)
-    /// assert_eq!(cache.pop(), Some(("a", 1)));
-    /// ```
-    #[inline]
-    pub fn pop(&mut self) -> Option<(K, V)> {
-        self.segment.pop()
-    }
-
-    /// Removes and returns the highest frequency entry (reverse of pop).
-    ///
-    /// This is an internal method for potential future `LfuSet` implementation.
-    /// It removes the highest frequency item instead of the eviction candidate.
-    ///
-    /// Returns `None` if the cache is empty.
-    #[inline]
-    #[allow(dead_code)]
-    pub(crate) fn pop_r(&mut self) -> Option<(K, V)> {
-        self.segment.pop_r()
     }
 }
 
@@ -1093,7 +986,7 @@ mod tests {
         // Add a new item, should evict "c" (frequency 0, least recently used among frequency 0)
         let evicted = cache.put("d", 4, 1);
         assert!(evicted.is_some());
-        let (evicted_key, evicted_val) = evicted.unwrap();
+        let (evicted_key, evicted_val) = evicted.unwrap()[0];
         assert_eq!(evicted_key, "c");
         assert_eq!(evicted_val, 3);
 
@@ -1122,7 +1015,7 @@ mod tests {
 
         // Add new item, should evict "b" (lower frequency)
         let evicted = cache.put("c", 3, 1);
-        assert_eq!(evicted.unwrap().0, "b");
+        assert_eq!(evicted.unwrap()[0].0, "b");
 
         assert_eq!(cache.get(&"a"), Some(&1));
         assert_eq!(cache.get(&"c"), Some(&3));
@@ -1138,7 +1031,7 @@ mod tests {
 
         // Update existing key
         let old_value = cache.put("a", 10, 1);
-        assert_eq!(old_value.unwrap().1, 1);
+        assert_eq!(old_value.unwrap()[0].1, 1);
 
         // The frequency should be preserved
         cache.put("b", 2, 1);
@@ -1471,165 +1364,42 @@ mod tests {
     }
 
     #[test]
-    fn test_lfu_pop_returns_lowest_frequency() {
-        let mut cache = make_cache(3);
-        cache.put("a", 1, 1);
-        cache.put("b", 2, 1);
-        cache.put("c", 3, 1);
-
-        // Access "b" and "c" to increase their frequencies
-        cache.get(&"b");
-        cache.get(&"c");
-        cache.get(&"c"); // "c" now has frequency 3
-
-        // pop() should return the lowest frequency item ("a" with frequency 1)
-        assert_eq!(cache.pop(), Some(("a", 1)));
-        assert_eq!(cache.len(), 2);
-
-        // Next lowest is "b" (frequency 2)
-        assert_eq!(cache.pop(), Some(("b", 2)));
-        assert_eq!(cache.len(), 1);
-
-        // Only "c" remains
-        assert_eq!(cache.pop(), Some(("c", 3)));
-        assert!(cache.is_empty());
-
-        // Empty cache returns None
-        assert_eq!(cache.pop(), None);
+    fn test_put_returns_none_when_no_eviction() {
+        let mut cache = make_cache(10);
+        assert!(cache.put("a", 1, 1).is_none());
+        assert!(cache.put("b", 2, 1).is_none());
     }
 
     #[test]
-    fn test_lfu_pop_r_returns_highest_frequency() {
-        let mut cache = make_cache(3);
-        cache.put("a", 1, 1);
-        cache.put("b", 2, 1);
-        cache.put("c", 3, 1);
-
-        // Access items to build different frequencies
-        cache.get(&"b"); // "b" frequency = 2
-        cache.get(&"c"); // "c" frequency = 2
-        cache.get(&"c"); // "c" frequency = 3
-
-        // pop_r() should return the highest frequency item ("c" with frequency 3)
-        assert_eq!(cache.pop_r(), Some(("c", 3)));
-        assert_eq!(cache.len(), 2);
-
-        // "a" (freq 1) and "b" (freq 2) remain. Highest is "b"
-        assert_eq!(cache.pop_r(), Some(("b", 2)));
-        assert_eq!(cache.len(), 1);
-
-        // Last item
-        assert_eq!(cache.pop_r(), Some(("a", 1)));
-        assert!(cache.is_empty());
-
-        // Empty cache returns None
-        assert_eq!(cache.pop_r(), None);
-    }
-
-    #[test]
-    fn test_lfu_pop_empty_cache() {
-        let mut cache: LfuCache<&str, i32> = make_cache(2);
-        assert_eq!(cache.pop(), None);
-        assert_eq!(cache.pop_r(), None);
-    }
-
-    #[test]
-    fn test_lfu_pop_single_element() {
+    fn test_put_returns_single_eviction() {
         let mut cache = make_cache(2);
         cache.put("a", 1, 1);
-
-        let popped = cache.pop();
-        assert_eq!(popped, Some(("a", 1)));
-        assert!(cache.is_empty());
-    }
-
-    #[test]
-    fn test_lfu_pop_r_single_element() {
-        let mut cache = make_cache(2);
-        cache.put("a", 1, 1);
-
-        let popped = cache.pop_r();
-        assert_eq!(popped, Some(("a", 1)));
-        assert!(cache.is_empty());
-    }
-
-    #[test]
-    fn test_lfu_pop_interleaved_with_put() {
-        let mut cache = make_cache(3);
-        cache.put("a", 1, 1);
         cache.put("b", 2, 1);
-
-        // Pop lowest frequency
-        assert_eq!(cache.pop(), Some(("a", 1)));
-
-        // Add new items
-        cache.put("c", 3, 1);
-        cache.put("d", 4, 1);
-
-        // "b", "c", "d" all have frequency 1 now. Pop order depends on recency
-        assert_eq!(cache.len(), 3);
-
-        // Access "d" to increase its frequency
-        cache.get(&"d");
-
-        // pop() should return one of the frequency-1 items ("b" or "c")
-        let first_pop = cache.pop().unwrap();
-        assert!(first_pop == ("b", 2) || first_pop == ("c", 3));
-
-        // pop_r() should return "d" (highest frequency)
-        assert_eq!(cache.pop_r(), Some(("d", 4)));
+        // "a" has lower frequency, should be evicted
+        let result = cache.put("c", 3, 1);
+        assert_eq!(result, Some(vec![("a", 1)]));
     }
 
     #[test]
-    fn test_lfu_pop_pop_r_comprehensive_interleaved() {
-        let mut cache = make_cache(5);
-
-        // Insert entries: all start with frequency 1
+    fn test_put_returns_replaced_entry() {
+        let mut cache = make_cache(10);
         cache.put("a", 1, 1);
-        cache.put("b", 2, 1);
-        cache.put("c", 3, 1);
-        cache.put("d", 4, 1);
-        cache.put("e", 5, 1);
+        let result = cache.put("a", 2, 1);
+        assert_eq!(result, Some(vec![("a", 1)]));
+    }
 
-        // Access some entries to differentiate frequencies
-        // a: freq 3, b: freq 2, c: freq 1, d: freq 4, e: freq 1
-        cache.get(&"a");
-        cache.get(&"a");
-        cache.get(&"b");
-        cache.get(&"d");
-        cache.get(&"d");
-        cache.get(&"d");
-
-        // pop() removes lowest frequency first (c or e with freq 1)
-        // Between c and e, "c" was inserted first (older)
-        assert_eq!(cache.pop(), Some(("c", 3)));
-        assert_eq!(cache.len(), 4);
-
-        // pop_r() removes highest frequency (d with freq 4)
-        assert_eq!(cache.pop_r(), Some(("d", 4)));
-        assert_eq!(cache.len(), 3);
-
-        // Put new entry "f" with freq 1
-        cache.put("f", 6, 1);
-        assert_eq!(cache.len(), 4);
-
-        // pop() removes lowest freq (e with freq 1, older than f)
-        assert_eq!(cache.pop(), Some(("e", 5)));
-
-        // Remove "a" by key
-        assert_eq!(cache.remove(&"a"), Some(1));
-        assert_eq!(cache.len(), 2);
-
-        // Remaining: b (freq 2), f (freq 1)
-        // pop() returns f (lowest freq)
-        assert_eq!(cache.pop(), Some(("f", 6)));
-
-        // pop_r() returns b (highest freq, and only remaining)
-        assert_eq!(cache.pop_r(), Some(("b", 2)));
-
-        // Cache is empty
-        assert!(cache.is_empty());
-        assert_eq!(cache.pop(), None);
-        assert_eq!(cache.pop_r(), None);
+    #[test]
+    fn test_put_returns_multiple_evictions_size_based() {
+        let config = LfuCacheConfig {
+            capacity: NonZeroUsize::new(10).unwrap(),
+            max_size: 100,
+        };
+        let mut cache = LfuCache::init(config, None);
+        for i in 0..10 {
+            cache.put(i, i, 10);
+        }
+        let result = cache.put(99, 99, 50);
+        let evicted = result.unwrap();
+        assert_eq!(evicted.len(), 5);
     }
 }
