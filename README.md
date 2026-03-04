@@ -33,6 +33,83 @@ The library works in `no_std` environments out of the box. The default build use
 
 cache-rs is production-hardened: extensive test coverage, Miri-verified for memory safety, and benchmarked across realistic workloads. It serves as the foundation for cache simulation research, so the algorithms have been validated against real-world access patterns. For a deep dive into how each algorithm performs under different workloads, see our [Analysis Report](ANALYSIS_REPORT.md), which covers 47 million cache operations across video streaming, social media, web content, and on-disk caching scenarios.
 
+## Design Philosophy: Eviction Handling
+
+cache-rs takes an opinionated stance on how eviction should work. Understanding this philosophy helps you use the library effectively and understand why certain design choices were made.
+
+### `put()` Returns All Evicted Entries
+
+When you insert into a full cache, the `put()` method returns `Option<Vec<(K, V)>>` containing **all** entries that were evicted to make room:
+
+```rust,ignore
+let evicted = cache.put("new_key", new_value, size);
+if let Some(entries) = evicted {
+    for (key, value) in entries {
+        // Handle evicted entry: write to disk, log, clean up resources
+        persist_to_disk(&key, &value);
+    }
+}
+```
+
+This design captures a critical insight: **the caller knows what to do with evicted data, the cache doesn't**. In a write-back cache, you need to persist dirty entries before they're lost. In a tiered cache, you might demote entries to a slower tier. In a metrics system, you might record what was evicted and why. The cache library can't know your intent—it just gives you the data.
+
+### Why `Vec<(K, V)>` Instead of a Single Entry?
+
+Size-constrained caches may evict **multiple entries** to fit a single large insertion. If your cache has 10MB free and you insert a 25MB object, three 5MB entries might be evicted. Returning only the last eviction would lose data silently—an unacceptable outcome for write-back caches or anything requiring cleanup.
+
+```rust,ignore
+// Size-limited cache: 100 MB
+let config = LruCacheConfig {
+    capacity: NonZeroUsize::new(1000).unwrap(),
+    max_size: 100 * 1024 * 1024,
+};
+let mut cache = LruCache::init(config, None);
+
+// Fill with 10 entries × 10 MB each = 100 MB
+for i in 0..10 {
+    cache.put(format!("item:{}", i), large_data.clone(), 10 * 1024 * 1024);
+}
+
+// Insert 30 MB item → evicts 3-4 items to make room
+let evicted = cache.put("big_item", huge_data, 30 * 1024 * 1024);
+assert!(evicted.as_ref().map(|v| v.len()).unwrap_or(0) >= 3);
+```
+
+### No Eviction Callbacks or Handlers
+
+Some cache libraries offer eviction callbacks: `cache.on_evict(|k, v| { ... })`. cache-rs deliberately avoids this pattern for several reasons:
+
+1. **Ownership clarity**: Callbacks create complex lifetime and ownership questions. Does the callback own the value? Can it block? What happens if it panics? Returning ownership to the caller is unambiguous.
+
+2. **Synchronous control flow**: With `put()` returning evicted entries, you handle evictions in the same call stack. No surprise callbacks triggered later. No need to reason about re-entrancy.
+
+3. **Testability**: Testing code that handles evictions inline is straightforward. Testing callback registration, ordering guarantees, and error handling in callbacks is complex.
+
+4. **Flexibility**: The caller can choose to ignore evictions (`let _ = cache.put(...)`), batch them, process them async, or handle them immediately. Callbacks lock you into one pattern.
+
+### No `pop()` Semantics
+
+cache-rs provides `put`, `get`, and `remove`—but no `pop()` to manually evict the "least valuable" entry. This is intentional:
+
+1. **Eviction is automatic**: When you `put()` into a full cache, eviction happens. You don't need to manually pop entries first. The cache manages its own capacity.
+
+2. **"Least valuable" varies by algorithm**: For LRU, it's the oldest. For LFU, lowest frequency. For GDSF, a function of size and frequency. Exposing `pop()` leaks algorithm details into calling code.
+
+3. **It conflates concerns**: If you need to iterate over cache contents or forcibly remove entries, use `remove()` with known keys. If you need eviction, let `put()` trigger it naturally.
+
+4. **Concurrent complexity**: In segmented concurrent caches, `pop()` would need to scan all segments to find the globally least-valuable entry—an O(segments) operation that defeats the purpose of segmentation. By tying eviction to `put()`, we keep operations O(1) per segment.
+
+### Summary: The Eviction Contract
+
+| Operation | Eviction Behavior |
+|-----------|-------------------|
+| `put(key, value, size)` | May evict entries; returns `Option<Vec<(K, V)>>` with all evicted |
+| `get(&key)` | Never evicts |
+| `remove(&key)` | Never evicts (explicit removal, not eviction) |
+| `clear()` | Removes all entries (not eviction—no entries returned) |
+
+The pattern is simple: **`put()` is the only operation that triggers eviction, and it gives you everything that was evicted**. This makes eviction handling predictable, testable, and explicit.
+
 ## Quick Start
 
 ```toml
@@ -60,7 +137,7 @@ All cache types support these core operations:
 
 | Method | Description |
 |--------|-------------|
-| `put(key, value, size)` | Insert or update an entry with explicit size. Returns evicted entry if capacity exceeded. Use `1` for count-based caching. |
+| `put(key, value, size)` | Insert or update. Returns `Option<Vec<(K, V)>>` with all evicted entries if capacity exceeded. |
 | `get(&key)` | Retrieve a reference to the value. Updates access metadata (e.g., moves to front in LRU). |
 | `get_mut(&key)` | Retrieve a mutable reference. Updates access metadata. |
 | `remove(&key)` | Remove and return an entry. |
@@ -247,18 +324,21 @@ let config = LruCacheConfig {
 let mut cache: LruCache<&str, &str> = LruCache::init(config, None);
 
 // Insert 3 entries, each with size 30 bytes
-cache.put("a", "value_a", 30);  // entries=1, size=30
-cache.put("b", "value_b", 30);  // entries=2, size=60
-cache.put("c", "value_c", 30);  // entries=3, size=90
+cache.put("a", "value_a", 30);  // entries=1, size=30 → returns None
+cache.put("b", "value_b", 30);  // entries=2, size=60 → returns None
+cache.put("c", "value_c", 30);  // entries=3, size=90 → returns None
 
 // Case 1: Capacity-triggered eviction
 // Adding "d" would exceed capacity (3 entries), so "a" is evicted
-cache.put("d", "value_d", 30);  // evicts "a", entries=3, size=90
+let evicted = cache.put("d", "value_d", 30);
+assert_eq!(evicted, Some(vec![("a", "value_a")]));  // "a" was LRU
 
-// Case 2: Size-triggered eviction
-// Adding a 50-byte entry would exceed max_size (90 + 50 > 100)
-// Multiple entries may be evicted to make room
-cache.put("big", "large_value", 50);  // evicts until size fits
+// Case 2: Size-triggered eviction (multiple entries)
+// Adding a 50-byte entry would exceed max_size. Current: 90 bytes, need room for 50.
+// Must evict until (current_size + 50) <= 100, so evict "b" and "c" (60 bytes)
+let evicted = cache.put("big", "large_value", 50);
+// Returns all evicted entries for cleanup/persistence
+assert!(evicted.as_ref().map(|v| v.len()).unwrap_or(0) >= 1);
 ```
 
 For concurrent caches, `capacity` and `max_size` apply to the **entire cache** (distributed across all segments), not per-segment
