@@ -327,8 +327,6 @@ where
 
     /// Inserts a key-value pair with its size into the cache.
     ///
-    /// Inserts a key-value pair into the cache with optional size tracking.
-    ///
     /// GDSF uses size for priority calculation. Use `SIZE_UNIT` (1) for count-based caching.
     /// Returns `None` if no entries were removed. Returns `Some(vec)` containing all
     /// `(key, value)` pairs removed from the cache as part of this operation, including

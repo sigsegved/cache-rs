@@ -925,12 +925,12 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfudaCache<K, V, S> {
 
     /// Inserts a key-value pair into the cache.
     ///
-    /// If the cache already contained this key, the old value is replaced and returned.
-    /// Otherwise, if the cache is at capacity, the item with the lowest effective priority
-    /// is evicted. The global age is updated to the evicted item's effective priority.
+    /// If the key already exists, it is replaced. If at capacity, the item with the
+    /// lowest effective priority is evicted and the global age is updated to the
+    /// evicted item's effective priority.
     ///
-    /// New items are inserted with a frequency of 1 and age_at_insertion set to the
-    /// current global_age.
+    /// New items are inserted with a frequency of 1 and `age_at_insertion` set to the
+    /// current `global_age`.
     ///
     /// # Arguments
     ///

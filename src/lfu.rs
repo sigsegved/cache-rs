@@ -773,10 +773,9 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
 
     /// Inserts a key-value pair into the cache.
     ///
-    /// If the cache already contained this key, the old value is replaced and returned.
-    /// Otherwise, if the cache is at capacity, the least frequently used item is evicted.
-    /// In case of a tie in frequency, the least recently used item among those with
-    /// the same frequency is evicted.
+    /// If the key already exists, it is replaced. If at capacity, the least frequently
+    /// used item is evicted. Ties are broken by evicting the least recently used item
+    /// among those with the same frequency.
     ///
     /// New items are inserted with a frequency of 1.
     ///

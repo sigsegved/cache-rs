@@ -884,11 +884,9 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruCache<K, V, S> {
 impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruCache<K, V, S> {
     /// Inserts a key-value pair into the cache.
     ///
-    /// If the cache already contained this key, the old value is replaced and returned.
-    /// Otherwise, if the cache is at capacity, the least recently used item from the
-    /// probationary segment will be evicted.
-    ///
-    /// The inserted key-value pair is always placed in the probationary segment.
+    /// If the key already exists, it is replaced. If at capacity, the least recently
+    /// used item from the probationary segment is evicted. The inserted entry always
+    /// starts in the probationary segment.
     ///
     /// # Arguments
     ///
