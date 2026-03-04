@@ -1652,7 +1652,7 @@ fn test_lfuda_put_returns_evicted() {
     let evicted = cache.put(4, 40, 1);
     assert!(evicted.is_some(), "Should return evicted item");
 
-    let (key, value) = evicted.unwrap()[0];
+    let (key, value) = evicted.unwrap().into_iter().next().unwrap();
     // One of the original keys should have been evicted
     assert!((1..=3).contains(&key));
     assert!(value == 10 || value == 20 || value == 30);
