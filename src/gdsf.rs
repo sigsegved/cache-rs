@@ -1053,7 +1053,6 @@ mod tests {
         cache.put("a", 1, 1);
         cache.put("b", 2, 1);
 
-        // Use remove() instead of the deprecated pop(key)
         assert_eq!(cache.remove(&"a"), Some(1));
         assert_eq!(cache.len(), 1);
         assert!(!cache.contains(&"a"));
