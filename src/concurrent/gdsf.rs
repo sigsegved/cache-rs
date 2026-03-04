@@ -328,10 +328,11 @@ where
     /// Inserts a key-value pair with its size into the cache.
     ///
     /// GDSF uses size for priority calculation. Use `SIZE_UNIT` (1) for count-based caching.
-    /// Returns `None` if no entries were removed. Returns `Some(vec)` containing all
-    /// `(key, value)` pairs removed from the cache as part of this operation, including
-    /// the previous value for `key` if it existed and any additional entries evicted
-    /// to make room.
+    /// Returns `None` if no entries were evicted. Returns `Some(vec)` containing all
+    /// `(key, value)` pairs evicted from the cache as part of this operation to make
+    /// room for the new entry.
+    ///
+    /// Overwriting an existing key without triggering eviction returns `None`.
     pub fn put(&self, key: K, value: V, size: u64) -> Option<Vec<(K, V)>>
     where
         K: Clone,
