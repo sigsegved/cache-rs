@@ -522,7 +522,6 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> SlruInner<K, V, S> {
 
 impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruInner<K, V, S> {
     /// Inserts a key-value pair into the segment.
-    /// Inserts a key-value pair into the segment.
     ///
     /// # Arguments
     ///
