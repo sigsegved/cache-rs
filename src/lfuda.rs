@@ -1102,7 +1102,6 @@ where
 mod tests {
     extern crate std;
     use alloc::string::ToString;
-    use alloc::vec;
 
     use super::*;
     use crate::config::LfudaCacheConfig;

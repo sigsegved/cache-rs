@@ -967,7 +967,6 @@ mod tests {
     use super::*;
     use crate::config::GdsfCacheConfig;
     use core::num::NonZeroUsize;
-    use alloc::vec;
 
     /// Helper to create a GdsfCache with the given capacity
     fn make_cache<K: Hash + Eq + Clone, V: Clone>(cap: usize) -> GdsfCache<K, V> {

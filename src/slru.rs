@@ -1064,7 +1064,6 @@ mod tests {
     use crate::config::SlruCacheConfig;
     use alloc::format;
     use alloc::string::String;
-    use alloc::vec;
 
     /// Helper to create an SlruCache with the given capacity and protected capacity
     fn make_cache<K: Hash + Eq + Clone, V: Clone>(
