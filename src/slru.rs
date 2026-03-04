@@ -180,7 +180,6 @@ use crate::metrics::{CacheMetrics, SlruCacheMetrics};
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
 use core::borrow::Borrow;
 use core::hash::{BuildHasher, Hash};
@@ -529,8 +528,8 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruInner<K, V, S> {
     /// * `value` - The value to insert
     /// * `size` - Optional size in bytes. Use `SIZE_UNIT` (1) for count-based caching.
     ///
-    /// Returns all displaced entries (replaced or evicted), or `None` if no
-    /// entries were displaced.
+    /// Returns evicted entries, or `None` if no entries were evicted.
+    /// Note: Replacing an existing key does not return the old value.
     pub(crate) fn put(&mut self, key: K, value: V, size: u64) -> Option<Vec<(K, V)>>
     where
         V: Clone,
@@ -559,8 +558,11 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruInner<K, V, S> {
                         // Update size tracking
                         self.current_size = self.current_size.saturating_sub(old_size);
                         self.current_size += size;
-                        self.metrics.core.record_insertion(size);
-                        return old_entry.0.map(|e| vec![(e.key, e.value)]);
+                        self.metrics.core.record_size_change(old_size, size);
+                        self.metrics.core.bytes_written_to_cache += size;
+                        // Replacement is not eviction - discard old entry
+                        let _ = old_entry;
+                        return None;
                     }
                     Location::Protected => {
                         self.protected.move_to_front(node);
@@ -577,8 +579,11 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruInner<K, V, S> {
                         // Update size tracking
                         self.current_size = self.current_size.saturating_sub(old_size);
                         self.current_size += size;
-                        self.metrics.core.record_insertion(size);
-                        return old_entry.0.map(|e| vec![(e.key, e.value)]);
+                        self.metrics.core.record_size_change(old_size, size);
+                        self.metrics.core.bytes_written_to_cache += size;
+                        // Replacement is not eviction - discard old entry
+                        let _ = old_entry;
+                        return None;
                     }
                 }
             }
@@ -896,8 +901,8 @@ impl<K: Hash + Eq + Clone, V, S: BuildHasher> SlruCache<K, V, S> {
     ///
     /// # Returns
     ///
-    /// - `Some(vec)` containing all displaced entries (replaced or evicted)
-    /// - `None` if no entries were displaced (zero allocation)
+    /// - `Some(vec)` containing evicted entries (not replaced entries)
+    /// - `None` if no entries were evicted (zero allocation)
     #[inline]
     pub fn put(&mut self, key: K, value: V, size: u64) -> Option<Vec<(K, V)>>
     where
@@ -1059,6 +1064,7 @@ mod tests {
     use crate::config::SlruCacheConfig;
     use alloc::format;
     use alloc::string::String;
+    use alloc::vec;
 
     /// Helper to create an SlruCache with the given capacity and protected capacity
     fn make_cache<K: Hash + Eq + Clone, V: Clone>(
@@ -1127,9 +1133,9 @@ mod tests {
         // Access "a" to promote it to protected
         assert_eq!(cache.get(&"a"), Some(&1));
 
-        // Update values
-        assert_eq!(cache.put("a", 10, 1).unwrap()[0].1, 1);
-        assert_eq!(cache.put("b", 20, 1).unwrap()[0].1, 2);
+        // Update values - replacement returns None
+        assert!(cache.put("a", 10, 1).is_none());
+        assert!(cache.put("b", 20, 1).is_none());
 
         // Check updated values
         assert_eq!(cache.get(&"a"), Some(&10));
@@ -1508,11 +1514,14 @@ mod tests {
     }
 
     #[test]
-    fn test_put_returns_replaced_entry() {
+    fn test_put_replacement_returns_none() {
         let mut cache = make_cache(10, 3);
         cache.put("a", 1, 1);
+        // Replacement is not eviction - returns None
         let result = cache.put("a", 2, 1);
-        assert_eq!(result, Some(vec![("a", 1)]));
+        assert!(result.is_none());
+        // Value should be updated
+        assert_eq!(cache.get(&"a"), Some(&2));
     }
 
     #[test]

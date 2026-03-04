@@ -140,7 +140,6 @@ use crate::metrics::{CacheMetrics, LruCacheMetrics};
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
 use core::borrow::Borrow;
 use core::hash::{BuildHasher, Hash};
@@ -289,8 +288,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
     /// The `size` parameter specifies how much of `max_size` this entry consumes.
     /// Use `SIZE_UNIT` (1) for count-based caching.
     ///
-    /// Returns all displaced entries (replaced or evicted), or `None` if no
-    /// entries were displaced.
+    /// Returns evicted entries, or `None` if no entries were evicted.
+    /// Note: Replacing an existing key does not return the old value.
     pub(crate) fn put(&mut self, key: K, value: V, size: u64) -> Option<Vec<(K, V)>>
     where
         K: Clone + Hash + Eq,
@@ -309,15 +308,17 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LruSegment<K, V, S> {
 
                 // Update entry fields
                 // TODO: seems wasteful to replace key since it should be the same?
-                let old_key = core::mem::replace(&mut entry.key, key);
-                let old_value = core::mem::replace(&mut entry.value, value);
+                let _old_key = core::mem::replace(&mut entry.key, key);
+                let _old_value = core::mem::replace(&mut entry.value, value);
                 entry.metadata.size = size;
                 entry.touch();
 
                 self.current_size += size;
                 self.metrics.core.cache_size_bytes += size;
+                self.metrics.core.bytes_written_to_cache += size;
 
-                return Some(vec![(old_key, old_value)]);
+                // Replacement is not eviction - don't return the old value
+                return None;
             }
         }
 
@@ -611,8 +612,8 @@ impl<K: Hash + Eq + Clone, V: Clone, S: BuildHasher> LruCache<K, V, S> {
     ///
     /// # Returns
     ///
-    /// - `Some(vec)` containing all displaced entries (replaced or evicted)
-    /// - `None` if no entries were displaced (zero allocation)
+    /// - `Some(vec)` containing evicted entries (not replaced entries)
+    /// - `None` if no entries were evicted (zero allocation)
     ///
     /// # Arguments
     ///
@@ -636,7 +637,7 @@ impl<K: Hash + Eq + Clone, V: Clone, S: BuildHasher> LruCache<K, V, S> {
     /// // Count-based caching (use 1 for size)
     /// assert_eq!(cache.put("a", 1, 1), None);                     // New entry
     /// assert_eq!(cache.put("b", 2, 1), None);                     // New entry
-    /// assert_eq!(cache.put("a", 10, 1), Some(vec![("a", 1)]));    // Update existing
+    /// assert_eq!(cache.put("a", 10, 1), None);                    // Update existing (not eviction)
     /// assert_eq!(cache.put("c", 3, 1), Some(vec![("b", 2)]));     // Evicts "b"
     /// ```
     ///
@@ -858,6 +859,7 @@ mod tests {
     use super::*;
     use crate::config::LruCacheConfig;
     use alloc::string::String;
+    use alloc::vec;
 
     /// Helper to create an LruCache with the given capacity
     fn make_cache<K: Hash + Eq + Clone, V: Clone>(cap: usize) -> LruCache<K, V> {
@@ -876,8 +878,10 @@ mod tests {
         assert_eq!(cache.get(&"apple"), Some(&1));
         assert_eq!(cache.get(&"banana"), Some(&2));
         assert_eq!(cache.get(&"cherry"), None);
-        assert_eq!(cache.put("apple", 3, 1).unwrap()[0].1, 1);
+        // Updating existing key returns None (not eviction)
+        assert!(cache.put("apple", 3, 1).is_none());
         assert_eq!(cache.get(&"apple"), Some(&3));
+        // Adding new key evicts LRU entry (banana, since apple was accessed)
         assert_eq!(cache.put("cherry", 4, 1).unwrap()[0].1, 2);
         assert_eq!(cache.get(&"banana"), None);
         assert_eq!(cache.get(&"apple"), Some(&3));
@@ -1273,11 +1277,14 @@ mod tests {
     }
 
     #[test]
-    fn test_put_returns_replaced_entry() {
+    fn test_put_replacement_returns_none() {
         let mut cache = make_cache(10);
         cache.put("a", 1, 1);
+        // Replacement is not eviction - returns None
         let result = cache.put("a", 2, 1);
-        assert_eq!(result, Some(vec![("a", 1)]));
+        assert!(result.is_none());
+        // Value should be updated
+        assert_eq!(cache.get(&"a"), Some(&2));
     }
 
     #[test]

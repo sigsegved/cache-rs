@@ -1665,11 +1665,9 @@ fn test_lfuda_update_existing_key() {
     cache.put(1, 10, 1);
     cache.put(2, 20, 1);
 
-    // Update existing key
+    // Update existing key - replacement returns None (not eviction)
     let old = cache.put(1, 100, 1);
-
-    // Should return old value wrapped in tuple
-    assert_eq!(old, Some(vec![(1, 10)]));
+    assert!(old.is_none());
 
     // Value should be updated
     assert_eq!(cache.get(&1), Some(&100));

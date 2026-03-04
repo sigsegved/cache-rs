@@ -207,7 +207,6 @@ impl LfuMeta {
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
 use core::borrow::Borrow;
 use core::hash::{BuildHasher, Hash};
@@ -448,8 +447,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
     /// The `size` parameter specifies how much of `max_size` this entry consumes.
     /// Use `SIZE_UNIT` (1) for count-based caching.
     ///
-    /// Returns all displaced entries (replaced or evicted), or `None` if no
-    /// entries were displaced.
+    /// Returns evicted entries, or `None` if no entries were evicted.
+    /// Note: Replacing an existing key does not return the old value.
     pub(crate) fn put(&mut self, key: K, value: V, size: u64) -> Option<Vec<(K, V)>>
     where
         K: Clone,
@@ -470,7 +469,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
                     LfuMeta::new(frequency as u64),
                 );
 
-                let old_entry = self
+                let _old_entry = self
                     .frequency_lists
                     .get_mut(&frequency)
                     .unwrap()
@@ -479,10 +478,11 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuSegment<K, V, S> {
                 // Update size tracking
                 self.current_size = self.current_size.saturating_sub(old_size);
                 self.current_size += size;
-                self.metrics.core.record_insertion(size);
+                self.metrics.core.record_size_change(old_size, size);
+                self.metrics.core.bytes_written_to_cache += size;
 
-                // Return old key-value pair
-                return old_entry.0.map(|e| vec![(e.key, e.value)]);
+                // Replacement is not eviction - don't return the old value
+                return None;
             }
         }
 
@@ -787,8 +787,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> LfuCache<K, V, S> {
     ///
     /// # Returns
     ///
-    /// - `Some(vec)` containing all displaced entries (replaced or evicted)
-    /// - `None` if no entries were displaced (zero allocation)
+    /// - `Some(vec)` containing evicted entries (not replaced entries)
+    /// - `None` if no entries were evicted (zero allocation)
     #[inline]
     pub fn put(&mut self, key: K, value: V, size: u64) -> Option<Vec<(K, V)>>
     where
@@ -950,6 +950,7 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> CacheMetrics for LfuCache<K, V, S> 
 mod tests {
     extern crate std;
     use alloc::format;
+    use alloc::vec;
     use std::println;
     use std::string::ToString;
 
@@ -1028,9 +1029,9 @@ mod tests {
         cache.put("a", 1, 1);
         cache.get(&"a"); // frequency becomes 2
 
-        // Update existing key
+        // Update existing key - replacement returns None
         let old_value = cache.put("a", 10, 1);
-        assert_eq!(old_value.unwrap()[0].1, 1);
+        assert!(old_value.is_none());
 
         // The frequency should be preserved
         cache.put("b", 2, 1);
@@ -1380,11 +1381,14 @@ mod tests {
     }
 
     #[test]
-    fn test_put_returns_replaced_entry() {
+    fn test_put_replacement_returns_none() {
         let mut cache = make_cache(10);
         cache.put("a", 1, 1);
+        // Replacement is not eviction - returns None
         let result = cache.put("a", 2, 1);
-        assert_eq!(result, Some(vec![("a", 1)]));
+        assert!(result.is_none());
+        // Value should be updated
+        assert_eq!(cache.get(&"a"), Some(&2));
     }
 
     #[test]

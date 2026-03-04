@@ -275,7 +275,6 @@ impl GdsfMeta {
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
 use core::borrow::Borrow;
 use core::hash::{BuildHasher, Hash};
@@ -502,8 +501,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
 
     /// Inserts a key-value pair with size tracking.
     ///
-    /// Returns all displaced entries (replaced or evicted), or `None` if no
-    /// entries were displaced.
+    /// Returns evicted entries, or `None` if no entries were evicted.
+    /// Note: Replacing an existing key does not return the old value.
     pub(crate) fn put(&mut self, key: K, val: V, size: u64) -> Option<Vec<(K, V)>>
     where
         K: Clone,
@@ -532,8 +531,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
 
                 let entry_ptr = Box::into_raw(boxed_entry);
                 let cache_entry = (*entry_ptr).take_value();
-                let old_key = cache_entry.key;
-                let old_value = cache_entry.value;
+                // Discard old key/value since replacement is not eviction
+                let _ = (cache_entry.key, cache_entry.value);
                 let _ = Box::from_raw(entry_ptr);
 
                 // Update size tracking
@@ -559,8 +558,10 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfSegment<K, V, S> {
 
                 if let Some(new_node) = list.add(new_entry) {
                     self.map.insert(key, new_node);
-                    self.metrics.core.record_insertion(size);
-                    return Some(vec![(old_key, old_value)]);
+                    self.metrics.core.record_size_change(old_size, size);
+                    self.metrics.core.bytes_written_to_cache += size;
+                    // Replacement is not eviction - don't return the old value
+                    return None;
                 } else {
                     self.map.remove(&key);
                     return None;
@@ -817,8 +818,8 @@ impl<K: Hash + Eq, V: Clone, S: BuildHasher> GdsfCache<K, V, S> {
     ///
     /// # Returns
     ///
-    /// - `Some(vec)` containing all displaced entries (replaced or evicted)
-    /// - `None` if no entries were displaced (zero allocation)
+    /// - `Some(vec)` containing evicted entries (not replaced entries)
+    /// - `None` if no entries were evicted (zero allocation)
     #[inline]
     pub fn put(&mut self, key: K, val: V, size: u64) -> Option<Vec<(K, V)>>
     where
@@ -966,6 +967,7 @@ mod tests {
     use super::*;
     use crate::config::GdsfCacheConfig;
     use core::num::NonZeroUsize;
+    use alloc::vec;
 
     /// Helper to create a GdsfCache with the given capacity
     fn make_cache<K: Hash + Eq + Clone, V: Clone>(cap: usize) -> GdsfCache<K, V> {
@@ -1032,7 +1034,8 @@ mod tests {
         cache.put("key", 1, 1);
         assert_eq!(cache.get(&"key"), Some(1));
 
-        assert_eq!(cache.put("key", 2, 2), Some(vec![("key", 1)]));
+        // Replacement returns None (not eviction)
+        assert!(cache.put("key", 2, 2).is_none());
         assert_eq!(cache.get(&"key"), Some(2));
         assert_eq!(cache.len(), 1);
     }
@@ -1256,11 +1259,14 @@ mod tests {
     }
 
     #[test]
-    fn test_put_returns_replaced_entry() {
+    fn test_put_replacement_returns_none() {
         let mut cache = make_cache(10);
         cache.put("a", 1, 10);
+        // Replacement is not eviction - returns None
         let result = cache.put("a", 2, 10);
-        assert_eq!(result, Some(vec![("a", 1)]));
+        assert!(result.is_none());
+        // Value should be updated
+        assert_eq!(cache.get(&"a"), Some(2));
     }
 
     #[test]

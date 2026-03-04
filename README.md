@@ -103,12 +103,12 @@ cache-rs provides `put`, `get`, and `remove`—but no `pop()` to manually evict 
 
 | Operation | Eviction Behavior |
 |-----------|-------------------|
-| `put(key, value, size)` | May evict entries; returns `Option<Vec<(K, V)>>` with all evicted |
+| `put(key, value, size)` | May evict entries; returns `Option<Vec<(K, V)>>` with evicted entries (not replaced) |
 | `get(&key)` | Never evicts |
 | `remove(&key)` | Never evicts (explicit removal, not eviction) |
 | `clear()` | Removes all entries (not eviction—no entries returned) |
 
-The pattern is simple: **`put()` is the only operation that triggers eviction, and it gives you everything that was evicted**. This makes eviction handling predictable, testable, and explicit.
+The pattern is simple: **`put()` is the only operation that triggers eviction, and it gives you everything that was evicted** (replacing an existing key with a new value is not eviction). This makes eviction handling predictable, testable, and explicit.
 
 ## Quick Start
 
@@ -137,7 +137,7 @@ All cache types support these core operations:
 
 | Method | Description |
 |--------|-------------|
-| `put(key, value, size)` | Insert or update. Returns `Option<Vec<(K, V)>>` with all evicted entries if capacity exceeded. |
+| `put(key, value, size)` | Insert or update. Returns `Option<Vec<(K, V)>>` with evicted entries only (not replaced entries). |
 | `get(&key)` | Retrieve a reference to the value. Updates access metadata (e.g., moves to front in LRU). |
 | `get_mut(&key)` | Retrieve a mutable reference. Updates access metadata. |
 | `remove(&key)` | Remove and return an entry. |
