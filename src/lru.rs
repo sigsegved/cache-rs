@@ -606,7 +606,7 @@ impl<K: Hash + Eq + Clone, V: Clone, S: BuildHasher> LruCache<K, V, S> {
     /// Inserts a key-value pair into the cache.
     ///
     /// If the key already exists, the value is updated and the entry moves
-    /// to the MRU position. The old key-value pair is returned in the vec.
+    /// to the MRU position.
     ///
     /// If the cache is at capacity, evicted entries are returned.
     ///
