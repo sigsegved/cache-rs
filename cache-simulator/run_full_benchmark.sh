@@ -74,7 +74,7 @@ EOF
 
 # Build
 echo -e "  ${GREEN}▸${NC} Building release binary..."
-(cd "$REPO_ROOT" && cargo build --release --features "std,concurrent" -p cache-simulator 2>/dev/null)
+(cd "$REPO_ROOT" && cargo build --release --features "std,concurrent" -p cache-simulator 2>&1 | tee "$BENCHMARK_DIR/build.log")
 echo -e "  ${GREEN}✔${NC} Build complete"
 
 # Clean if requested
