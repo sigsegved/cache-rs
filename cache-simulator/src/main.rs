@@ -253,6 +253,9 @@ fn run_simulator(
                     "slru" => selected_algorithms.push(models::CacheAlgorithm::Slru),
                     "gdsf" => selected_algorithms.push(models::CacheAlgorithm::Gdsf),
                     "moka" => selected_algorithms.push(models::CacheAlgorithm::Moka),
+                    "lru-crate" | "lrucrate" => {
+                        selected_algorithms.push(models::CacheAlgorithm::LruCrate)
+                    }
                     _ => println!("Warning: Unknown algorithm '{name}', skipping"),
                 }
             }

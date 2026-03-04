@@ -3,7 +3,7 @@
 # Cache Algorithm Simulation Suite
 # ================================
 # A comprehensive tool for generating traffic data and benchmarking
-# cache eviction algorithms (LRU, SLRU, LFU, LFUDA, GDSF, Moka).
+# cache eviction algorithms (LRU, SLRU, LFU, LFUDA, GDSF, Moka, lru-crate).
 #
 # Usage:
 #   ./run_simulations.sh [command] [options]
@@ -324,7 +324,7 @@ run_simulations() {
                 --capacity "$capacity" \
                 --mode both \
                 --output-csv "$output_file" \
-                2>&1 | grep -E "^\s*(LRU|SLRU|LFU|LFUDA|GDSF|Moka)" | head -12 | while read -r line; do
+                2>&1 | grep -E "^\s*(LRU|SLRU|LFU|LFUDA|GDSF|Moka|lru-crate)" | head -14 | while read -r line; do
                     print_table_row "$line"
                 done
             
@@ -364,7 +364,7 @@ run_simulations() {
                 --use-size \
                 --mode both \
                 --output-csv "$output_file" \
-                2>&1 | grep -E "^\s*(LRU|SLRU|LFU|LFUDA|GDSF|Moka)" | head -12 | while read -r line; do
+                2>&1 | grep -E "^\s*(LRU|SLRU|LFU|LFUDA|GDSF|Moka|lru-crate)" | head -14 | while read -r line; do
                     print_table_row "$line"
                 done
             
@@ -503,6 +503,7 @@ show_help() {
       LFUDA     LFU with Dynamic Aging - handles shifting popularity
       GDSF      Greedy Dual Size Frequency - size-aware
       Moka      External high-performance cache (comparison baseline)
+      lru-crate External lru crate (comparison baseline)
 
   OUTPUT:
       Traffic data:  ./traffic_data/<pattern>_traffic/
