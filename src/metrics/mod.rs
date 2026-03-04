@@ -111,7 +111,7 @@ impl CoreCacheMetrics {
         self.cache_size_bytes = self.cache_size_bytes.saturating_sub(evicted_size);
     }
 
-    /// Records a user-initiated removal — when an item is explicitly removed via `remove()` or `pop()`.
+    /// Records a user-initiated removal — when an item is explicitly removed via `remove()`.
     ///
     /// Unlike [`record_eviction()`](Self::record_eviction), this does **not** increment the eviction counter.
     /// Use this for operations where the user explicitly removes an entry rather than the cache

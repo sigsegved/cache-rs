@@ -1640,33 +1640,6 @@ fn test_lfuda_size_eviction_multiple_items() {
 }
 
 #[test]
-fn test_lfuda_pop_updates_global_age() {
-    let mut cache: LfudaCache<i32, i32> = make_lfuda(5);
-
-    // Fill cache
-    for i in 1..=5 {
-        cache.put(i, i * 10, 1);
-    }
-
-    // Access some items to create priority differences
-    cache.get(&3);
-    cache.get(&3);
-    cache.get(&4);
-
-    let age_before = cache.global_age();
-
-    // Pop should remove lowest priority and update global age
-    let popped = cache.pop();
-    assert!(popped.is_some());
-
-    let age_after = cache.global_age();
-    assert!(
-        age_after >= age_before,
-        "Global age should not decrease after pop"
-    );
-}
-
-#[test]
 fn test_lfuda_put_returns_evicted() {
     let mut cache: LfudaCache<i32, i32> = make_lfuda(3);
 
@@ -1679,7 +1652,7 @@ fn test_lfuda_put_returns_evicted() {
     let evicted = cache.put(4, 40, 1);
     assert!(evicted.is_some(), "Should return evicted item");
 
-    let (key, value) = evicted.unwrap();
+    let (key, value) = evicted.unwrap().into_iter().next().unwrap();
     // One of the original keys should have been evicted
     assert!((1..=3).contains(&key));
     assert!(value == 10 || value == 20 || value == 30);
@@ -1692,11 +1665,9 @@ fn test_lfuda_update_existing_key() {
     cache.put(1, 10, 1);
     cache.put(2, 20, 1);
 
-    // Update existing key
+    // Update existing key - replacement returns None (not eviction)
     let old = cache.put(1, 100, 1);
-
-    // Should return old value wrapped in tuple
-    assert_eq!(old, Some((1, 10)));
+    assert!(old.is_none());
 
     // Value should be updated
     assert_eq!(cache.get(&1), Some(&100));
@@ -2410,95 +2381,6 @@ fn test_peek_nonexistent_key() {
 }
 
 // ============================================================================
-// POP COVERAGE
-// ============================================================================
-// pop() should remove and return the eviction candidate without adding
-// a new entry. Returns None on empty cache.
-
-#[test]
-fn test_lru_pop_returns_lru_item() {
-    let mut cache: LruCache<&str, i32> = make_lru(3);
-    assert_eq!(cache.pop(), None); // empty cache
-
-    cache.put("a", 1, 1);
-    cache.put("b", 2, 1);
-    cache.put("c", 3, 1);
-
-    // "a" is LRU
-    let popped = cache.pop();
-    assert_eq!(popped, Some(("a", 1)));
-    assert_eq!(cache.len(), 2);
-    assert!(cache.get(&"a").is_none());
-}
-
-#[test]
-fn test_lfu_pop_returns_least_frequent() {
-    let mut cache: LfuCache<&str, i32> = make_lfu(3);
-    assert_eq!(cache.pop(), None);
-
-    cache.put("a", 1, 1);
-    cache.put("b", 2, 1);
-    cache.put("c", 3, 1);
-
-    // Access b and c to increase their frequency
-    cache.get(&"b");
-    cache.get(&"c");
-
-    // "a" has lowest frequency
-    let popped = cache.pop();
-    assert_eq!(popped, Some(("a", 1)));
-    assert_eq!(cache.len(), 2);
-}
-
-#[test]
-fn test_lfuda_pop_returns_lowest_priority() {
-    let mut cache: LfudaCache<&str, i32> = make_lfuda(3);
-    assert_eq!(cache.pop(), None);
-
-    cache.put("a", 1, 1);
-    cache.put("b", 2, 1);
-    cache.put("c", 3, 1);
-
-    cache.get(&"b");
-    cache.get(&"c");
-
-    let popped = cache.pop();
-    assert_eq!(popped, Some(("a", 1)));
-    assert_eq!(cache.len(), 2);
-}
-
-#[test]
-fn test_slru_pop_returns_probationary_item() {
-    let mut cache: SlruCache<&str, i32> = make_slru(5, 2);
-    assert_eq!(cache.pop(), None);
-
-    cache.put("a", 1, 1);
-    cache.put("b", 2, 1);
-    cache.put("c", 3, 1);
-
-    let popped = cache.pop();
-    assert!(popped.is_some());
-    assert_eq!(cache.len(), 2);
-}
-
-#[test]
-fn test_gdsf_pop_returns_lowest_priority() {
-    let mut cache: GdsfCache<&str, i32> = make_gdsf(3);
-    assert_eq!(cache.pop(), None);
-
-    cache.put("a", 1, OBJECT_SIZE);
-    cache.put("b", 2, OBJECT_SIZE);
-    cache.put("c", 3, OBJECT_SIZE);
-
-    cache.get(&"b");
-    cache.get(&"c");
-
-    let popped = cache.pop();
-    assert!(popped.is_some());
-    assert_eq!(cache.len(), 2);
-}
-
-// ============================================================================
 // CAP COVERAGE
 // ============================================================================
 
@@ -2727,23 +2609,4 @@ fn test_slru_protected_max_size() {
 
     let cache2: SlruCache<&str, i32> = make_slru(100, 25);
     assert_eq!(cache2.protected_max_size().get(), 25);
-}
-
-#[test]
-#[allow(deprecated)]
-fn test_gdsf_pop_key() {
-    let mut cache: GdsfCache<&str, i32> = make_gdsf(3);
-    cache.put("a", 1, OBJECT_SIZE);
-    cache.put("b", 2, OBJECT_SIZE);
-    cache.put("c", 3, OBJECT_SIZE);
-
-    // pop_key removes a specific key
-    let removed = cache.pop_key(&"b");
-    assert_eq!(removed, Some(2));
-    assert_eq!(cache.len(), 2);
-    assert!(cache.get(&"b").is_none());
-
-    // pop_key on nonexistent key returns None
-    let removed = cache.pop_key(&"missing");
-    assert_eq!(removed, None);
 }
