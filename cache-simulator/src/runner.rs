@@ -605,9 +605,15 @@ impl CacheFactory {
                 }
             }
             // lru crate - only supports entry count mode (no size-based eviction)
-            (CacheAlgorithm::LruCrate, _, _) => {
+            (CacheAlgorithm::LruCrate, CacheMode::Sequential, false) => {
                 let cache = LruCrateCache::new(cap_nz);
                 CacheWrapper::LruCrate(cache)
+            }
+            (CacheAlgorithm::LruCrate, CacheMode::Sequential, true) => {
+                panic!("LruCrate does not support size-based eviction (use_size=true). Please disable --use-size for this algorithm.");
+            }
+            (CacheAlgorithm::LruCrate, CacheMode::Concurrent, _) => {
+                panic!("LruCrate does not support concurrent mode (CacheMode::Concurrent). Please use CacheMode::Sequential for this algorithm.");
             }
         }
     }
