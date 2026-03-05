@@ -364,7 +364,7 @@ run_simulations() {
                 --use-size \
                 --mode both \
                 --output-csv "$output_file" \
-                2>&1 | grep -E "^\s*(LRU|SLRU|LFU|LFUDA|GDSF|Moka|lru-crate)" | head -14 | while read -r line; do
+                2>&1 | grep -E "^\s*(LRU|SLRU|LFU|LFUDA|GDSF|Moka)" | head -14 | while read -r line; do
                     print_table_row "$line"
                 done
             
