@@ -46,6 +46,9 @@ use cache_rs::config::{
 // External cache for comparison
 use moka::sync::Cache as MokaCache;
 
+// lru crate for comparison
+use lru::LruCache as LruCrateCache;
+
 // Use ahash for faster hashing with Moka (same as our internal caches use)
 use ahash::RandomState as AHashRandomState;
 
@@ -83,6 +86,8 @@ enum CacheWrapper {
     SlruConcSize(ConcurrentSlruCache<String, u32>),
     // External caches for comparison
     Moka(MokaCache<String, u32, AHashRandomState>),
+    /// lru crate (external) - entry count based
+    LruCrate(LruCrateCache<String, u32>),
 }
 
 /// Tracks storage usage during simulation
@@ -285,6 +290,7 @@ impl CacheWrapper {
             CacheWrapper::SlruConcSize(c) => c.get(key).is_some(),
             // External caches
             CacheWrapper::Moka(c) => c.get(key).is_some(),
+            CacheWrapper::LruCrate(c) => c.get(key).is_some(),
         }
     }
 
@@ -357,6 +363,9 @@ impl CacheWrapper {
             CacheWrapper::Moka(c) => {
                 c.insert(key, value);
             }
+            CacheWrapper::LruCrate(c) => {
+                c.put(key, value);
+            }
         }
     }
 
@@ -377,6 +386,7 @@ impl CacheWrapper {
             CacheWrapper::GdsfConc(c) => c.len(),
             // External caches
             CacheWrapper::Moka(c) => c.entry_count() as usize,
+            CacheWrapper::LruCrate(c) => c.len(),
         }
     }
 }
@@ -593,6 +603,17 @@ impl CacheFactory {
                         .build_with_hasher(AHashRandomState::default());
                     CacheWrapper::Moka(cache)
                 }
+            }
+            // lru crate - only supports entry count mode (no size-based eviction)
+            (CacheAlgorithm::LruCrate, CacheMode::Sequential, false) => {
+                let cache = LruCrateCache::new(cap_nz);
+                CacheWrapper::LruCrate(cache)
+            }
+            (CacheAlgorithm::LruCrate, CacheMode::Sequential, true) => {
+                panic!("LruCrate does not support size-based eviction (use_size=true). Please disable --use-size for this algorithm.");
+            }
+            (CacheAlgorithm::LruCrate, CacheMode::Concurrent, _) => {
+                panic!("LruCrate does not support concurrent mode (CacheMode::Concurrent). Please use CacheMode::Sequential for this algorithm.");
             }
         }
     }

@@ -42,6 +42,8 @@ pub enum CacheAlgorithm {
     Gdsf,
     /// Moka cache (external crate for comparison)
     Moka,
+    /// lru crate (external crate for comparison)
+    LruCrate,
 }
 
 impl CacheAlgorithm {
@@ -53,6 +55,7 @@ impl CacheAlgorithm {
             CacheAlgorithm::Lfuda => "LFUDA",
             CacheAlgorithm::Gdsf => "GDSF",
             CacheAlgorithm::Moka => "Moka",
+            CacheAlgorithm::LruCrate => "lru-crate",
         }
     }
 
@@ -65,6 +68,7 @@ impl CacheAlgorithm {
             CacheAlgorithm::Lfuda,
             CacheAlgorithm::Gdsf,
             CacheAlgorithm::Moka,
+            CacheAlgorithm::LruCrate,
         ]
     }
 }
