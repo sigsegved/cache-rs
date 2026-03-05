@@ -941,7 +941,8 @@ impl SimulationRunner {
 
 #[cfg(test)]
 mod tests {
-    use super::OpLatencyTracker;
+    use super::{CacheFactory, CacheWrapper, OpLatencyTracker};
+    use crate::models::{CacheAlgorithm, CacheMode};
 
     #[test]
     fn test_percentile_calculation_with_exact_100_samples() {
@@ -1017,5 +1018,104 @@ mod tests {
         // Should not panic and should have max_samples samples
         assert_eq!(tracker.samples.len(), tracker.max_samples);
         assert_eq!(tracker.count, 10000);
+    }
+
+    // ── LruCrate tests ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_lru_crate_cache_creation_and_basic_operations() {
+        let mut cache = CacheFactory::create_cache(
+            CacheAlgorithm::LruCrate,
+            CacheMode::Sequential,
+            3,
+            u64::MAX,
+            None,
+            false,
+        );
+
+        // Starts empty
+        assert_eq!(cache.len(), 0);
+
+        // Inserted entries are retrievable
+        cache.put("key1".to_string(), 100);
+        cache.put("key2".to_string(), 200);
+        cache.put("key3".to_string(), 300);
+
+        assert_eq!(cache.len(), 3);
+        assert!(cache.get("key1"));
+        assert!(cache.get("key2"));
+        assert!(cache.get("key3"));
+
+        // Non-existent key returns a miss
+        assert!(!cache.get("missing"));
+    }
+
+    #[test]
+    fn test_lru_crate_eviction_respects_capacity() {
+        let mut cache = CacheFactory::create_cache(
+            CacheAlgorithm::LruCrate,
+            CacheMode::Sequential,
+            3,
+            u64::MAX,
+            None,
+            false,
+        );
+
+        cache.put("a".to_string(), 1);
+        cache.put("b".to_string(), 1);
+        cache.put("c".to_string(), 1);
+
+        // Access "b" and "c" so "a" becomes least recently used
+        cache.get("b");
+        cache.get("c");
+
+        // Inserting "d" must evict "a" (the LRU entry)
+        cache.put("d".to_string(), 1);
+        assert_eq!(cache.len(), 3);
+        assert!(!cache.get("a"), "expected 'a' to be evicted");
+        assert!(cache.get("b"));
+        assert!(cache.get("c"));
+        assert!(cache.get("d"));
+    }
+
+    #[test]
+    fn test_lru_crate_wrapper_variant() {
+        let cache = CacheFactory::create_cache(
+            CacheAlgorithm::LruCrate,
+            CacheMode::Sequential,
+            10,
+            u64::MAX,
+            None,
+            false,
+        );
+
+        // Must produce the LruCrate variant, not any other wrapper
+        assert!(matches!(cache, CacheWrapper::LruCrate(_)));
+    }
+
+    #[test]
+    #[should_panic(expected = "LruCrate does not support size-based eviction")]
+    fn test_lru_crate_panics_on_use_size_true() {
+        CacheFactory::create_cache(
+            CacheAlgorithm::LruCrate,
+            CacheMode::Sequential,
+            10,
+            1024,
+            None,
+            true, // use_size = true is unsupported
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "LruCrate does not support concurrent mode")]
+    fn test_lru_crate_panics_on_concurrent_mode() {
+        CacheFactory::create_cache(
+            CacheAlgorithm::LruCrate,
+            CacheMode::Concurrent,
+            10,
+            u64::MAX,
+            None,
+            false,
+        );
     }
 }
