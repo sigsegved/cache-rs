@@ -99,6 +99,13 @@ impl SimulationStats {
         self.total_bytes += size;
     }
 
+    /// Remove a specific algorithm+mode combination from the statistics.
+    /// Used to drop unsupported combinations (e.g. lru-crate Concurrent)
+    /// so they do not appear as empty/zero rows in reports.
+    pub fn remove_key(&mut self, key: &SimulationKey) {
+        self.stats.remove(key);
+    }
+
     /// Get the current result
     pub fn result(
         &self,

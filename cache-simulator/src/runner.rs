@@ -394,6 +394,14 @@ impl CacheWrapper {
 /// Cache factory for creating different cache types
 struct CacheFactory;
 
+/// Returns `true` when an (algorithm, mode) pair is unsupported and must be skipped.
+///
+/// Currently the only unsupported combination is `LruCrate + Concurrent`:
+/// the `lru` crate is not thread-safe and has no concurrent variant.
+fn is_unsupported_combination(algorithm: CacheAlgorithm, mode: CacheMode) -> bool {
+    algorithm == CacheAlgorithm::LruCrate && mode == CacheMode::Concurrent
+}
+
 impl CacheFactory {
     /// Create a new cache instance based on algorithm, mode, capacity, max_size, and use_size flag
     /// - capacity: maximum number of entries (always used)
@@ -604,16 +612,18 @@ impl CacheFactory {
                     CacheWrapper::Moka(cache)
                 }
             }
-            // lru crate - only supports entry count mode (no size-based eviction)
-            (CacheAlgorithm::LruCrate, CacheMode::Sequential, false) => {
+            // lru crate - only supports sequential entry-count mode.
+            // Size-based eviction is not supported; always uses entry-count eviction.
+            // Concurrent mode is filtered out in the run() loop before reaching here.
+            (CacheAlgorithm::LruCrate, CacheMode::Sequential, _) => {
                 let cache = LruCrateCache::new(cap_nz);
                 CacheWrapper::LruCrate(cache)
             }
-            (CacheAlgorithm::LruCrate, CacheMode::Sequential, true) => {
-                panic!("LruCrate does not support size-based eviction (use_size=true). Please disable --use-size for this algorithm.");
-            }
             (CacheAlgorithm::LruCrate, CacheMode::Concurrent, _) => {
-                panic!("LruCrate does not support concurrent mode (CacheMode::Concurrent). Please use CacheMode::Sequential for this algorithm.");
+                unreachable!(
+                    "LruCrate+Concurrent is filtered out in the simulation loop and \
+                     should never reach create_cache"
+                );
             }
         }
     }
@@ -763,6 +773,17 @@ impl SimulationRunner {
         // Set up statistics
         let mut stats = SimulationStats::new(&self.config.algorithms, &self.config.modes);
 
+        // Remove unsupported lru-crate+Concurrent combinations so they do not
+        // appear as empty rows in reports.  Warnings were already emitted in
+        // run_simulator() before the simulation was launched.
+        for &algo in &self.config.algorithms {
+            for &mode in &self.config.modes {
+                if is_unsupported_combination(algo, mode) {
+                    stats.remove_key(&SimulationKey::new(algo, mode));
+                }
+            }
+        }
+
         // Start timing
         let start_time = Instant::now();
 
@@ -770,6 +791,12 @@ impl SimulationRunner {
         // This way we only hold one cache in memory at a time (plus a small read buffer)
         for &algo in &self.config.algorithms {
             for &mode in &self.config.modes {
+                // Skip unsupported combinations (e.g. lru-crate+Concurrent).
+                // User was already warned before the simulation started.
+                if is_unsupported_combination(algo, mode) {
+                    continue;
+                }
+
                 let key = SimulationKey::new(algo, mode);
 
                 println!("\nRunning {}-{}...", algo.as_str(), mode.as_str());
