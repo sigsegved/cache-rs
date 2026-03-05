@@ -218,6 +218,36 @@ fn parse_modes(mode: &str) -> Vec<models::CacheMode> {
     }
 }
 
+/// Validates and warns about unsupported lru-crate configurations.
+///
+/// The `lru` crate only supports sequential mode with entry-count eviction.
+/// When the user selects it alongside `--use-size` or a concurrent/both mode,
+/// this function prints an explicit warning so they are not silently benchmarking
+/// an unsupported combination:
+/// - `--use-size`: lru-crate runs with entry-count eviction instead (downgraded silently).
+/// - concurrent mode: the `lru-crate Concurrent` combination is skipped entirely.
+fn validate_lru_crate_config(
+    algorithms: &[models::CacheAlgorithm],
+    modes: &[models::CacheMode],
+    use_size: bool,
+) {
+    if !algorithms.contains(&models::CacheAlgorithm::LruCrate) {
+        return;
+    }
+    if use_size {
+        println!(
+            "Warning: lru-crate does not support size-based eviction (--use-size is set). \
+             lru-crate will run with entry-count eviction instead."
+        );
+    }
+    if modes.contains(&models::CacheMode::Concurrent) {
+        println!(
+            "Warning: lru-crate does not support concurrent mode. \
+             The lru-crate Concurrent combination will be skipped."
+        );
+    }
+}
+
 /// Run the simulator with the given parameters
 #[allow(clippy::too_many_arguments)]
 fn run_simulator(
@@ -274,6 +304,9 @@ fn run_simulator(
 
     // Parse modes
     let modes = parse_modes(&mode);
+
+    // Validate lru-crate against unsupported configurations and warn early
+    validate_lru_crate_config(&algorithms, &modes, use_size);
 
     println!("Cache Simulation");
     println!("===============");
